@@ -89,6 +89,7 @@ const _state = {
   _watchTimer: null,
   _journalThisRun: false,
   _bootReported: null,
+  _prevTail: null,
 };
 
 // ---------------- exit-reason journal ----------------
@@ -125,7 +126,11 @@ function _journalTail() {
 export function reportLastExitOnBoot() {
   if (_state._bootReported) return _state._bootReported;
   try {
-    const tail = _journalTail();
+    // v20.4.3 FIX: initSelfHeal() appends THIS run's 'boot' record before
+    // this function runs, so re-reading the journal always saw our own boot
+    // and falsely reported "HARD KILL" on every restart. Use the tail that
+    // was snapshotted BEFORE the boot record was written.
+    const tail = Array.isArray(_state._prevTail) ? _state._prevTail : _journalTail();
     if (tail.length === 0) {
       _state._bootReported = { verdict: 'NO RECORD', detail: 'first run (ya journal padhne se pehle delete)' };
     } else {
@@ -314,6 +319,7 @@ export function initSelfHeal(opts = {}) {
 
   // boot journal entry (previous run's verdict is reported by
   // reportLastExitOnBoot — call it AFTER arm, from index.js)
+  try { _state._prevTail = _journalTail(); } catch { _state._prevTail = null; }
   _journalAppend({ ev: 'boot', at: _state.nowFn(), node: process.version });
 
   // event-loop lag histogram (30s buckets)
@@ -385,7 +391,7 @@ export function __resetSelfHealForTests() {
     lastError: null, lastErrorAt: 0,
     memPressure: false, rssMB: 0, heapMB: 0, loopLagMean: 0, loopLagMax: 0,
     _lastMemLogAt: 0, _lastLagLogAt: 0, _lastFlushAt: 0,
-    _hist: null, _watchTimer: null, _journalThisRun: false, _bootReported: null,
+    _hist: null, _watchTimer: null, _journalThisRun: false, _bootReported: null, _prevTail: null,
     exitOnFatal: false,
   });
   _journalFileOverride = null;

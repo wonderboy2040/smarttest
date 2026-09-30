@@ -1,5 +1,5 @@
 // ============================================================
-// Wealth AI Pro â€” Backend API Proxy Server
+// Wealth AI Pro — Backend API Proxy Server
 // ------------------------------------------------------------
 // Serves the built frontend (dist/) AND the /api/* proxy
 // endpoints that the frontend expects. All AI provider API
@@ -157,7 +157,7 @@ app.use(bandwidthMiddleware());
 // overridden by the stricter middleware that ran after it.
 
 // ============================================================
-// AUTHENTICATION â€” Server-side PIN + httpOnly session cookie
+// AUTHENTICATION — Server-side PIN + httpOnly session cookie
 // ============================================================
 // The app PIN is stored ONLY on the server (APP_PIN env var) and is
 // NEVER shipped to the browser. The frontend sends the user-entered
@@ -170,7 +170,7 @@ app.use(bandwidthMiddleware());
 // bypassable by setting localStorage.setItem('authDone', 'true')).
 // ============================================================
 
-// Server-side PIN â€” REQUIRED. No default, no VITE_ fallback.
+// Server-side PIN — REQUIRED. No default, no VITE_ fallback.
 const APP_PIN = process.env.APP_PIN || '';
 
 // In-memory session store (single-user app, no persistence needed).
@@ -178,7 +178,7 @@ const APP_PIN = process.env.APP_PIN || '';
 // month-long session cookie dramatically cuts re-login frequency (the PIN
 // is only re-entered if cookies are explicitly cleared or after a month
 // away).
-const _sessions = new Map(); // token â†’ { lastSeen: number }
+const _sessions = new Map(); // token → { lastSeen: number }
 const SESSION_TTL = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 // Clean up expired sessions periodically.
@@ -189,8 +189,8 @@ setInterval(() => {
   }
 }, 60 * 60 * 1000).unref();
 
-// Login rate limiter â€” 5 attempts per minute per IP (brute-force protection).
-const _loginAttempts = new Map(); // ip â†’ [timestamps]
+// Login rate limiter — 5 attempts per minute per IP (brute-force protection).
+const _loginAttempts = new Map(); // ip → [timestamps]
 function loginRateCheck(ip) {
   const now = Date.now();
   // Prune stale IPs so the map cannot grow unbounded on a public endpoint.
@@ -243,10 +243,10 @@ const PUBLIC_PATHS = new Set([
   '/api/telegram-status',
   '/api/telegram/webhook', // v10.1: Telegram's server-to-server webhook (secret-token + chat-id allowlist inside)
   '/api/feed-status',
-  // Cloud sync endpoints REQUIRE AUTH â€” they proxy portfolio data and
+  // Cloud sync endpoints REQUIRE AUTH — they proxy portfolio data and
   // stored API keys; exposing them publicly would leak private data.
   '/api/auth/logout',
-  // Market data endpoints are PUBLIC â€” they fetch public market prices,
+  // Market data endpoints are PUBLIC — they fetch public market prices,
   // no private data. Making these public ensures prices always load.
   '/api/quote',
   '/api/chart',
@@ -258,16 +258,16 @@ const PUBLIC_PATHS = new Set([
   '/api/fundamentals',
 ]);
 
-// Auth middleware â€” checks multiple auth mechanisms in order:
-// 1. Authorization: Bearer <token> header (PRIMARY â€” bulletproof for cross-origin)
-// 2. httpOnly session cookie (fallback â€” same-origin only)
-// 3. ?session=<token> query param (fallback â€” for EventSource SSE)
+// Auth middleware — checks multiple auth mechanisms in order:
+// 1. Authorization: Bearer <token> header (PRIMARY — bulletproof for cross-origin)
+// 2. httpOnly session cookie (fallback — same-origin only)
+// 3. ?session=<token> query param (fallback — for EventSource SSE)
 function requireAuth(req, res, next) {
   // Public paths skip auth (exact match + prefix match for dynamic routes).
   if (PUBLIC_PATHS.has(req.path)) return next();
   // /api/fundamentals/:symbol is public (dynamic segment).
   if (req.path.startsWith('/api/fundamentals/')) return next();
-  // /api/ml/ endpoints are public (ML predictions, market data â€” not private).
+  // /api/ml/ endpoints are public (ML predictions, market data — not private).
   if (req.path.startsWith('/api/ml/')) return next();
 
   // Static assets (served by express.static) are public.
@@ -281,24 +281,24 @@ function requireAuth(req, res, next) {
     return next();
   }
 
-  // SPA fallback (index.html) is public â€” the login screen must load.
+  // SPA fallback (index.html) is public — the login screen must load.
   if (req.method === 'GET' && !req.path.startsWith('/api/')) {
     return next();
   }
 
-  // 1. Authorization: Bearer <token> header (PRIMARY â€” works cross-origin always)
+  // 1. Authorization: Bearer <token> header (PRIMARY — works cross-origin always)
   let token = null;
   const authHeader = req.headers.authorization || '';
   if (authHeader.startsWith('Bearer ')) {
     token = authHeader.substring(7).trim();
   }
 
-  // 2. httpOnly session cookie (fallback â€” same-origin or SameSite=None)
+  // 2. httpOnly session cookie (fallback — same-origin or SameSite=None)
   if (!token) {
     token = parseCookie(req.headers.cookie || '')[SESSION_COOKIE];
   }
 
-  // 3. ?session=<token> query param (fallback â€” for EventSource SSE)
+  // 3. ?session=<token> query param (fallback — for EventSource SSE)
   if (!token && req.query && typeof req.query.session === 'string') {
     token = req.query.session;
   }
@@ -352,7 +352,7 @@ function _constEq(a, b) {
 // When the frontend is on a DIFFERENT origin (e.g. Vercel frontend calling
 // Render backend), the browser sends `credentials: 'include'` for the session
 // cookie. Browsers REJECT `Access-Control-Allow-Origin: *` when credentials
-// are used â€” the server MUST echo the specific Origin header instead.
+// are used — the server MUST echo the specific Origin header instead.
 // We allowlist origins via the ALLOWED_ORIGINS env var; if not set, we echo
 // any origin (safe for dev, restrict in production).
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
@@ -380,14 +380,14 @@ app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && !_corsFailClosed) {
     if (ALLOWED_ORIGINS) {
-      // Production allowlist â€” only echo if origin is allowed.
+      // Production allowlist — only echo if origin is allowed.
       if (ALLOWED_ORIGINS.has(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
       }
-      // Disallowed origins get NO ACAO header â€” browser blocks the response.
+      // Disallowed origins get NO ACAO header — browser blocks the response.
     } else {
-      // Dev mode â€” echo any origin (no allowlist set).
+      // Dev mode — echo any origin (no allowlist set).
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
     }
@@ -456,7 +456,7 @@ app.use((req, res, next) => {
 // AUTH ENDPOINTS
 // ============================================================
 
-// POST /api/auth/login â†’ { pin: string } â†’ sets session cookie
+// POST /api/auth/login → { pin: string } → sets session cookie
 app.post('/api/auth/login', (req, res) => {
   // v18.6.4: proxy-trust-aware client IP (see clientIpOf above)
   const ip = clientIpOf(req);
@@ -492,17 +492,26 @@ app.post('/api/auth/login', (req, res) => {
 
   // Cookie SameSite policy:
   // ALWAYS use SameSite=None; Secure in production. This is REQUIRED for
-  // cross-origin deployments (Vercel frontend â†’ Render backend). If we use
+  // cross-origin deployments (Vercel frontend → Render backend). If we use
   // SameSite=Strict, the browser blocks the cookie on cross-origin requests
   // and every API call after login returns 401.
   // SameSite=None REQUIRES Secure, so we set it whenever SameSite=None.
-  const sameSite = 'None';
-  const secure = '; Secure'; // Always Secure (Render uses HTTPS)
+  // v20.4.3 FIX: only HTTPS requests get SameSite=None; Secure. On plain
+  // HTTP (local / LAN IP / Safari) a Secure cookie is silently dropped, so
+  // fall back to SameSite=Lax (Bearer sessionToken still works either way).
+  const { sameSite, secure } = _sessionCookieAttrs(req);
   res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=${sameSite}; Path=/; Max-Age=${SESSION_TTL / 1000}${secure}`);
   return res.json({ ok: true, sessionToken: token }); // sessionToken used for EventSource ?session= param
 });
 
-// POST /api/auth/logout â†’ clears session cookie
+// POST /api/auth/logout → clears session cookie
+/** v20.4.3 — scheme-aware session cookie attributes. */
+function _sessionCookieAttrs(req) {
+  const proto = String((req && req.headers && req.headers['x-forwarded-proto']) || '').split(',')[0].trim().toLowerCase();
+  const https = !!(req && (req.secure || proto === 'https'));
+  return https ? { sameSite: 'None', secure: '; Secure' } : { sameSite: 'Lax', secure: '' };
+}
+
 app.post('/api/auth/logout', (req, res) => {
   // CSRF guard (2026-09 audit): logout is a state-changing PUBLIC POST and
   // the session cookie is SameSite=None — a third-party page posting a
@@ -534,14 +543,14 @@ app.post('/api/auth/logout', (req, res) => {
   // it too (belt and braces for cookie-less cross-origin sessions).
   const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
   if (bearer) _sessions.delete(bearer);
-  res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; SameSite=None; Path=/; Max-Age=0; Secure`);
+  { const { sameSite, secure } = _sessionCookieAttrs(req); res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; SameSite=${sameSite}; Path=/; Max-Age=0${secure}`); }
   res.json({ ok: true });
 });
 
-// GET /api/auth/check â†’ returns whether the caller is authenticated
+// GET /api/auth/check → returns whether the caller is authenticated
 // Checks ALL auth mechanisms: Authorization header, cookie, query param.
 app.get('/api/auth/check', (req, res) => {
-  // 1. Authorization: Bearer <token> header (primary â€” what frontend sends)
+  // 1. Authorization: Bearer <token> header (primary — what frontend sends)
   let token = null;
   const authHeader = req.headers.authorization || '';
   if (authHeader.startsWith('Bearer ')) {
@@ -558,7 +567,7 @@ app.get('/api/auth/check', (req, res) => {
   res.json({ authenticated: !!(token && _sessions.has(token)) });
 });
 
-// GET /api/config â†’ returns runtime cloud sync configuration
+// GET /api/config → returns runtime cloud sync configuration
 app.get('/api/config', (_req, res) => {
   res.json({
     apiUrl: process.env.API_URL || process.env.VITE_API_URL || '',
@@ -567,7 +576,7 @@ app.get('/api/config', (_req, res) => {
 });
 
 // ------------------------------------------------------------
-// Provider key map (server-side env vars â€” NOT VITE_*)
+// Provider key map (server-side env vars — NOT VITE_*)
 // ------------------------------------------------------------
 const KEYS = {
   groq: (process.env.GROQ_API_KEY || process.env.GROQ_KEY || '').replace(/['"]/g, '').trim(),
@@ -581,7 +590,7 @@ const KEYS = {
 };
 
 // Telegram bot credentials (server-side env only).
-// NEVER fall back to VITE_* vars â€” those are browser-exposed at build time.
+// NEVER fall back to VITE_* vars — those are browser-exposed at build time.
 const TG = {
   token: process.env.TG_TOKEN || '',
   chatId: process.env.TG_CHAT_ID || '',
@@ -613,7 +622,7 @@ if (!!TG.token !== !!TG.chatId) {
   process.env.TG_CHAT_ID = '';
 }
 
-// OpenAI-compatible providers â€” body is forwarded almost as-is.
+// OpenAI-compatible providers — body is forwarded almost as-is.
 const OPENAI_COMPAT = {
   groq: { url: 'https://api.groq.com/openai/v1/chat/completions', defModel: 'openai/gpt-oss-120b' },
   openrouter: { url: 'https://openrouter.ai/api/v1/chat/completions', defModel: 'z-ai/glm-5.2:free' },
@@ -643,7 +652,7 @@ function isValidSymbol(sym) {
   return /^[A-Z0-9.\-_]+$/.test(s);
 }
 
-// Escape HTML special characters â€” used when forwarding user-controlled
+// Escape HTML special characters — used when forwarding user-controlled
 // content to Telegram (which uses parse_mode: 'HTML').
 function escapeHtml(str) {
   return String(str || '')
@@ -654,7 +663,7 @@ function escapeHtml(str) {
     .replace(/'/g, '&#39;');
 }
 
-// Strip ALL HTML tags â€” for maximum safety when forwarding user content
+// Strip ALL HTML tags — for maximum safety when forwarding user content
 // to Telegram as HTML. Only plain text survives.
 function stripHtml(str) {
   return String(str || '').replace(/<[^>]*>/g, '');
@@ -708,7 +717,7 @@ const CHART_RATE_10MIN = 300;   // chart opens + 5m intraday refreshes
 const FUND_RATE_10MIN = 240;    // 24h-cached fundamentals
 
 // ------------------------------------------------------------
-// GET /api/chart  â†’ real OHLC candles for ANY symbol (incl. NSE/BSE)
+// GET /api/chart  → real OHLC candles for ANY symbol (incl. NSE/BSE)
 // ------------------------------------------------------------
 // The embeddable TradingView widget shows "This symbol is only available on
 // TradingView" for NSE ETFs (e.g. NSE:JUNIORBEES) because their real-time data
@@ -718,7 +727,7 @@ const FUND_RATE_10MIN = 240;    // 24h-cached fundamentals
 // Query: ?symbol=JUNIORBEES&market=IN&interval=D   (interval: D | W | M)
 // ------------------------------------------------------------
 const YF_INDEX_MAP = {
-  // Indian indices â†’ Yahoo tickers
+  // Indian indices → Yahoo tickers
   NIFTY: '^NSEI', NIFTY50: '^NSEI', BANKNIFTY: '^NSEBANK', NIFTYBANK: '^NSEBANK',
   SENSEX: '^BSESN', INDIAVIX: '^INDIAVIX', CNXIT: '^CNXIT',
   FINNIFTY: '^CNXFIN', MIDCPNIFTY: 'NIFTY_MID_SELECT.NS', NIFTYNXT50: '^NIFTYNEXT50',
@@ -729,7 +738,7 @@ const YF_INDEX_MAP = {
 function toYahooSymbol(symbol, market) {
   const clean = String(symbol || '').replace('.NS', '').replace('.BO', '').trim().toUpperCase();
   if (YF_INDEX_MAP[clean]) return YF_INDEX_MAP[clean];
-  // Crypto â†’ Yahoo uses e.g. BTC-USD
+  // Crypto → Yahoo uses e.g. BTC-USD
   const crypto = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'POL', 'LINK', 'UNI'];
   if (crypto.includes(clean)) return `${clean}-USD`;
   if ((market || '').toUpperCase() === 'IN') return `${clean}.NS`; // NSE listing on Yahoo
@@ -914,7 +923,7 @@ try {
 } catch { /* visibility only — never blocks boot */ }
 
 // ------------------------------------------------------------
-// GET /api/quote  â†’ REAL-TIME last-traded price for one or many symbols
+// GET /api/quote  → REAL-TIME last-traded price for one or many symbols
 // ------------------------------------------------------------
 // Returns genuine real-time last prices via multiple sources:
 //   1. Finnhub /quote (US stocks/ETFs, if key set)
@@ -1053,13 +1062,13 @@ app.get('/api/quote', async (req, res) => {
 
   const quotes = {};
 
-  // India quotes â€” Groww NSE â†’ Yahoo fallback
+  // India quotes — Groww NSE → Yahoo fallback
   // FIX H12: previously `const remaining = symbols.filter(s => !quotes[s])`
   // ran BEFORE any quotes were populated (quotes = {}) so `remaining ===
-  // symbols` always â€” dead filter. Just iterate `symbols` directly.
+  // symbols` always — dead filter. Just iterate `symbols` directly.
   await Promise.allSettled(symbols.map(async (sym) => {
-    // 1a) India real-time â†’ Groww NSE live feed (datacenter-friendly, ETF-safe).
-    // Indian indices (NIFTY etc.) skip Groww â€” Groww only has stock/ETF quotes
+    // 1a) India real-time → Groww NSE live feed (datacenter-friendly, ETF-safe).
+    // Indian indices (NIFTY etc.) skip Groww — Groww only has stock/ETF quotes
     if (market === 'IN' && !INDIAN_INDICES.has(sym)) {
       const gw = await fetchGrowwNseQuote(sym);
       if (gw) { quotes[sym] = gw; return; }
@@ -1072,7 +1081,7 @@ app.get('/api/quote', async (req, res) => {
       const ses = getUsSessionQuote(sym.replace('.NS', '').replace('.BO', ''));
       if (ses) { quotes[sym] = ses; return; }
     }
-    // 1b) Finnhub real-time (US only â€” Finnhub free tier is US equities/ETFs)
+    // 1b) Finnhub real-time (US only — Finnhub free tier is US equities/ETFs)
     if (market !== 'IN') {
       const fh = await fetchFinnhubQuote(sym.replace('.NS', '').replace('.BO', ''));
       if (fh) { quotes[sym] = fh; return; }
@@ -1099,7 +1108,7 @@ app.get('/api/quote', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// GET /api/crypto-prices â†’ proxy CoinDCX ticker (CORS fix)
+// GET /api/crypto-prices → proxy CoinDCX ticker (CORS fix)
 // ------------------------------------------------------------
 // CoinDCX's public API does NOT serve Access-Control-Allow-Origin, so
 // the browser blocks every direct fetch from the frontend. This thin
@@ -1158,13 +1167,13 @@ app.get('/api/crypto-prices', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// GET /api/forex â†’ USD/INR rate proxy with server-side caching
+// GET /api/forex → USD/INR rate proxy with server-side caching
 // ------------------------------------------------------------
 // Multiple upstream fallbacks so the rate is always available even if
 // one free API is down. Cached 10s server-side to reduce upstream load.
 // ------------------------------------------------------------
 let _forexCache = { rate: DEFAULT_USD_INR, ts: 0 };
-// FIX OPT-6: increased from 10s to 30s â€” client polls at 60s+, so 10s
+// FIX OPT-6: increased from 10s to 30s — client polls at 60s+, so 10s
 // cache was cold on most hits and hammered upstream free-tier APIs.
 const FOREX_CACHE_MS = 30000;
 
@@ -1209,7 +1218,7 @@ app.get('/api/forex', async (_req, res) => {
 });
 
 // ------------------------------------------------------------
-// GET /api/stream  â†’ Server-Sent Events: pushes live ticks to the browser.
+// GET /api/stream  → Server-Sent Events: pushes live ticks to the browser.
 // Query: ?in=RELIANCE,NIFTYBEES&us=SMH,VGT&crypto=BTC,ETH
 // Events: `snapshot` (initial map), `tick` ({key,price,change,...}), `status`.
 // Ultra-fast realtime push: India (Groww 3s + TV browser WS), US (Finnhub WS
@@ -1437,7 +1446,7 @@ app.get('/api/stream', (req, res) => {
   });
 });
 
-// GET /api/feed-status â†’ which real-time sources are live (for the UI dot).
+// GET /api/feed-status → which real-time sources are live (for the UI dot).
 app.get('/api/feed-status', (_req, res) => {
   res.set('Cache-Control', 'no-store');
   // v10.14: also carries the cxRt WS accelerator health (same shape as
@@ -1446,7 +1455,7 @@ app.get('/api/feed-status', (_req, res) => {
 });
 
 // ------------------------------------------------------------
-// GET /api/ai-status â†’ which providers have a key configured.
+// GET /api/ai-status → which providers have a key configured.
 // The frontend skips any engine that is false here.
 // ------------------------------------------------------------
 app.get('/api/ai-status', (_req, res) => {
@@ -1486,7 +1495,7 @@ for (const [name, cfg] of Object.entries(OPENAI_COMPAT)) {
       } else if (!body.model) {
         body.model = cfg.defModel;
       }
-      // Auto-correct retired HuggingFace Qwen3-32B â†’ 235B flagship
+      // Auto-correct retired HuggingFace Qwen3-32B → 235B flagship
       if (name === 'huggingface' && body.model && body.model.includes('Qwen3-32B')) {
         body.model = cfg.defModel;
       }
@@ -1526,7 +1535,7 @@ for (const [name, cfg] of Object.entries(OPENAI_COMPAT)) {
 }
 
 // ------------------------------------------------------------
-// POST /api/tavily â†’ Tavily web search (for NeuralChat live news)
+// POST /api/tavily → Tavily web search (for NeuralChat live news)
 // Translates the OpenAI-style messages body into a Tavily search
 // and returns the result in OpenAI-compatible format.
 // ------------------------------------------------------------
@@ -1553,7 +1562,7 @@ app.post('/api/tavily', async (req, res) => {
     const data = await upstream.json();
     // Package as OpenAI-compatible response so the frontend can consume it uniformly
     const answer = data.answer || '';
-    const results = (data.results || []).map(r => `â€¢ ${r.title}: ${r.content?.substring(0, 200) || ''}`).join('\n');
+    const results = (data.results || []).map(r => `• ${r.title}: ${r.content?.substring(0, 200) || ''}`).join('\n');
     const content = answer ? `${answer}\n\nSources:\n${results}` : results || 'No results found.';
     res.json({
       choices: [{ message: { role: 'assistant', content } }],
@@ -1564,7 +1573,7 @@ app.post('/api/tavily', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// POST /api/gemini â†’ translate OpenAI-style messages â†’ Gemini,
+// POST /api/gemini → translate OpenAI-style messages → Gemini,
 // return Gemini's native shape (candidates[0].content.parts[0].text)
 // ------------------------------------------------------------
 app.post('/api/gemini', async (req, res) => {
@@ -1595,7 +1604,7 @@ app.post('/api/gemini', async (req, res) => {
       signal: AbortSignal.timeout(30000),
     });
 
-    // If candidate model returns 404 (model not found): 3.5 â†’ 2.5 â†’ 2.0 â†’ 1.5
+    // If candidate model returns 404 (model not found): 3.5 → 2.5 → 2.0 → 1.5
     if (!upstream.ok && upstream.status === 404 && safeModel !== 'gemini-2.5-flash') {
       url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${KEYS.gemini}`;
       upstream = await fetch(url, {
@@ -1632,7 +1641,7 @@ app.post('/api/gemini', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// POST /api/claude â†’ Anthropic Messages API,
+// POST /api/claude → Anthropic Messages API,
 // return native shape (content[0].text)
 // ------------------------------------------------------------
 app.post('/api/claude', async (req, res) => {
@@ -1858,7 +1867,7 @@ app.post('/api/chat/mcp', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// POST /api/vision-analysis â†’ Gemini Vision Chart & Screenshot AI
+// POST /api/vision-analysis → Gemini Vision Chart & Screenshot AI
 // Analyzes technical charts, candlestick setups, support/resistance
 // ------------------------------------------------------------
 app.post('/api/vision-analysis', async (req, res) => {
@@ -1932,7 +1941,7 @@ app.post('/api/vision-analysis', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// POST /api/ai-consensus â†’ Multi-Engine AI Voting & Consensus
+// POST /api/ai-consensus → Multi-Engine AI Voting & Consensus
 // Queries Gemini, Groq, and Cerebras/Claude in parallel to build consensus
 // ------------------------------------------------------------
 app.post('/api/ai-consensus', async (req, res) => {
@@ -2040,21 +2049,21 @@ Task: Analyze the user request. Provide a definitive stance (BULLISH / BEARISH /
     agreementPct,
     modelsCount: successful.length,
     models: successful.map(s => ({ name: s.model, stance: s.stance, latencyMs: s.latencyMs })),
-    synthesizedResponse: `ðŸ¤ **MULTI-ENGINE CONSENSUS: ${consensusStance} (${agreementPct}% Agreement across ${successful.length} Models)**\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n${primaryResponse}`,
+    synthesizedResponse: `🤝 **MULTI-ENGINE CONSENSUS: ${consensusStance} (${agreementPct}% Agreement across ${successful.length} Models)**\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${primaryResponse}`,
     timestamp: Date.now()
   });
 });
 
 // ------------------------------------------------------------
-// POST /api/telegram â†’ send a Telegram message using the SERVER's
+// POST /api/telegram → send a Telegram message using the SERVER's
 // bot token + chat id (env). Lets the website push notifications
 // even when the browser has no local Telegram config saved.
 // Body: { message: string }
-// FIX C11: Ignore any client-supplied chatId â€” otherwise any visitor could
+// FIX C11: Ignore any client-supplied chatId — otherwise any visitor could
 // make the bot spam arbitrary chats. Always send to the server-configured
 // TG_CHAT_ID. Simple per-IP rate limit (30 msgs / 10 min) prevents abuse.
 // ------------------------------------------------------------
-const _tgRateBucket = new Map(); // ip â†’ [{ ts }]
+const _tgRateBucket = new Map(); // ip → [{ ts }]
 const TG_RATE_LIMIT = { windowMs: 10 * 60 * 1000, max: 30 };
 
 function tgRateCheck(ip) {
@@ -2081,7 +2090,7 @@ app.post('/api/telegram', async (req, res) => {
   // buckets (30 msg/10min cap void). clientIpOf: XFF honored only when
   // TRUST_PROXY=1 or the peer is loopback.
   const ip = clientIpOf(req);
-  if (!tgRateCheck(ip)) return jsonError(res, 429, 'rate limit exceeded â€” try again later');
+  if (!tgRateCheck(ip)) return jsonError(res, 429, 'rate limit exceeded — try again later');
 
   // SECURITY: strip ALL HTML tags from the client-supplied message.
   // Without this, anyone who can call /api/telegram can inject arbitrary
@@ -2111,10 +2120,10 @@ app.get('/api/telegram-status', (_req, res) => {
 });
 
 // ------------------------------------------------------------
-// SUPER INTELLIGENCE ML ENGINE (Pure JS â€” No Python service)
+// SUPER INTELLIGENCE ML ENGINE (Pure JS — No Python service)
 // ------------------------------------------------------------
 // Replaces the Python FastAPI ML service entirely. All ML
-// inference runs IN-PROCESS in this Node.js server â€” no extra
+// inference runs IN-PROCESS in this Node.js server — no extra
 // service needed. This is critical for Render free tier since
 // 2 services would exceed 750 hrs/month limit.
 // ------------------------------------------------------------
@@ -2178,7 +2187,7 @@ app.post('/api/ml/predict', (req, res) => {
 // those). GET /api/ml/regime is kept (defaults to safe regime for callers
 // that don't have live data).
 app.get('/api/ml/regime', (_req, res) => {
-  // Returns a default NEUTRAL regime â€” callers needing live data should POST.
+  // Returns a default NEUTRAL regime — callers needing live data should POST.
   const regime = getRegime(
     { change: 0 }, { change: 0 },
     { price: 15 }, 18, 104, { change: 0 }
@@ -2246,13 +2255,13 @@ app.post('/api/ml/meta-ensemble', async (req, res) => {
   }
 });
 
-// GET /api/fundamentals/:symbol â†’ fundamental data for Quality Scorecard
+// GET /api/fundamentals/:symbol → fundamental data for Quality Scorecard
 // ------------------------------------------------------------
 // Proxies Yahoo Finance quoteSummary server-side (no CORS issue) and
 // normalises the response into the shape expected by qualityScorecard.ts.
 // Cached 24h because fundamentals change slowly.
 // ------------------------------------------------------------
-const _fundamentalsCache = new Map();  // symbol â†’ { data, ts }
+const _fundamentalsCache = new Map();  // symbol → { data, ts }
 const _fundamentalsInFlight = new Map(); // v10.13: symbol -> shared compute promise (stampede fix)
 const FUNDAMENTALS_TTL = 24 * 60 * 60 * 1000;
 
@@ -2311,7 +2320,7 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
         const qsJ = await qsR.json();
         qs = qsJ?.quoteSummary?.result?.[0];
       }
-    } catch { /* v10 failed â€” use chart data only */ }
+    } catch { /* v10 failed — use chart data only */ }
 
     // ---- Build FundamentalData from whatever we have ----
     const toNum = (v) => {
@@ -2423,7 +2432,7 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
 });
 
 // ------------------------------------------------------------
-// GET /api/inflation â†’ India CPI + US CPI for real-returns calc
+// GET /api/inflation → India CPI + US CPI for real-returns calc
 // ------------------------------------------------------------
 // Fetches India CPI YoY from World Bank API (free, no key) and US CPI
 // from BLS-style endpoint. Cached 24h because CPI is monthly.
@@ -2464,7 +2473,7 @@ app.get('/api/inflation', async (_req, res) => {
   return res.json(data);
 });
 
-// Static frontend (built by `vite build` â†’ dist/)
+// Static frontend (built by `vite build` → dist/)
 // ------------------------------------------------------------
 const distDir = path.resolve(__dirname, '..', 'dist');
 // v11.7 PERF #2 — REAL BROWSER CACHING FOR HASHED ASSETS.
@@ -2511,7 +2520,7 @@ app.get(/^(?!\/api\/|\/health).*/, (req, res) => {
 });
 
 // ============================================================
-// CLOUD SYNC PROXY â€” routes Google Sheets sync through the backend
+// CLOUD SYNC PROXY — routes Google Sheets sync through the backend
 // ============================================================
 // WHY: The frontend previously called Google Apps Script DIRECTLY,
 // which required VITE_API_URL and VITE_API_TOKEN as BUILD-TIME env vars
@@ -2528,7 +2537,7 @@ const CLOUD_API_URL = process.env.API_URL || process.env.VITE_API_URL || '';
 // SECURITY: no hardcoded fallback — a baked-in token defeats the env-var design.
 const CLOUD_AUTH_TOKEN = process.env.API_TOKEN || '';
 
-// GET /api/cloud/load â†’ proxy to Google Apps Script ?action=load
+// GET /api/cloud/load → proxy to Google Apps Script ?action=load
 app.get('/api/cloud/load', async (req, res) => {
   if (!CLOUD_API_URL) return jsonError(res, 503, 'Cloud sync not configured (API_URL not set).');
   if (!CLOUD_AUTH_TOKEN) return jsonError(res, 503, 'Cloud sync not configured (API_TOKEN not set).');
@@ -2537,13 +2546,13 @@ app.get('/api/cloud/load', async (req, res) => {
       ? `${CLOUD_API_URL}&action=load&authToken=${encodeURIComponent(CLOUD_AUTH_TOKEN)}&t=${Date.now()}`
       : `${CLOUD_API_URL}?action=load&authToken=${encodeURIComponent(CLOUD_AUTH_TOKEN)}&t=${Date.now()}`;
 
-    console.log(`â˜ï¸ Cloud load: fetching ${CLOUD_API_URL.substring(0, 60)}...`);
+    console.log(`☁️ Cloud load: fetching ${CLOUD_API_URL.substring(0, 60)}...`);
     const upstream = await fetch(fetchUrl, { redirect: 'follow', signal: AbortSignal.timeout(15000) });
     if (!upstream.ok) return jsonError(res, 502, `Cloud sync upstream HTTP ${upstream.status}.`);
     const text = await upstream.text();
     let data;
     try { data = JSON.parse(text); } catch {
-      // Apps Script sometimes wraps JSON in extra text â€” try to extract object or array
+      // Apps Script sometimes wraps JSON in extra text — try to extract object or array
       const match = text.match(/\{[\s\S]*\}/) || text.match(/\[[\s\S]*\]/);
       if (!match) return jsonError(res, 502, 'Cloud sync returned invalid data.');
       try { data = JSON.parse(match[0]); } catch { return jsonError(res, 502, 'Cloud sync returned invalid JSON.'); }
@@ -2553,18 +2562,18 @@ app.get('/api/cloud/load', async (req, res) => {
     }
     // Detect Apps Script auth/error responses like {ok:false, error:"..."}
     if (data && data.ok === false && data.error) {
-      console.warn(`â˜ï¸ Cloud load: Apps Script error: ${data.error}`);
+      console.warn(`☁️ Cloud load: Apps Script error: ${data.error}`);
       return jsonError(res, 502, `Cloud sync error: ${data.error}`);
     }
-    console.log(`â˜ï¸ Cloud load: success, portfolio items: ${data?.portfolio?.length ?? (Array.isArray(data) ? data.length : 'unknown')}`);
+    console.log(`☁️ Cloud load: success, portfolio items: ${data?.portfolio?.length ?? (Array.isArray(data) ? data.length : 'unknown')}`);
     return res.json(data);
   } catch (e) {
-    console.error('â˜ï¸ Cloud load fetch error:', e?.message || e);
+    console.error('☁️ Cloud load fetch error:', e?.message || e);
     return jsonError(res, 502, 'Cloud sync failed.', e);
   }
 });
 
-// POST /api/cloud/save â†’ proxy to Google Apps Script (action=update)
+// POST /api/cloud/save → proxy to Google Apps Script (action=update)
 app.post('/api/cloud/save', async (req, res) => {
   if (!CLOUD_API_URL) return jsonError(res, 503, 'Cloud sync not configured (API_URL not set).');
   if (!CLOUD_AUTH_TOKEN) return jsonError(res, 503, 'Cloud sync not configured (API_TOKEN not set).');
@@ -2603,7 +2612,7 @@ app.post('/api/cloud/save', async (req, res) => {
   }
 });
 
-// POST /api/cloud/save-key â†’ proxy to Google Apps Script (action=saveKey)
+// POST /api/cloud/save-key → proxy to Google Apps Script (action=saveKey)
 app.post('/api/cloud/save-key', async (req, res) => {
   if (!CLOUD_API_URL) return jsonError(res, 503, 'Cloud sync not configured.');
   if (!CLOUD_AUTH_TOKEN) return jsonError(res, 503, 'Cloud sync not configured.');
@@ -2623,7 +2632,7 @@ app.post('/api/cloud/save-key', async (req, res) => {
   }
 });
 
-// GET /api/cloud/load-key â†’ proxy to Google Apps Script (action=loadKey)
+// GET /api/cloud/load-key → proxy to Google Apps Script (action=loadKey)
 app.get('/api/cloud/load-key', async (req, res) => {
   if (!CLOUD_API_URL) return jsonError(res, 503, 'Cloud sync not configured.');
   if (!CLOUD_AUTH_TOKEN) return jsonError(res, 503, 'Cloud sync not configured.');
@@ -2649,7 +2658,7 @@ app.get('/api/cloud/load-key', async (req, res) => {
 // alerts, SIP frequency. Survives browser cache/cookie clears.
 // Stored in Google Sheets via Apps Script (action=saveState).
 // ============================================================
-// POST /api/state/save { state: {...} } â†’ chunked key-value store
+// POST /api/state/save { state: {...} } → chunked key-value store
 app.post('/api/state/save', async (req, res) => {
   if (!CLOUD_API_URL) return jsonError(res, 503, 'Cloud sync not configured (API_URL not set).');
   if (!CLOUD_AUTH_TOKEN) return jsonError(res, 503, 'Cloud sync not configured (API_TOKEN not set).');
@@ -2815,7 +2824,7 @@ process.on('SIGINT', () => _gracefulShutdown('SIGINT'));
 
 // ------------------------------------------------------------
 // Startup environment validation.
-// APP_PIN is REQUIRED â€” without it, the app has no authentication
+// APP_PIN is REQUIRED — without it, the app has no authentication
 // and all endpoints are public. The server refuses to start.
 // ------------------------------------------------------------
 function validateEnv() {
@@ -2867,7 +2876,7 @@ function validateEnv() {
   // Warn if no AI provider keys are set.
   const anyAiKey = Object.values(KEYS).some(v => v);
   if (!anyAiKey) {
-    warnings.push('No AI provider keys configured â€” NeuralChat and AI features will be unavailable.');
+    warnings.push('No AI provider keys configured — NeuralChat and AI features will be unavailable.');
   }
 
   for (const w of warnings) console.warn(`[wealth-ai] WARNING: ${w}`);

@@ -269,6 +269,26 @@ describe('v19.1 selfHeal — exit journal + boot verdict', () => {
     expect(verdict.verdict).toContain('HARD KILL');
   });
 
+  it('v20.4.3 regression: report in the SAME process as init never mistakes its own boot record for a HARD KILL', () => {
+    const reboot = () => {
+      __resetSelfHealForTests();
+      _setJournalFileForTest(JOURNAL); // NB: keep the journal (arm() would truncate it)
+      return initSelfHeal({ env: {}, emitter: new EventEmitter(), nowFn: () => nowVal, memFn: () => memVal, log: () => {} });
+    };
+    // first ever run -> no previous record
+    arm();
+    expect(reportLastExitOnBoot().verdict).toContain('NO RECORD');
+
+    // previous run shut down cleanly -> next boot must say CLEAN SHUTDOWN
+    selfHealNoteShutdown('sigterm');
+    reboot();
+    expect(reportLastExitOnBoot().verdict).toContain('CLEAN SHUTDOWN');
+
+    // previous run died hard (boot record, no exit) -> next boot says HARD KILL
+    reboot();
+    expect(reportLastExitOnBoot().verdict).toContain('HARD KILL');
+  });
+
   it('exit event journals a generic exit code when nothing else did', () => {
     arm();
     __triggerExitForTests(1);
