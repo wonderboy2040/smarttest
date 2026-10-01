@@ -7,5 +7,5 @@
 // (scripts/build_v203_full.sh) greps this file so the shipped app can
 // never disagree with the shipped VERSION.txt again.
 // ============================================================
-export const APP_VERSION = '20.6.1';
-export const APP_TITLE = `SmartAI Pro v${APP_VERSION} — TWO-DESK TERMINAL (India Intraday + CoinDCX) — OLLAMA_DEEP_MODEL support: qwen3:8b scan + deepseek-r1:14b deep analysis on 16GB (auto-swap, OLLAMA_MAX_LOADED_MODELS=1)`;
+export const APP_VERSION = '20.6.3';
+export const APP_TITLE = `SmartAI Pro v${APP_VERSION} — TWO-DESK TERMINAL (India Intraday + CoinDCX) — self-improvement loop COMPLETELY REMOVED (panel + routes gone) + manual futures wallet reconnect button + endpoint`;

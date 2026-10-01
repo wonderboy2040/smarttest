@@ -120,17 +120,30 @@ import {
 // v10.9 WEEKLY REVIEW — journal + calibration → one LLM narration
 import { runWeeklyPerformanceReview, weeklyReviewStatus, scheduleWeeklyReviewPush } from './weeklyReview.js';
 // v19.0 SELF-IMPROVEMENT ENGINE (Phases 1-5) — the closed loop:
-// outcomeHarvester (fuel) → driftMonitor (awareness) → retrainBridge +
-// gateTuner (learning) → lessonsEngine + strategyEvolution (evolution)
-// → selfCouncil (governance) → selfStatus (self-awareness + repair).
-import { harvestOutcomes } from './outcomeHarvester.js';
-import { runDriftCheck } from './driftMonitor.js';
-import { triggerRetrain } from './retrainBridge.js';
-import { runGateTune } from './gateTuner.js';
-import { generateLessons, currentLessons } from './lessonsEngine.js';
-import { runEvolution } from './strategyEvolution.js';
-import { proposalsStatus, approveProposal, rejectProposal, rollbackProposal } from './selfCouncil.js';
-import { selfStatus, selfRepair } from './selfStatus.js';
+// v20.6.3: SELF-IMPROVEMENT ENGINE — COMPLETELY REMOVED.
+// The user explicitly asked to "completely remove" the loop. v20.6.0
+// disabled the intervals (default SELFIMPROVE_ENABLED=false). v20.6.3
+// now removes the 14 /api/ai/self/* route handlers + their imports +
+// the panel .tsx file. The loop module FILES (outcomeHarvester,
+// driftMonitor, retrainBridge, gateTuner, lessonsEngine,
+// strategyEvolution, evolutionLedger, selfCouncil, selfStatus) remain
+// in place because council.js dynamically `await import('./lessonsEngine.js')`
+// for the lessonsBlock prompt — deleting them would crash that path.
+// They're inert: nothing calls them now (no routes, no UI, no intervals).
+//
+// To re-enable manually: re-add the imports below + the 14 route
+// handlers + set SELFIMPROVE_ENABLED=true in .env + re-mount the
+// SelfImprovementPanel component (re-create from git history).
+//
+// Old imports removed (kept as comments for traceability):
+// import { harvestOutcomes } from './outcomeHarvester.js';
+// import { runDriftCheck } from './driftMonitor.js';
+// import { triggerRetrain } from './retrainBridge.js';
+// import { runGateTune } from './gateTuner.js';
+// import { generateLessons, currentLessons } from './lessonsEngine.js';
+// import { runEvolution } from './strategyEvolution.js';
+// import { proposalsStatus, approveProposal, rejectProposal, rollbackProposal } from './selfCouncil.js';
+// import { selfStatus, selfRepair } from './selfStatus.js';
 // v10.16 SECTION 2: MANUAL TRADE TRACKER — user's own trades get the
 // same live tracking + conviction intelligence the desk gives its own.
 // v12.0: + R-multiple/MFE-MAE excursion tracking + aggregate stats.
@@ -645,6 +658,41 @@ export function registerAITradingRoutes(app, deps) {
   app.get('/api/ai/wallet', async (_req, res) => {
     try {
       res.json(await walletSnapshot());
+    } catch (e) {
+      const status = e?.status || 502;
+      res.status(status).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  // v20.6.3: MANUAL FUTURES WALLET RECONNECT — POST /api/ai/wallet/reconnect
+  // clears the futures wallet transport ladder + cooldown + scope probe,
+  // then re-fetches the wallet snapshot. Designed for the live user case
+  // where the futures wallet stopped reading after a transient 401 / WAF
+  // block armed the cooldown (the 5-min cooldown + the 10-probe escape-
+  // hatch could leave the wallet blank for ~10 minutes; this endpoint
+  // forces an immediate fresh ladder sweep so the user gets a working
+  // wallet on demand). Body: { force?: true }. Auth-gated by requireAuth.
+  app.post('/api/ai/wallet/reconnect', async (req, res) => {
+    try {
+      const force = req.body && (req.body.force === true || req.body.force === 'true');
+      // dynamic import to avoid circular dep (futures.js statically imports coindcx.js)
+      const fut = await import('./futures.js');
+      if (typeof fut.resetWalletTransportForReconnect === 'function') {
+        fut.resetWalletTransportForReconnect();
+      }
+      // if force, also clear the scope probe (the cached "no_scope" / "ok" verdict)
+      // — see futures.js::probeFuturesKeyScope + lastFuturesKeyScope()
+      // (the next walletSnapshot call will re-probe if needed)
+      const snap = await walletSnapshot();
+      res.json({
+        ok: true,
+        reset: true,
+        forced: !!force,
+        snapshot: snap,
+        note: force
+          ? 'Futures wallet transport fully reset (ladder + cooldown + scope). Next /api/ai/wallet poll will do a fresh 7-rung sweep.'
+          : 'Futures wallet transport reset (ladder + cooldown). Next /api/ai/wallet poll will do a fresh sweep.',
+      });
     } catch (e) {
       const status = e?.status || 502;
       res.status(status).json({ ok: false, error: String(e?.message || e) });
@@ -1667,73 +1715,17 @@ export function registerAITradingRoutes(app, deps) {
     try { res.json(weeklyReviewStatus()); } catch (e) { jsonError(res, 500, 'weekly review status failed', e); }
   });
 
-  // ---------------- v19.0: SELF-IMPROVEMENT ENGINE (Phase 1-5) ----------------
-  // One control surface for the whole loop: harvest → drift → learn →
-  // propose → approve. Every handler is guarded (never a 500 from a
-  // broken subsystem) + no-store (live state).
-  app.get('/api/ai/self/status', (_req, res) => {
-    try {
-      res.set('Cache-Control', 'no-store');
-      res.json(selfStatus());
-    } catch (e) { jsonError(res, 500, 'self status failed', e); }
-  });
-  app.post('/api/ai/self/repair', async (_req, res) => {
-    try {
-      res.set('Cache-Control', 'no-store');
-      res.json(await selfRepair({ KEYS: effectiveKeys() }));
-    } catch (e) { jsonError(res, 500, 'self repair failed', e); }
-  });
-  app.post('/api/ai/self/harvest', (_req, res) => {
-    try { res.json({ ok: true, ...harvestOutcomes() }); } catch (e) { jsonError(res, 500, 'harvest failed', e); }
-  });
-  app.post('/api/ai/self/drift', (_req, res) => {
-    try { res.json({ ok: true, ...runDriftCheck() }); } catch (e) { jsonError(res, 500, 'drift check failed', e); }
-  });
-  app.post('/api/ai/self/retrain', async (req, res) => {
-    try {
-      const reason = String((req.body || {}).reason || 'manual');
-      res.json(await triggerRetrain(reason === 'drift-alarm' ? 'drift-alarm' : 'manual'));
-    } catch (e) { jsonError(res, 500, 'retrain failed', e); }
-  });
-  app.get('/api/ai/self/lessons', (_req, res) => {
-    try {
-      res.set('Cache-Control', 'no-store');
-      res.json(currentLessons());
-    } catch (e) { jsonError(res, 500, 'lessons read failed', e); }
-  });
-  app.post('/api/ai/self/lessons/run', async (_req, res) => {
-    try {
-      res.set('Cache-Control', 'no-store');
-      res.json(await generateLessons({ KEYS: effectiveKeys(), OPENAI_COMPAT }));
-    } catch (e) { jsonError(res, 500, 'lessons run failed', e); }
-  });
-  app.post('/api/ai/self/gate-tune', (_req, res) => {
-    try { res.json(runGateTune({ current: loadAgentConfig() })); } catch (e) { jsonError(res, 500, 'gate tune failed', e); }
-  });
-  app.post('/api/ai/self/evolve', async (req, res) => {
-    try {
-      const { market, symbols } = req.body || {};
-      res.json(await runEvolution({
-        market: String(market || 'CRYPTO').toUpperCase(),
-        symbols: Array.isArray(symbols) && symbols.length ? symbols.map(s => String(s).toUpperCase().slice(0, 12)) : undefined,
-      }));
-    } catch (e) { jsonError(res, 500, 'evolution failed', e); }
-  });
-  app.get('/api/ai/self/proposals', (_req, res) => {
-    try {
-      res.set('Cache-Control', 'no-store');
-      res.json(proposalsStatus());
-    } catch (e) { jsonError(res, 500, 'proposals read failed', e); }
-  });
-  app.post('/api/ai/self/proposal/:id/approve', (req, res) => {
-    try { res.json(approveProposal(String(req.params.id || ''), { by: 'human-panel' })); } catch (e) { jsonError(res, 500, 'approve failed', e); }
-  });
-  app.post('/api/ai/self/proposal/:id/reject', (req, res) => {
-    try { res.json(rejectProposal(String(req.params.id || ''), { by: 'human-panel' })); } catch (e) { jsonError(res, 500, 'reject failed', e); }
-  });
-  app.post('/api/ai/self/proposal/:id/rollback', (req, res) => {
-    try { res.json(rollbackProposal(String(req.params.id || ''), { by: 'human-panel' })); } catch (e) { jsonError(res, 500, 'rollback failed', e); }
-  });
+  // ============================================================
+  // v20.6.3: SELF-IMPROVEMENT ENGINE ROUTES — COMPLETELY REMOVED.
+  // The 14 /api/ai/self/* handlers (status, repair, harvest, drift,
+  // retrain, lessons, lessons/run, gate-tune, evolve, proposals,
+  // proposal/:id/approve|reject|rollback) were here. Removed because
+  // the user explicitly asked to "completely remove" the loop. The
+  // module FILES remain (council.js dynamically imports lessonsEngine
+  // for the lessonsBlock prompt — deleting would crash that path).
+  // If you need to call them manually: re-add the imports + the 14
+  // handlers from git history (commit before v20.6.3).
+  // ============================================================
 
   // ---------------- alerts + AI council keys (v6.5) ----------------
   app.get('/api/ai/alerts/config', (_req, res) => {

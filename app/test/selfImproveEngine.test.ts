@@ -440,15 +440,28 @@ describe('v19.0 user spec — CoinDCX auto-trading scope (spot OFF)', () => {
 
 // ============ 8. WIRING CONTRACTS ============
 describe('v19.0 wiring — routes + scheduler + council + frontend', () => {
-  it('routes expose the full self/* control surface', () => {
+  // v20.6.3: the user explicitly asked to "completely remove" the self-
+  // improvement loop. The 14 /api/ai/self/* routes are GONE from
+  // routes.js. The handlers' comment block in routes.js mentions the
+  // removal for traceability (so a future dev knows where to look in
+  // git history if they need to re-mount them).
+  it('v20.6.3: routes.js no longer exposes the self/* control surface (loop REMOVED)', () => {
     for (const route of [
       '/api/ai/self/status', '/api/ai/self/repair', '/api/ai/self/harvest', '/api/ai/self/drift',
       '/api/ai/self/retrain', '/api/ai/self/lessons', '/api/ai/self/lessons/run', '/api/ai/self/gate-tune',
       '/api/ai/self/evolve', '/api/ai/self/proposals',
       '/api/ai/self/proposal/:id/approve', '/api/ai/self/proposal/:id/reject', '/api/ai/self/proposal/:id/rollback',
     ]) {
-      expect(routesSrc).toContain(route);
+      // the route MOUNT line (e.g. `app.get('/api/ai/self/status', ...)`)
+      // must be gone; the comment block mentioning the route name for
+      // traceability may still exist (that's intentional — explains
+      // where to find them in git history). Assert no `app.<method>(
+      // '/api/ai/self/...'` mount pattern remains.
+      expect(routesSrc).not.toContain(`app.get('${route}'`);
+      expect(routesSrc).not.toContain(`app.post('${route}'`);
     }
+    // sanity: the v20.6.3 removal comment block IS present
+    expect(routesSrc).toMatch(/v20\.6\.3.*SELF-IMPROVEMENT.*REMOVED/s);
   });
 
   it('index.js arms the heartbeat (harvest 6h, drift 1h, weekly, kill-switch)', () => {
@@ -464,12 +477,23 @@ describe('v19.0 wiring — routes + scheduler + council + frontend', () => {
     expect(councilSrc).toMatch(/lessonsBlock/);
   });
 
-  it('frontend: SelfImprovementPanel exists + mounted in CoinDcxTab + AgentPanel scope chips', () => {
+  // v20.6.3: the user explicitly asked to "completely remove" the self-
+  // improvement loop. The SelfImprovementPanel.tsx file is GONE; CoinDcxTab
+  // no longer mounts it. The "cx-selfimprove" section id is gone.
+  // (AgentPanel scope chips — AUTO SCOPE / EQUITY SIM / SPOT AUTO OFF —
+  // are independent of the loop and stay; they describe the agent's
+  // auto-trade scope, not the self-improvement engine.)
+  it('v20.6.3: frontend SelfImprovementPanel REMOVED (file gone + not mounted in CoinDcxTab)', () => {
     const panelPath = path.join(repoRoot, 'src/components/aitrading/SelfImprovementPanel.tsx');
-    expect(existsSync(panelPath)).toBe(true);
+    expect(existsSync(panelPath)).toBe(false);
     const tabSrc = readFileSync(path.join(repoRoot, 'src/components/tabs/CoinDcxTab.tsx'), 'utf8');
-    expect(tabSrc).toContain('SelfImprovementPanel');
-    expect(tabSrc).toMatch(/cx-selfimprove/);
+    // CoinDcxTab may still contain the OLD comment block explaining the
+    // removal (intentional for traceability) — but must NOT contain the
+    // actual JSX mount (`<SelfImprovementPanel />`) or the import line.
+    expect(tabSrc).not.toMatch(/^import\s+\{[^}]*SelfImprovementPanel/m);
+    expect(tabSrc).not.toMatch(/<SelfImprovementPanel\s*\/?>/);
+    expect(tabSrc).not.toMatch(/id=["']cx-selfimprove["']/);
+    // AgentPanel scope chips are INDEPENDENT of the loop — they survive.
     const agentPanelSrc = readFileSync(path.join(repoRoot, 'src/components/aitrading/AgentPanel.tsx'), 'utf8');
     expect(agentPanelSrc).toMatch(/AUTO SCOPE:/);
     expect(agentPanelSrc).toMatch(/EQUITY SIM · USDC/);

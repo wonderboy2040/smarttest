@@ -18,6 +18,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAITrading } from '../aitrading/useAITrading';
 import { useWalletPoll } from '../aitrading/useWalletPoll';
+// v20.6.3: apiFetch + getProxyBase for the manual /api/ai/wallet/reconnect call
+import { apiFetch, getProxyBase } from '../../utils/api';
 import { ExpertPicksPanel } from '../aitrading/ExpertPicksPanel';
 import { SignalCard } from '../aitrading/SignalCard';
 import { MtfBlock, EdgeBlock } from '../aitrading/DeepQualityBlock';
@@ -97,11 +99,34 @@ const NAV_FUTURES = [{ id: 'cx-perp', label: 'PERP', emoji: '🛰️', pro: fals
  *  PortfolioHeat via useWalletPoll (3 independent pollers used to burn
  *  3 signed wallet calls/min). Honest degrade (CF-block / no keys note). */
 const WalletCard = memo(function WalletCard() {
-  const { wallet: w, failed } = useWalletPoll();
+  const { wallet: w, failed, refresh: refreshWallet } = useWalletPoll();
+  const [reconnecting, setReconnecting] = useState(false);
   const inr = w?.spot?.inr as { free?: number; locked?: number } | undefined;
   const usdt = w?.spot?.usdt as { free?: number; locked?: number } | undefined;
   const fut = w?.futures?.usdt as { free?: number; locked?: number; total?: number; crossUserMargin?: number | null } | undefined;
   const err = w?.spot?.error || w?.futures?.error;
+  const showReconnect = !!(w?.futures?.error) || !!(w?.futures?.scope === 'no_scope') || !!(w?.futures && !w.futures.usdt?.total);
+  const onReconnect = useCallback(async () => {
+    if (reconnecting) return;
+    setReconnecting(true);
+    try {
+      const r = await apiFetch(`${getProxyBase()}/api/ai/wallet/reconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        console.warn('wallet reconnect failed:', r.status, j?.error || '');
+      }
+    } catch (e) {
+      console.warn('wallet reconnect error:', e);
+    } finally {
+      // give the server a moment to clear the cooldown + sweep the ladder
+      setTimeout(() => { refreshWallet?.(); setReconnecting(false); }, 800);
+    }
+  }, [reconnecting, refreshWallet]);
   return (
     <div className="quantum-panel rounded-2xl p-4 bg-gradient-to-br from-amber-500/[0.06] via-transparent to-violet-500/[0.05] border border-amber-500/15" aria-label="CoinDCX wallet">
       <div className="flex items-center gap-2 flex-wrap">
@@ -115,6 +140,21 @@ const WalletCard = memo(function WalletCard() {
         )}
         {!w && <span className={`text-[10px] ${failed ? 'text-amber-500/80' : 'text-slate-500'}`}>{failed ? '⚠️ wallet API unreachable — retrying every 60s' : 'loading…'}</span>}
         {w?.usdInr != null && <span className="ml-auto text-[10px] font-mono font-bold text-slate-500">USD/₹ {w.usdInr}</span>}
+        {/* v20.6.3: MANUAL RECONNECT button — when the futures wallet is
+            showing an error (WAF block, cooldown armed, scope probe cached),
+            the user can click this to clear the futures wallet transport
+            ladder + cooldown + scope probe and force a fresh sweep.
+            The button calls POST /api/ai/wallet/reconnect {force:true}. */}
+        {showReconnect && (
+          <button
+            onClick={onReconnect}
+            disabled={reconnecting}
+            className="ml-1 px-2 py-0.5 rounded-lg text-[9px] font-black border border-amber-400/40 bg-amber-500/15 text-amber-200 hover:bg-amber-500/30 transition-colors disabled:opacity-50 disabled:cursor-wait"
+            title="Futures wallet transport reset — ladder + cooldown + scope probe clear karke fresh 7-rung sweep trigger karo"
+          >
+            {reconnecting ? '⏳ Reconnecting…' : '🔄 Reconnect Futures Wallet'}
+          </button>
+        )}
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mt-3">
         <div className="bg-black/25 rounded-xl p-2.5 text-center">
