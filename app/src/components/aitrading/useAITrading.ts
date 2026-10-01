@@ -193,10 +193,16 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
   }, [active, loadBoards, loadState, loadPositions]);
   useEffect(() => {
     if (!active) return;
-    // v12.10 BANDWIDTH: 60s board polling (was 30s) cuts AI signal egress in half.
-    // Instant scan is available on demand via the RESCAN button.
-    const b = setInterval(() => { if (activeRef.current && !document.hidden) loadBoards(); }, 60_000);
-    const s = setInterval(() => { if (activeRef.current && !document.hidden) loadState(); }, 60_000);
+    // v20.5 LATENCY: 30s board polling (was 60s) so a fresh signal
+    // surfaces within the user's 30s target. The server-side cache is
+    // 60s so most polls answer 304-equivalent (cache hit) — bandwidth
+    // stays low. The cache TTL > poll cadence is the intended pattern
+    // (the panel re-renders with the SAME payload until the next
+    // 60s server re-compute). Combined with the SSE tick re-rank in
+    // signals.js / useIntradayStream the top-5 panel also moves on
+    // live price between board cycles.
+    const b = setInterval(() => { if (activeRef.current && !document.hidden) loadBoards(); }, 30_000);
+    const s = setInterval(() => { if (activeRef.current && !document.hidden) loadState(); }, 30_000);
     return () => { clearInterval(b); clearInterval(s); };
   }, [active, loadBoards, loadState]);
 

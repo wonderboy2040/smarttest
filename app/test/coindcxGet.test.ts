@@ -90,6 +90,12 @@ describe('coindcxPrivateGET (v12.3 documented GET-with-body auth)', () => {
     expect(cap.headers['Content-Type']).toBe('application/json');
     expect(cap.headers['Content-Length']).toBe(Buffer.byteLength(cap.body![0], 'utf8'));
     expect(cap.headers['X-AUTH-APIKEY']).toBe('KEY');
+    // v20.5: a stable User-Agent MUST ride the headers — CoinDCX's WAF
+    // 403/401s UA-less requests on the derivatives private GET family
+    // (the live futures-wallet incident that prompted this fix). Without
+    // this lock the regression shipped silently because every rung just
+    // surfaced as misleading "[401] Invalid credentials" errors.
+    expect(cap.headers['User-Agent']).toBe('wealthai-coindcx/1.0');
     // …and the signature is HMAC-SHA256 over that EXACT string
     const expected = crypto.createHmac('sha256', 'SECRET').update(cap.body![0]).digest('hex');
     expect(cap.headers['X-AUTH-SIGNATURE']).toBe(expected);

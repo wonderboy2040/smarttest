@@ -46,6 +46,18 @@ import { buildRegime, fetchYahooIntradayCandles } from './signals.js';
 // FUTURES desk, the perp positioning intel (funding/OI/L-S/taker).
 import { computeWinProb, calibrationSnapshot } from './winProb.js';
 import { getPerpIntelFor, perpIntelWire, perpIntelEnabled } from './perpIntel.js';
+// v20.5 ACCURACY UPGRADE — wire Expert Picks through the SAME probrain
+// quality verdict + signal-trust guards the Signal Board path uses
+// (signals.js:1759-1815). Without these, a STRONG 80+ Expert Pick can
+// fire on a counter-tape SHORT at the bottom of a V (the exact user
+// complaint about long/short direction accuracy), on an overbought
+// LONG (chase at top-tick), or in a counter-regime / counter-HTF setup.
+//   • qualityVerdict — counter-tape demotion, MTF alignment adj,
+//     extension veto, regime penalty, structure stop
+//   • applySignalTrustGuards — RSI overbought/oversold cap, chase
+//     guard, side-flip whipsaw cap, signalAge stamp
+import { qualityVerdict } from './probrain.js';
+import { applySignalTrustGuards } from './signalMemory.js';
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
@@ -543,14 +555,23 @@ export function buildExpertBlueprint({ side, ltp, atr, score, market, ema20 = nu
 //   • STALE-SERVE (SWR) — a scan ≤10 min old is served INSTANTLY while
 //     a refresh runs in the background; if the feed later DIES, the
 //     last good scan keeps the panel alive for up to 45 min (flagged).
-//   • SCAN BUDGET — a cold scan that can't finish in ~25s returns the
-//     picks scored so far, honestly flagged partial.
+//   • SCAN BUDGET — a cold scan that can't finish in ~10s returns the
+//     picks scored so far, honestly flagged partial. v20.5: dropped
+//     from 25s → 10s because the user's "30s latency" complaint was
+//     directly amplified by this budget — a 25s scan + 120s client
+//     poll = 145s end-to-end for a fresh Expert Pick. With 10s budget
+//     + 30s client poll the worst-case is 40s, and the partial-scan
+//     honest-degrade path (next 60s cycle covers the rest) already
+//     handles the universe coverage. The TTL stays at 60s so a 10s
+//     partial scan lands in the cache and the next 60s cycle covers
+//     the rest — exactly the resilience pattern documented at the
+//     _runScan comment above.
 const _scanCache = new Map();     // market → { at, scan }
 const _scanInflight = new Map();  // market → Promise<scan>
 const PICKS_TTL = 60_000;             // fresh window
 const PICKS_STALE_MS = 10 * 60_000;   // instant-serve (stale flag) window
 const PICKS_FAIL_STALE_MS = 45 * 60_000; // feed-dead fallback window
-const PICKS_BUDGET_MS = 25_000;       // cold-scan wall-clock budget
+const PICKS_BUDGET_MS = 10_000;       // cold-scan wall-clock budget (v20.5: was 25_000)
 
 /** Build the route payload from a scan: filter by minScore, cut to limit. */
 function _picksView(scan, minScore, limit, extra = {}) {
@@ -738,8 +759,54 @@ async function _runScan(mkt, opts = {}) {
       }
       const scored = expertScoreFactors({ tv: row, ltf: ltfInd, regime, market: mkt, smc: smv });
       if (!scored) return null;
-      const finalScore = scored.score; // already SMC-aware inside factors
+      let finalScore = scored.score; // already SMC-aware inside factors
       const atr = scored.atr ?? (candles && ltfInd ? ltfInd.atr : null);
+      // ----------------------------------------------------------------
+      // v20.5 ACCURACY UPGRADE — apply the SAME probrain quality verdict
+      // the Signal Board applies (signals.js:1759-1797). Without this
+      // gate, a STRONG 80+ Expert Pick could fire on a counter-tape
+      // setup (15m tape against the side, regime penalty, extension
+      // veto, MTF counter-aligned) and print the wrong direction to
+      // the user — exactly the "long/short accurate rehna hai" ask.
+      // Build a minimal consensus envelope so qualityVerdict's quorum
+      // + regime + MTF + extension + counter-tape ladders all fire.
+      // ----------------------------------------------------------------
+      const qv = qualityVerdict({
+        market: mkt, side: scored.side,
+        consensus: { confidence: scored.score, agreement: null, side: scored.side },
+        votes: [{ dir: scored.side === 'LONG' ? 1 : -1, conf: scored.score }],
+        ltp: scored.ltp, changePct: row?.changePct ?? null,
+        rsi: ltfInd?.rsi ?? null, adx: ltfInd?.adx ?? null,
+        atr, candles, regime, htf: ltfInd, ltf: ltfInd, ltfLabel: '15m', now: Date.now(),
+      });
+      // confAdj range is roughly [-25, +6]; apply to the score (the
+      // 80+ STRONG bar becomes harder to clear when the setup fights
+      // tape/regime/MTF — exactly the accuracy gate the user asked for).
+      finalScore = Math.max(0, Math.min(100, Math.round(finalScore + (qv.confAdj || 0))));
+      // grade cap ladder: WATCH > ACTION > STRONG — never let a
+      // counter-tape / extension-veto / single-voter pick wear STRONG.
+      const capRank = { NEUTRAL: 0, WATCH: 1, ACTION: 2, STRONG: 3 };
+      let finalGrade = finalScore >= EXPERT_MIN_STRONG ? 'STRONG'
+        : finalScore >= EXPERT_MIN_ACTION ? 'ACTION' : 'WATCH';
+      if (capRank[qv.gradeCap] < capRank[finalGrade]) finalGrade = qv.gradeCap;
+      // ----------------------------------------------------------------
+      // v20.5 SIGNAL-TRUST GUARDS — overbought/oversold + chase guard
+      // (signals.js:1809-1815 mirror). A LONG at RSI ≥ 70 or a SHORT at
+      // RSI ≤ 30 can never wear STRONG (chase at top-tick / knife-catch
+      // at bottom-tick). signalAge stamps so the UI can show FRESH.
+      // ----------------------------------------------------------------
+      const consensusEnv = {
+        side: scored.side, confidence: finalScore, grade: finalGrade, agreement: null,
+      };
+      const guarded = applySignalTrustGuards({
+        market: mkt, symbol: base, consensus: consensusEnv,
+        ctx: { ltp: scored.ltp, ind: ltfInd, __ltfInd: ltfInd, candles },
+        ltf: ltfInd,
+      });
+      if (guarded) {
+        if (typeof guarded.confidence === 'number') finalScore = guarded.confidence;
+        if (guarded.grade) finalGrade = guarded.grade;
+      }
       const blueprint = buildExpertBlueprint({
         side: scored.side, ltp: scored.ltp, atr, score: finalScore, market: mkt,
         ema20: scored.ema20 ?? (ltfInd ? ltfInd.ema20 : null),
@@ -748,10 +815,22 @@ async function _runScan(mkt, opts = {}) {
       });
       return {
         symbol: base, market: mkt, side: scored.side, score: finalScore,
-        grade: finalScore >= EXPERT_MIN_STRONG ? 'STRONG' : finalScore >= EXPERT_MIN_ACTION ? 'ACTION' : 'WATCH',
+        grade: finalGrade,
         ltp: pR(scored.ltp), changePct: row?.changePct ?? null,
         factors: scored.factors,
         smcReasons,
+        // v20.5: surface the quality verdict reasons so the UI can show
+        // WHY a pick was demoted (counter-tape / overbought / etc).
+        qualityReasons: qv.reasons || [],
+        qualityFlags: {
+          veto: qv.flags?.veto || null,
+          counterTape: qv.flags?.counterTape || null,
+          mtf: qv.flags?.mtf ? { phase: qv.flags.mtf.phase, aligned: qv.flags.mtf.aligned } : null,
+          extension: qv.flags?.extension ? { veto: qv.flags.extension.veto } : null,
+          quorum: qv.flags?.quorum || null,
+          obOs: guarded?.obOs || null,
+          chasing: guarded?.chasing || null,
+        },
         priceSource: mkt === 'CRYPTO' ? (priceMap.has(base) ? (priceSource || 'coindcx') : 'tv-approx') : mkt === 'FUTURES' ? (priceMap.has(base) ? (priceSource || 'coindcx-fut') : 'tv-approx') : (row?.ltp ? 'tv-nse' : null),
         candleSource: candles ? (mkt === 'INDIA' ? 'yahoo-15m' : candles.length >= 60 ? 'coindcx/yahoo-1h' : null) : null,
         plan: blueprint,

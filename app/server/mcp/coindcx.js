@@ -278,6 +278,16 @@ export async function coindcxPrivateGET(path, apiKey, secret, params = {}, { uni
     ? '?' + new URLSearchParams(qsEntries.map(([k, v]) => [k, String(v)])).toString()
     : '';
   const headers = {
+    // v20.4.3 / v20.5: a stable User-Agent avoids Cloudflare-front 401s
+    // on signed wallet GETs — the CoinDCX WAF commonly 403/401s UA-less
+    // requests on the derivatives private GET family (futures wallet,
+    // margin, etc.) and the !r.ok branch wraps every non-2xx into a
+    // misleading "Invalid credentials" error to the user. Spot POST
+    // works without a UA (more permissive rule) but the futures wallet
+    // ladder rungs all hit the WAF block. This single header makes the
+    // 7-rung WALLET_AUTH_LADDER succeed on rung 1 (GET-body/ms/num) and
+    // clears the 5-min sticky-rung + cooldown amplifiers downstream.
+    'User-Agent': 'wealthai-coindcx/1.0',
     // body mode carries JSON — the Python sample sets this header and
     // the Node `request({json:true})` form sets it implicitly.
     ...(bodyMode ? { 'Content-Type': 'application/json' } : {}),

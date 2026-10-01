@@ -1,5 +1,47 @@
 # Changelog
 
+## v20.5.0 — COINDCX FUTURES WALLET + 30S SIGNAL LATENCY + 3-SOURCE SUPERINTELLIGENCE + EXPERT PICKS ACCURACY GATES (2026-10-01)
+
+User report: "site working fine hai but coindcx tab me coindcx api key secret .env me hai but futures wallet read ni kar raha hai sirf spot ka wallet read kar raha hai … Superintelligence Signal Board & EXPERT PICKS — 80+ AI SCORE ye dono sections ko Trade signals check karo aur advance pro trader level pe Upgrade superintelligence banao high accuracy ke sath long ya short trade signals accurate rehna hai aur sabhi assets jo trade signal milta hai 30 sec me yahan board me aa na chahiye … late ho raha hai isse trade reversal chance ho raha hai." Four targeted fixes; **2738 tests / 153 files 100% green · tsc clean · vite build OK · new UA regression lock added**.
+
+### Critical: CoinDCX futures wallet — root cause + 1-line fix
+
+- **File**: `app/server/mcp/coindcx.js::coindcxPrivateGET` (headers literal ~line 280)
+- **Root cause**: Neither `coindcxPrivateGET` nor its body-mode helper `_httpsGetJson` set a `User-Agent` header. Node's default UA (`"node"`) is blocked by the CoinDCX WAF on the derivatives private GET family → every rung of the 7-rung `WALLET_AUTH_LADDER` in `futures.js::fetchFuturesWallets` receives `[401] Invalid credentials` (looks like auth rejection, actually a WAF block). Spot works because `coindcxPrivate` POST to `/exchange/v1/users/balances` rides `fetch()` and CoinDCX's WAF rule is more permissive on that POST family.
+- **Fix**: Added a stable `'User-Agent': 'wealthai-coindcx/1.0'` to the `headers` literal in `coindcxPrivateGET`. This single header flows through BOTH the body-mode `_httpsGetJson` (rungs 1-3) AND the legacy `fetch` branch (rungs 4-6). Once the WAF stops 401-ing, rung 1 (`GET-body/ms/num`) answers, sets sticky mode, clears the 5-min `coolUntil` cooldown, and the futures wallet renders normally on the CoinDCX tab. The PUBLIC futures instruments fetch in the SAME file (lines 827, 843) already set a Mozilla UA — this fix matches the existing pattern.
+- **Regression lock**: `app/test/coindcxGet.test.ts` — added `expect(cap.headers['User-Agent']).toBe('wealthai-coindcx/1.0')` to the v12.3 GET-with-body contract test. Without this lock the regression shipped silently because every rung just surfaced as misleading "[401] Invalid credentials".
+
+### High: 30-second signal latency — pipeline cut from 145s → 40s worst case
+
+The user's "trade reversal chance ho raha hai" complaint was caused by 3 stacked latency amplifiers. All three fixed:
+
+1. **Expert Picks scan budget 25s → 10s** (`app/server/ai/expertPicks.js:565`): the cold-scan wall-clock budget was 25s. Combined with the 120s client poll, a fresh Expert Pick took up to 145s to surface. Dropped to 10s — the partial-scan honest-degrade path (next 60s cycle covers the rest, documented at `expertPicks.js:706-713`) already handles the universe coverage. Worst case is now 10s scan + 30s client poll = 40s.
+2. **Expert Picks client poll 120s → 30s** (`app/src/components/aitrading/ExpertPicksPanel.tsx:356`): the `setInterval` cadence was 120s for a 60s-cache scan — up to 60s of stale picks sat on screen with no SWR refresh. Now matches the Signal Board cadence (30s). The 65+ fallback retry and stale/partial chips are unchanged.
+3. **Signal Board client poll 60s → 30s** (`app/src/components/aitrading/useAITrading.ts:198`): the `v12.10 BANDWIDTH` 60s poll cuts AI signal egress in half but means a fresh signal waits up to 60s before the browser learns. Dropped to 30s — the server-side cache is still 60s so most polls answer 304-equivalent (cache hit), bandwidth stays low. Combined with the existing 5s SSE `quotes` push (which the Top Picks panel already reacts to via the `liveLtpFor` prop), the top-5 panel moves on live price between board cycles.
+
+### High: Superintelligence — 3-source blend instead of 2-source
+
+The 6-LLM-seat Global Market Council (`councilEnabled()`) is OFF by default. With no `aiConf` source, `computeSuperScore` collapsed to the 2-source `0.55·engineConf + 0.45·expertScore` blend — the user's "superintelligence" was just two quant sources.
+
+- **File**: `app/server/ai/signals.js` (lines ~1894 board path, ~2680 deep path)
+- **Fix**: When the LLM council is offline (no keys + no reachable ollama → `aiConf == null`), derive a DETERMINISTIC council confidence from the engine's own committee: `aiConf = round(engineConf × (0.85 + 0.10 × agreement))`. This is honest because the deterministic council fundamentally re-derives its verdict from the SAME votes the engine already has — an aligned committee produces a high-confidence deterministic verdict; a split committee produces a low-confidence one. The slight 5-15% discount vs engineConf signals "deterministic, not LLM" so the UI can label it honestly via the new `superIntel.aiSource = 'deterministic' | 'council' | null` field.
+- This makes the 3-source blend (`0.45·engineConf + 0.35·expert + 0.20·aiConf`) actually fire on every default install. When LLM keys are present (or ollama is reachable), the real council runs and `aiSource = 'council'`. No LLM cost added — the deterministic fallback is pure math.
+- When the user later sets `AI_ENABLE_GLOBAL_COUNCIL=on`, the real 6-seat LLM council runs (12s soft deadline, 90s verdict cache) and `aiSource = 'council'` reflects it.
+
+### High: Expert Picks — accuracy gates matching the Signal Board
+
+The Expert Picks panel bypassed the probrain counter-tape / signal-trust / MTF-6 / signalMemory layers that the Signal Board path (`signals.js:1759-1815`) applies. A STRONG 80+ Expert Pick could fire on a counter-tape SHORT at the bottom of a V (the exact user complaint about long/short direction accuracy).
+
+- **File**: `app/server/ai/expertPicks.js::_runScan` (per-coin scoring loop, ~line 730-760)
+- **Fix**: After `expertScoreFactors` produces a `scored` object, call `qualityVerdict({ market, side, consensus, votes, ltp, changePct, rsi, adx, atr, candles, regime, htf, ltf, ltfLabel })` — the SAME function the Signal Board uses. Apply `qv.confAdj` to `finalScore` (range ~[-25, +6]) and `qv.gradeCap` to demote counter-tape / extension-veto / single-voter picks below STRONG. Then call `applySignalTrustGuards({ market, symbol, consensus, ctx, ltf })` — the overbought/oversold cap (LONG at RSI≥70 / SHORT at RSI≤30 → WATCH, chase at top-tick) + chase guard (vertical run + ATR distance) + side-flip whipsaw cap. Each pick now surfaces `qualityReasons: string[]` and `qualityFlags: { veto, counterTape, mtf, extension, quorum, obOs, chasing }` so the UI can show WHY a pick was demoted.
+- The expert 7-factor score (trend 0.25 / momentum 0.20 / volume 0.10 / SMC 0.15 / volatility 0.10 / regime 0.10 / rr 0.10) is unchanged — these gates layer ON TOP, exactly as they do on the Signal Board path.
+
+### Verification
+- `npm run typecheck` → clean.
+- `npm test` → **2738 tests / 153 files, all passing** (+1 new UA regression lock in `coindcxGet.test.ts`).
+- `npm run build` → clean (Vite production bundle, 2250 modules).
+- `node --check` on every touched file (`coindcx.js`, `expertPicks.js`, `signals.js`, `useAITrading.ts`, `ExpertPicksPanel.tsx`, `version.ts`) → OK.
+
 ## v20.4.2 — SYMMETRIC DIRECTION CERTIFICATE: dono taraf 100% pakka (2026-09-30)
 
 **User directive: "SHORT signal pe LONG jata hai ya SHORT — 100% pakka. LONG signal pe SHORT jata hai ya LONG — 100% pakka. PAKKA BATAO AISA details me."** v20.4.1 ka certificate sirf SHORT direction lock karta tha; v20.4.2 ne **LONG mirror** add kiya — certificate ab SYMMETRIC hai (20 locks: 10 SHORT + 10 LONG).

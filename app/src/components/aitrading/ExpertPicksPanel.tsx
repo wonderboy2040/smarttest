@@ -353,7 +353,7 @@ export const ExpertPicksPanel = memo(function ExpertPicksPanel({ active, market,
   useEffect(() => {
     if (!active) return;
     load();
-    const t = setInterval(() => { if (activeRef.current && !document.hidden) load(); }, 120_000);
+    const t = setInterval(() => { if (activeRef.current && !document.hidden) load(); }, 30_000);
     return () => clearInterval(t);
   }, [active, load]);
 

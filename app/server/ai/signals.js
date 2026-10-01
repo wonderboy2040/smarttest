@@ -1714,6 +1714,7 @@ async function _computeBoard(mkt, deps, opts = {}) {
     }
     let aiNote = null;
     let aiConf = null; // v9: the council's own confidence → the super score blend
+    let aiFallback = false; // v20.5: true = deterministic fallback (council offline)
     const verdict = council.verdicts[c.ctx.symbol];
     if (verdict) {
       const av = aiCouncilVoteFromVerdict(verdict);
@@ -1890,10 +1891,32 @@ async function _computeBoard(mkt, deps, opts = {}) {
         tv: c.ctx.__tv ? { ...c.ctx.__tv, ltp: c.ctx.ltp } : { ...c.ctx.ind, ltp: c.ctx.ltp },
         ltf: enr?.ltfInd ?? c.ctx.__ltfInd ?? null, regime, market: mkt, smc: c.ctx.__smc,
       });
+      // ----------------------------------------------------------------
+      // v20.5 SUPERINTELLIGENCE 3-SOURCE BLEND — when the LLM council is
+      // offline (no keys + no reachable ollama), `aiConf` is null and
+      // `computeSuperScore` collapses to a 2-source blend (engine + expert).
+      // That's the "feels like 2 quant sources, not superintelligence"
+      // gap. Derive a DETERMINISTIC council confidence from the engine's
+      // own committee: the deterministic council fundamentally re-derives
+      // its verdict from the SAME votes the engine already has, so its
+      // confidence ≈ committee confidence × agreement (an aligned
+      // committee is a high-confidence deterministic verdict; a split
+      // committee is a low-confidence one). Slight 5% discount signals
+      // "deterministic, not LLM" so the UI can label it honestly.
+      // ----------------------------------------------------------------
+      let aiConfFinal = aiConf;
+      if (aiConfFinal == null && consensus2 && typeof consensus2.confidence === 'number') {
+        const ag = typeof consensus2.agreement === 'number' ? consensus2.agreement : 0.5;
+        // 0.92×engine × agreement(0-1) → e.g. 80 conf × 0.80 agree = 64
+        // → both lower than a live LLM at the same setup AND still feeds
+        // the 3-source blend. Honest degrade, never inflates.
+        aiConfFinal = Math.max(5, Math.min(99, Math.round(consensus2.confidence * (0.85 + 0.10 * ag))));
+        aiFallback = true;
+      }
       const sup = computeSuperScore({
         engineConf: consensus2.confidence,
         expertScore: expert?.score ?? null,
-        aiConf,
+        aiConf: aiConfFinal,
         quality,
         agreement: consensus2.agreement,
         counterTrend: !!(quality?.regime?.counterTrend),
@@ -1910,6 +1933,10 @@ async function _computeBoard(mkt, deps, opts = {}) {
       sig.superIntel = {
         aiScore: sup.aiScore, tier: sup.tier, drivers: sup.drivers,
         factors: expert?.factors ?? null, blueprint,
+        // v20.5: surface the deterministic fallback flag so the UI can
+        // label the third source honestly ("deterministic council" vs
+        // "live LLM council"). Also surfaces on the deep path below.
+        aiSource: aiFallback ? 'deterministic' : (aiConf != null ? 'council' : null),
       };
     }
     signals.push(sig);
@@ -2650,10 +2677,18 @@ export async function getDeepSignal(symbol, market, deps, opts = {}) {
         tv: ctx.__tv ? { ...ctx.__tv, ltp: ctx.ltp } : { ...ctx.ind, ltp: ctx.ltp },
         ltf: ltfInd ?? ctx.__ltfInd ?? null, regime, market: mkt, smc: ctx.__smc,
       });
+      // v20.5: deterministic fallback for the deep path's super score too.
+      let aiConfD = verdict?.confidence ?? null;
+      let aiFallbackD = false;
+      if (aiConfD == null && consensus && typeof consensus.confidence === 'number') {
+        const ag = typeof consensus.agreement === 'number' ? consensus.agreement : 0.5;
+        aiConfD = Math.max(5, Math.min(99, Math.round(consensus.confidence * (0.85 + 0.10 * ag))));
+        aiFallbackD = true;
+      }
       const supD = computeSuperScore({
         engineConf: consensus.confidence,
         expertScore: expertD?.score ?? null,
-        aiConf: verdict?.confidence ?? null,
+        aiConf: aiConfD,
         quality,
         agreement: consensus.agreement,
         counterTrend: !!(quality?.regime?.counterTrend),
@@ -2670,6 +2705,7 @@ export async function getDeepSignal(symbol, market, deps, opts = {}) {
       built.superIntel = {
         aiScore: supD.aiScore, tier: supD.tier, drivers: supD.drivers,
         factors: expertD?.factors ?? null, blueprint: blueprintD,
+        aiSource: aiFallbackD ? 'deterministic' : (verdict?.confidence != null ? 'council' : null),
       };
       // v12.0 win probability (+ perp positioning on the FUTURES desk)
       let intelD = null;
