@@ -699,6 +699,70 @@ export function registerAITradingRoutes(app, deps) {
     }
   });
 
+  // ============================================================
+  // v20.7 EXECUTION STACK routes — Phase 2/4/5 control surface
+  // ------------------------------------------------------------
+  //   GET  /api/exec/status       — exec mode + kill level + leader + heartbeat
+  //   POST /api/exec/kill         — { level: 0|1|2|3, reason } → setKill
+  //   POST /api/exec/enter        — protection-first entry (signal + plan body)
+  //   GET  /api/exec/positions    — port.getPositions() (exchange truth)
+  //   GET  /api/exec/equity       — port.getEquity()
+  // All auth-gated by the global requireAuth middleware at index.js:403.
+  // The execution port is the v20.7 module (paper default — safe).
+  // ============================================================
+  app.get('/api/exec/status', async (_req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      const { killLevel, killReason, isKilled, canEnterNew, isLeader, leaderNode } = await import('../exec/reconciler.js');
+      const { ramState } = await import('../ai/ramGovernor.js');
+      res.json({
+        ok: true,
+        execMode: process.env.EXEC_MODE || 'paper',
+        execNode: process.env.SMARTAI_EXEC_NODE || 'laptop',
+        leader: { isLeader: isLeader(), node: leaderNode() },
+        kill: { level: killLevel(), reason: killReason(), isKilled: isKilled(), canEnterNew: canEnterNew() },
+        ram: ramState(),
+      });
+    } catch (e) { jsonError(res, 500, 'exec status failed', e); }
+  });
+
+  app.post('/api/exec/kill', async (req, res) => {
+    try {
+      const { setKill } = await import('../exec/reconciler.js');
+      const level = Math.max(0, Math.min(3, Number((req.body || {}).level) || 0));
+      const reason = String((req.body || {}).reason || 'manual UI button');
+      const r = setKill(level, reason);
+      res.json({ ok: true, ...r });
+    } catch (e) { jsonError(res, 500, 'exec kill failed', e); }
+  });
+
+  app.get('/api/exec/positions', async (_req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      // read the live port from globalThis (set at index.js boot)
+      let port = globalThis.__execPort || null;
+      if (!port) {
+        const { PaperPort } = await import('../exec/port.js');
+        port = new PaperPort({ startingEquityUSDT: 0 });
+      }
+      const positions = await port.getPositions();
+      res.json({ ok: true, positions });
+    } catch (e) { jsonError(res, 500, 'exec positions failed', e); }
+  });
+
+  app.get('/api/exec/equity', async (_req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      let port = globalThis.__execPort || null;
+      if (!port) {
+        const { PaperPort } = await import('../exec/port.js');
+        port = new PaperPort({ startingEquityUSDT: 0 });
+      }
+      const equity = await port.getEquity();
+      res.json({ ok: true, equity });
+    } catch (e) { jsonError(res, 500, 'exec equity failed', e); }
+  });
+
   // ---------------- GLOBAL FUTURES markets view (v6.8) ----------------
   app.get('/api/ai/futures/markets', async (_req, res) => {
     try {

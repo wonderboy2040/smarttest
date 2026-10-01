@@ -2794,13 +2794,68 @@ try { console.log('[selfheal] v19.2 ANTI-FREEZE layer armed - QuickEdit console 
 // ============================================================
 try {
   const { initRamGovernor } = await import('./ai/ramGovernor.js');
+  // v20.6.2 FIX (re-applied after upstream merge revert): the alertSink
+  // was calling `_t.sendTelegramRaw(msg)` on the telegramPush module —
+  // but that export DOESN'T EXIST. Wire up the REAL sender:
+  // sendTelegramMessage(text, env) from ai/secrets.js.
   let _tgPush = null;
-  try { const _t = await import('./ai/telegramPush.js'); _tgPush = (msg) => { try { _t.sendTelegramRaw(msg); } catch {} }; } catch {}
+  try {
+    const { sendTelegramMessage } = await import('./ai/secrets.js');
+    _tgPush = (msg) => { sendTelegramMessage(msg, process.env).catch(() => {}); };
+  } catch { /* telegram not configured — alertSink stays null, governor still works (gates + console only) */ }
   initRamGovernor({ env: process.env, alertSink: _tgPush });
-  console.log('[ram-governor] v20.6 armed — GREEN/YELLOW/RED traffic light for entries + LLM calls (16GB local setup). Telegram CRITICAL alert on RED.');
+  console.log('[ram-governor] v20.6 armed — GREEN/YELLOW/RED traffic light for entries + LLM calls (16GB local setup). Telegram CRITICAL alert on RED (via ai/secrets.js::sendTelegramMessage).');
 } catch (e) {
   console.log(`[ram-governor] arm failed (non-fatal — app continues): ${String(e?.message || e).slice(0, 120)}`);
 }
+
+// ============================================================
+// v20.7 EXECUTION STACK — Phase 2 (Port) + Phase 4 (PositionManager)
+// + Phase 5 (Reconciler + Dead-man + Kill-switch).
+// ------------------------------------------------------------
+// The execution port (api / browser / paper) + position manager
+// (protection-first + exit ladder + tiered reversal) + reconciler
+// (orphan adopt + dead-man + L1/L2/L3 kill-switch + leader lease).
+// All gated behind EXEC_MODE env (default 'paper' — safe).
+// ============================================================
+let _execPort = null;
+let _positionManager = null;
+try {
+  const { resolveExecutionPort } = await import('./exec/port.js');
+  const { PositionManager } = await import('./exec/positionManager.js');
+  const { initReconciler, setKill, killLevel } = await import('./exec/reconciler.js');
+  const { ramCanEnter, ramCanLLM } = await import('./ai/ramGovernor.js');
+  // shared Telegram alert sink (re-uses the secrets.js sender)
+  let _execAlert = null;
+  try {
+    const { sendTelegramMessage } = await import('./ai/secrets.js');
+    _execAlert = (msg) => { sendTelegramMessage(msg, process.env).catch(() => {}); };
+  } catch {}
+  _execPort = await resolveExecutionPort({ env: process.env });
+  _positionManager = new PositionManager({
+    port: _execPort,
+    ramGovernor: { ramCanEnter, ramCanLLM },
+    alertSink: _execAlert,
+  });
+  initReconciler({
+    port: _execPort,
+    positionManager: _positionManager,
+    alertSink: _execAlert,
+    env: process.env,
+  });
+  // v20.7: export the live port + PM so routes can read state without
+  // re-resolving (avoids a second PaperPort instance masking the real one).
+  // The route handlers in ai/routes.js do `import('../../index.js').__execPort`.
+  globalThis.__execPort = _execPort;
+  globalThis.__positionManager = _positionManager;
+  const _mode = _execPort.mode || 'paper';
+  console.log(`[exec-stack] v20.7 armed — EXEC_MODE=${_mode} · PositionManager protection-first + exit ladder · Reconciler 12s cadence + dead-man + kill-switch L1/L2/L3 + leader lease. Telegram CRITICAL alerts via ai/secrets.js.`);
+} catch (e) {
+  console.log(`[exec-stack] arm failed (non-fatal — app continues): ${String(e?.message || e).slice(0, 120)}`);
+}
+// also export via module-level binding for `import('../../index.js').__execPort`
+export const __execPort = null; // populated at boot via globalThis; routes read globalThis.__execPort
+export const __positionManager = null;
 
 // ------------------------------------------------------------
 // v9.1 GRACEFUL SHUTDOWN — the intraday desk's debounced writers
