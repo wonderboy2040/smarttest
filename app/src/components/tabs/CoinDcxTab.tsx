@@ -39,7 +39,11 @@ import { ModelPerformancePanel } from '../aitrading/ModelPerformancePanel';
 import { MeshStatusPanel } from '../aitrading/MeshStatusPanel';
 import { AlertsPanel } from '../aitrading/AlertsPanel';
 import { AgentPanel } from '../aitrading/AgentPanel';
-import { SelfImprovementPanel } from '../aitrading/SelfImprovementPanel';
+// v20.6: SelfImprovementPanel import removed — the user asked to
+// "completely remove" the self-improvement loop and clean up the site.
+// The panel is no longer rendered. The component file remains in the
+// repo so external imports don't crash, but no tab mounts it now.
+// To re-mount: `import { SelfImprovementPanel } from '../aitrading/SelfImprovementPanel';` and add the JSX block back.
 import { ProTraderAutoPanel } from '../aitrading/ProTraderAutoPanel';
 import { MorningBriefPanel, SwingDeskPanel, WhaleRadarPanel, SignalLedgerPanel, OrderbookPanel, TrustLayerPanel, PerfAnalyticsPanel, CorrelationPanel } from '../aitrading/ProPanels';
 // v10.1: the crypto desk conversational AI (mirror of the intraday ProTrader panel)
@@ -429,13 +433,17 @@ export default memo(function CoinDcxTab() {
         </div>
       </div>
 
-      {/* ============ 00d · SELF-IMPROVEMENT ENGINE (v19.0) ============ */}
-      <div id="cx-selfimprove">
-        <SectionLabel num="00d" title="Self-Improvement Engine — Super Intelligence Loop" sub="harvest (settled outcomes) → drift watch (PSI + calibration) → ml-retrain + champion/challenger → gate-tuner proposals → lessons learned (Council debates me inject) → strategy evolution (bounded genetic search) → self-council approvals + rollback — sab SHA-256 evolution ledger me tamper-evident" />
-        <div className="mt-2.5">
-          <SelfImprovementPanel />
-        </div>
-      </div>
+      {/* ============ 00d · SELF-IMPROVEMENT ENGINE — REMOVED v20.6 ============
+          The user explicitly asked to "completely remove" this loop and
+          the panel that surfaces it. The loop's setInterval cadences are
+          ripped out of server/index.js (default SELFIMPROVE_ENABLED=false
+          → no harvest, no drift, no gate-tune, no lessons, no evolution).
+          The /api/ai/self/* routes stay mounted for manual one-shot ops
+          but no UI panel polls them anymore. The SelfImprovementPanel
+          component file is left in place so any external import doesn't
+          crash; it's just not rendered. See app/docs/CHANGES.md v20.6.0
+          for the full rationale and the audit doc for the rebuild plan.
+      ==================================================================== */}
 
       {/* ============ 00c · PRO TRADER AUTO — SAPTA (v18.6) ============ */}
       <div id="cx-proauto">

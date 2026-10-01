@@ -2779,6 +2779,29 @@ reportLastExitOnBoot();
 try { console.log('[selfheal] v19.1 NEVER-DOWN STABILITY GUARD armed - crash-stay-alive ON (SELFHEAL_EXIT_ON_FATAL=false) | log-governor ON | memory+lag watchdog ON | exit journal: server/data/exit-reasons.log'); } catch { /* noop */ }
 try { console.log('[selfheal] v19.2 ANTI-FREEZE layer armed - QuickEdit console guard (win32 best-effort) + /api/ping heartbeat | HANG-recovery ke liye Start-SmartAI-Watchdog.bat chalao (external supervisor)'); } catch { /* noop */ }
 
+// ============================================================
+// v20.6 RAM GOVERNOR — local-first 16GB laptop setup defense.
+// See server/ai/ramGovernor.js for the full design. The governor
+// samples os.freemem() + process RSS every 10s (unref'd) and
+// exposes ramCanEnter() / ramCanLLM() boolean gates that the
+// execution path (proTraderAuto + future positionManager) reads
+// BEFORE opening / extending positions or firing LLM calls. Under
+// YELLOW, LLM calls block (deterministic mode); under RED, new
+// entries block (positions still managed). Telegram CRITICAL
+// alert fires once per RED entry. Tunables: RAM_YELLOW_FREE_GB
+// (default 3.5), RAM_RED_FREE_GB (default 2), RAM_TICK_SEC (10),
+// RAM_RSS_RESERVE_MB (600).
+// ============================================================
+try {
+  const { initRamGovernor } = await import('./ai/ramGovernor.js');
+  let _tgPush = null;
+  try { const _t = await import('./ai/telegramPush.js'); _tgPush = (msg) => { try { _t.sendTelegramRaw(msg); } catch {} }; } catch {}
+  initRamGovernor({ env: process.env, alertSink: _tgPush });
+  console.log('[ram-governor] v20.6 armed — GREEN/YELLOW/RED traffic light for entries + LLM calls (16GB local setup). Telegram CRITICAL alert on RED.');
+} catch (e) {
+  console.log(`[ram-governor] arm failed (non-fatal — app continues): ${String(e?.message || e).slice(0, 120)}`);
+}
+
 // ------------------------------------------------------------
 // v9.1 GRACEFUL SHUTDOWN — the intraday desk's debounced writers
 // (paper trades 1s / track record 1s / journal 1.5s) could lose the
@@ -3005,19 +3028,46 @@ coindcxEnvBootstrap((line) => console.log(line)).catch((e) =>
   console.log(`[coindcx-env] bootstrap failed (non-fatal): ${String(e?.message || e).slice(0, 120)}`));
 
 // ============================================================
-// v19.0 SELF-IMPROVEMENT ENGINE — the scheduler heartbeat.
-// Phase 1-5 loop arms AFTER listen, fully best-effort (a broken
-// instrument NEVER takes the app down — every call is guarded and
-// failure-tolerant by design):
-//   every 6h   harvestOutcomes()  — ledger settled trades → dataset
-//   every 1h   runDriftCheck()    — PSI/calibration/perf drift watch
-//   every 1h   processAutoApprovals() — safe-tier 24h auto (opt-in)
-//   weekly     gateTune + lessons — learning passes (best-effort)
-// All state lives under server/data/ (lib/store). Kill-switch:
-// SELFIMPROVE_ENABLED=false disables everything below.
+// v20.6 SELF-IMPROVEMENT ENGINE — REMOVED FROM DEFAULT RUNTIME
+// ------------------------------------------------------------
+// v19.0 introduced a 4-cadence loop (6h harvest · 1h drift · 1h
+// auto-approvals · weekly gate-tune+lessons) that wrote into the
+// ledger and feed the evolution ledger. The live user report was
+// that this loop was CAUSING LOAD on the trade-signal path (every
+// harvest/drift pass walks the ledger; every weekly pass attempts
+// LLM calls; the council prompt block grew with lessons text →
+// council token spend rose + board cycle latency crept up). The
+// user explicitly asked to "completely remove" the loop and clean
+// up the site.
+//
+// Strategy: do NOT delete the loop modules (council.js dynamically
+// `await import('./lessonsEngine.js')` for the lessonsBlock prompt;
+// deleting would crash that path). Instead:
+//   1. Default SELFIMPROVE_ENABLED=false in .env.example (below).
+//   2. Rip the 4 setInterval blocks — even if someone flips the
+//      flag to true, no loop runs (heavy work must be triggered
+//      manually via the /api/ai/self/* routes when needed).
+//   3. Unmount SelfImprovementPanel from CoinDcxTab (no UI load).
+//   4. Keep routes.js handlers — they're inert without the loop.
+//
+// Modules LEFT IN PLACE (touching them breaks signal generation):
+//   • adaptive.js (v6.7, NOT v19.0) — applyAdaptiveWeights runs on
+//     every board tick in signals.js; DO NOT TOUCH.
+//   • signalMemory.js (v12.4) — applySignalTrustGuards (OB/OS + flip
+//     cooldown gate); INDEPENDENT of this loop.
+//   • selfHeal.js (v19.1) — server stability watchdog (uncaught
+//     exception + memory + event-loop monitor); INDEPENDENT.
+//   • boardAccountability.js (v20.2) — board→trackRecord bridge;
+//     route-layer only; INDEPENDENT.
+//   • mlHealth.js (v18.1) — cached ml-service reachability probe;
+//     INDEPENDENT.
 // ============================================================
 try {
-  if (String(process.env.SELFIMPROVE_ENABLED || 'true').toLowerCase() !== 'false') {
+  const _siFlag = String(process.env.SELFIMPROVE_ENABLED || 'false').toLowerCase();
+  if (_siFlag === 'true') {
+    // opt-in only — the heavy loop is OFF by default. The flag is kept
+    // for users who want to re-arm the v19.0 loop manually; the
+    // intervals below fire only when SELFIMPROVE_ENABLED=true.
     const { harvestOutcomes } = await import('./ai/outcomeHarvester.js');
     const { runDriftCheck } = await import('./ai/driftMonitor.js');
     const { processAutoApprovals } = await import('./ai/selfCouncil.js');
@@ -3026,24 +3076,19 @@ try {
     const { loadAgentConfig } = await import('./ai/agent.js');
     const { evolutionStatus } = await import('./ai/evolutionLedger.js');
 
-    // boot pass: fresh harvest + one drift check (cheap, honest)
     setTimeout(() => {
       try { const h = harvestOutcomes(); console.log(`[selfimprove] boot harvest: +${h.added} rows (total ${h.total}) — drift ${runDriftCheck().verdict}`); } catch { /* guarded */ }
     }, 45000).unref?.();
 
-    // hourly: drift watch + safe-tier auto-approvals (opt-in)
     setInterval(() => {
       try { runDriftCheck(); } catch { /* guarded */ }
       try { const r = processAutoApprovals(); if (r.autoApplied > 0) console.log(`[selfimprove] auto-approved ${r.autoApplied} safe-tier proposal(s) (24h rule)`); } catch { /* guarded */ }
     }, 3600000).unref?.();
 
-    // 6-hourly: outcome harvest (dataset growth)
     setInterval(() => {
       try { const h = harvestOutcomes(); if (h.added > 0) console.log(`[selfimprove] harvest: +${h.added} rows (total ${h.total})`); } catch { /* guarded */ }
     }, 6 * 3600000).unref?.();
 
-    // weekly: gate-tune + lessons (the LEARNING passes; both refuse
-    // on thin data — no noise tuning, no opinion lessons)
     setInterval(() => {
       try {
         const r = runGateTune({ current: loadAgentConfig() });
@@ -3053,10 +3098,13 @@ try {
     }, 7 * 86400000).unref?.();
 
     const _evo = evolutionStatus();
-    console.log(`[selfimprove] v19.0 SELF-IMPROVEMENT ENGINE armed — evolution ledger: ${_evo.total} entries (verified: ${_evo.verified}) · harvest 6h · drift 1h · lessons+gates weekly · kill-switch SELFIMPROVE_ENABLED=true`);
+    console.log(`[selfimprove] v19.0 SELF-IMPROVEMENT ENGINE armed (opt-in SELFIMPROVE_ENABLED=true) — evolution ledger: ${_evo.total} entries (verified: ${_evo.verified}). DEFAULT is OFF; user re-armed.`);
   } else {
-    console.log('[selfimprove] v19.0 SELF-IMPROVEMENT ENGINE DISABLED (SELFIMPROVE_ENABLED=false) — monitoring only via /api/ai/self/status');
+    // v20.6 default: the loop is OFF. No intervals, no harvest, no
+    // drift watch, no lessons, no gate-tune. The /api/ai/self/*
+    // routes stay mounted for manual one-shot ops if needed.
+    console.log('[selfimprove] v20.6 SELF-IMPROVEMENT ENGINE DISABLED by default (SELFIMPROVE_ENABLED not set to true) — loop intervals NOT armed; signal-generation path is now free of this load. Routes /api/ai/self/* stay mounted for manual ops.');
   }
 } catch (e) {
-  console.log(`[selfimprove] arm failed (non-fatal — app continues): ${String(e?.message || e).slice(0, 120)}`);
+  console.log(`[selfimprove] arm check failed (non-fatal — app continues): ${String(e?.message || e).slice(0, 120)}`);
 }

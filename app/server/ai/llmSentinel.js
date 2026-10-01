@@ -34,6 +34,15 @@
 
 const OLLAMA_BASE = (process.env.OLLAMA_BASE || 'http://127.0.0.1:11434').replace(/\/+$/, '');
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
+// v20.6.1: deep-analysis model. Scan uses OLLAMA_MODEL (fast, small — qwen3:8b);
+// deep single-symbol analysis uses OLLAMA_DEEP_MODEL (slower, larger — deepseek-r1:14b).
+// On a 16GB laptop with OLLAMA_MAX_LOADED_MODELS=1, Ollama auto-evicts the scan
+// model and loads the deep model when a deep call lands, then re-loads the scan
+// model when the next scan call lands. Cost: ~30-60s model swap per transition
+// (disk read + CUDA init). The scan path NEVER triggers a swap; only the deep
+// path does. Leave OLLAMA_DEEP_MODEL unset → deep path falls back to OLLAMA_MODEL
+// (same model, no swap, but less reasoning depth).
+const OLLAMA_DEEP_MODEL = process.env.OLLAMA_DEEP_MODEL || '';
 
 /** All engines the sentinel tracks (order = chain preference). */
 export const SENTINEL_PROVIDERS = ['gemini', 'groq', 'cerebras', 'openrouter', 'huggingface', 'nvidia', 'ollama'];
@@ -181,9 +190,23 @@ export async function ollamaProbe(force = false, now = Date.now()) {
   return _state.ollama.checking;
 }
 
-/** OpenAI-compat cfg for the local ollama engine (chain runner arg). */
-export function ollamaCompatCfg() {
-  return { url: `${OLLAMA_BASE}/v1/chat/completions`, defModel: _state.ollama.model || OLLAMA_MODEL };
+/** OpenAI-compat cfg for the local ollama engine (chain runner arg).
+ *  v20.6.1: opts.deep = true → returns the deep-analysis model (if
+ *  OLLAMA_DEEP_MODEL is set, falls back to OLLAMA_MODEL otherwise).
+ *  The scan path always passes opts.deep=false (or nothing) → uses
+ *  OLLAMA_MODEL. The deep path (getDeepSignal → aiCouncilVerify →
+ *  councilAskDeep) passes opts.deep=true → uses OLLAMA_DEEP_MODEL.
+ *  On a 16GB laptop with OLLAMA_MAX_LOADED_MODELS=1, Ollama auto-
+ *  evicts + re-loads on the model swap (cost ~30-60s per transition).
+ */
+export function ollamaCompatCfg(opts = {}) {
+  const defModel = _state.ollama.model || OLLAMA_MODEL;
+  const deepModel = OLLAMA_DEEP_MODEL || defModel;  // graceful fallback
+  return {
+    url: `${OLLAMA_BASE}/v1/chat/completions`,
+    defModel: opts.deep ? deepModel : defModel,
+    deepModel,  // surfaced for /api/ai/engines + tests
+  };
 }
 
 /** View for /api/ai/engines. */

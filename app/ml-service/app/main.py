@@ -629,17 +629,42 @@ except Exception as _hf_err:  # noqa: BLE001
 
 
 # ============================================================
+# v20.6 — HF models DISABLED by default on a local 16GB laptop setup.
+# Chronos-T5 (torch) + FinBERT (torch) compete with Ollama for RAM and
+# push the box into swap → event-loop freezes on the Node server side
+# (the very thing selfHeal flags). On a cloud box with abundant RAM,
+# set HF_MODELS_ENABLED=true to mount them; on a local Ollama-first
+# install, leave them off — the base LightGBM/sklearn ML service does
+# everything the trade-signal path actually reads.
+# ============================================================
+if os.environ.get("HF_MODELS_ENABLED", "false").lower() == "true":
+    try:
+        from app.hf_models import router as _hf_router
+        app.include_router(_hf_router, prefix="/hf")
+        print("[ml-service] hf models router mounted — /hf/status, /hf/forecast, /hf/sentiment")
+    except Exception as _hf_err:  # noqa: BLE001
+        print(f"[ml-service] hf models NOT mounted (non-fatal): {_hf_err}")
+else:
+    print("[ml-service] hf models DISABLED by default (HF_MODELS_ENABLED not 'true') — base LightGBM/sklearn service only. Saves RAM for the local Ollama engine.")
+
+
+# ============================================================
 # v18.4 — EXPERT MODE: local-AI trading superintelligence.
 # 5-pillar ensemble (technical confluence + momentum + Chronos-T5
 # forecast + FinBERT sentiment + risk) with ATR trade plan and
 # background model downloads. Guarded mount, same contract as /hf.
+# v20.6: EXPERT_MODE follows the same gate as HF_MODELS — defaults
+# OFF on local installs (it imports torch + HF models internally).
 # ============================================================
-try:
-    from app.expert_mode import router as _expert_router
-    app.include_router(_expert_router, prefix="/expert")
-    print("ml-service] EXPERT MODE mounted")
-except Exception as _expert_err:  # noqa: BLE001
-    print(f"ml-service] EXPERT MODE NOT mounted (non-fatal): {_expert_err}")
+if os.environ.get("EXPERT_MODE_ENABLED", "false").lower() == "true":
+    try:
+        from app.expert_mode import router as _expert_router
+        app.include_router(_expert_router, prefix="/expert")
+        print("ml-service] EXPERT MODE mounted")
+    except Exception as _expert_err:  # noqa: BLE001
+        print(f"ml-service] EXPERT MODE NOT mounted (non-fatal): {_expert_err}")
+else:
+    print("[ml-service] EXPERT MODE disabled by default (EXPERT_MODE_ENABLED not 'true') — would import torch + HF models; same RAM budget as /hf.")
 
 
 if __name__ == "__main__":

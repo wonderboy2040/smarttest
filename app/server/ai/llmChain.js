@@ -108,6 +108,31 @@ async function askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, provider, opts = {})
 }
 
 /**
+ * v20.6: env-driven chain order + local-only short-circuit.
+ *   LLM_PRIORITY=ollama,groq,gemini,...  → comma-separated provider
+ *     list in desired order. Cloud providers not in this list are
+ *     skipped entirely (no key probe, no fetch).
+ *   LLM_LOCAL_ONLY=1  → cloud providers are SKIPPED EVEN IF listed in
+ *     LLM_PRIORITY; only the local ollama engine is tried. Designed
+ *     for the user's 16GB laptop setup (Chrome + Node + Ollama all
+ *     running locally; cloud calls add latency + cost + bandwidth).
+ *   default LLM_PRIORITY (env unset): 'gemini,groq,cerebras,openrouter,
+ *     huggingface,nvidia,ollama' (the historical order — backward
+ *     compatible). To flip the priority to local-first, set
+ *     LLM_PRIORITY=ollama,groq,gemini,... or just LLM_LOCAL_ONLY=1.
+ */
+function _chainOrder() {
+  const envOrder = String(process.env.LLM_PRIORITY || '').split(',')
+    .map(s => s.trim().toLowerCase()).filter(Boolean);
+  if (envOrder.length) return envOrder;
+  return ['gemini', 'groq', 'cerebras', 'openrouter', 'huggingface', 'nvidia', 'ollama'];
+}
+function _localOnly() {
+  return String(process.env.LLM_LOCAL_ONLY || '').toLowerCase() === '1'
+    || String(process.env.LLM_LOCAL_ONLY || '').toLowerCase() === 'true';
+}
+
+/**
  * One ask through the provider chain. Returns { json, model } or
  * { json: null, model: null } — never throws.
  * v18.7: sentinel-aware — cooled providers are skipped, results are
@@ -115,18 +140,36 @@ async function askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, provider, opts = {})
  * v18.8: the chain ENDS at the keyless local ollama engine — with
  * every cloud engine down/unkeyed, an installed Ollama still answers
  * (long timeout, sentinel-tracked like any other engine).
+ * v20.6: the chain order is now env-driven (LLM_PRIORITY) and the
+ * cloud half can be short-circuited entirely (LLM_LOCAL_ONLY=1).
  */
-export async function councilAsk(prompt, deps) {
+export async function councilAsk(prompt, deps, opts = {}) {
   const { KEYS, OPENAI_COMPAT } = deps || {};
   let json = null, model = null;
-  const attempts = [
-    ['gemini', () => askGemini(prompt, KEYS)],
-    ['groq', () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'groq')],
-    ['cerebras', () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'cerebras')],
-    ['openrouter', () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'openrouter')],
-    ['huggingface', () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'huggingface')],
-    ['nvidia', () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'nvidia')],
-  ];
+
+  // v20.6.1: opts.deep = true → the ollama leg uses OLLAMA_DEEP_MODEL
+  // (deepseek-r1:14b) instead of OLLAMA_MODEL (qwen3:8b). The scan
+  // path always passes opts.deep=false (default); only the deep
+  // single-symbol analysis path (getDeepSignal → councilAskDeep)
+  // passes opts.deep=true. See ollamaCompatCfg({deep:true}).
+  const deep = !!opts.deep;
+
+  // v20.6: build the cloud-half attempts list from env order + skip
+  // cloud entries entirely under LLM_LOCAL_ONLY=1.
+  const localOnly = _localOnly();
+  const order = _chainOrder();
+  const cloudProviderAsk = {
+    gemini: () => askGemini(prompt, KEYS),
+    groq: () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'groq'),
+    cerebras: () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'cerebras'),
+    openrouter: () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'openrouter'),
+    huggingface: () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'huggingface'),
+    nvidia: () => askOpenAICompat(prompt, KEYS, OPENAI_COMPAT, 'nvidia'),
+  };
+  const attempts = localOnly
+    ? []  // skip cloud entirely
+    : order.filter(p => p !== 'ollama').map(p => [p, cloudProviderAsk[p]]).filter(([, fn]) => typeof fn === 'function');
+
   for (const [provider, ask] of attempts) {
     if (json) break;
     if (!KEYS?.[provider]) continue;
@@ -141,14 +184,17 @@ export async function councilAsk(prompt, deps) {
     else { engineTrack(provider, new Error(`${provider} no-json response`)); model = null; }
   }
 
-  // ---- v18.8 KEYLESS LOCAL ENGINE (last in the chain) ----
-  if (!json && !engineSkip('ollama')) {
+  // ---- v18.8 KEYLESS LOCAL ENGINE (last in the chain, or FIRST under LLM_LOCAL_ONLY=1) ----
+  // v20.6: 'ollama' is now part of the LLM_PRIORITY list (defaults to
+  // last); under LLM_LOCAL_ONLY=1 it's the ONLY engine tried.
+  const tryOllama = !json && !engineSkip('ollama') && order.includes('ollama');
+  if (tryOllama) {
     const reachable = await ollamaProbe().catch(() => false);
     if (reachable) {
       let threw = false;
       try {
         json = await askOpenAICompat(prompt, { ...(KEYS || {}), ollama: 'local' }, OPENAI_COMPAT, 'ollama', {
-          cfgOverride: ollamaCompatCfg(),
+          cfgOverride: ollamaCompatCfg({ deep }),
           timeoutMs: OLLAMA_TIMEOUT_MS,
         });
       } catch (e) {
@@ -162,4 +208,22 @@ export async function councilAsk(prompt, deps) {
   return { json, model };
 }
 
-export const __testables = { tryParseJson };
+/**
+ * v20.6.1: deep-analysis variant of councilAsk. Identical to councilAsk
+ * EXCEPT it uses OLLAMA_DEEP_MODEL (e.g. deepseek-r1:14b) instead of
+ * OLLAMA_MODEL (e.g. qwen3:8b) for the local-engine leg. Designed for
+ * the user's 16GB laptop setup:
+ *   • scan path (signals.js board compute) → councilAsk → qwen3:8b
+ *   • deep single-symbol analysis (getDeepSignal → /api/ai/deep/:sym)
+ *     → councilAskDeep → deepseek-r1:14b (auto-swap on Ollama's side
+ *     when OLLAMA_MAX_LOADED_MODELS=1; cost ~30-60s per transition).
+ *
+ * Cloud providers are tried FIRST (same chain as councilAsk) when
+ * LLM_LOCAL_ONLY is unset. The deep-model swap only applies to the
+ * local Ollama leg. The scan path NEVER triggers a swap → no perf hit.
+ */
+export async function councilAskDeep(prompt, deps) {
+  return councilAsk(prompt, deps, { deep: true });
+}
+
+export const __testables = { tryParseJson, _chainOrder, _localOnly };

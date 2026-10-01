@@ -1,5 +1,197 @@
 # Changelog
 
+## v20.6.1 — OLLAMA_DEEP_MODEL support (qwen3:8b scan + deepseek-r1:14b deep, 16GB auto-swap) (2026-10-01)
+
+User asked: "16GB RAM me ek time par ek hi model chalao. qwen3:8b scan ke liye, deepseek-r1:14b sirf 1-2 symbols ke deep analysis ke liye aisa kar sakte kya aur ml-service HF models enabled karke sath me use nhi kar sakte kya batao". This pass implements `OLLAMA_DEEP_MODEL` so the scan path uses the fast scan model (`qwen3:8b`) and the deep single-symbol analysis path (`/api/ai/deep/:sym` → `getDeepSignal` → `aiCouncilVerify({deep:true})` → `councilAskDeep` → `ollamaCompatCfg({deep:true})` → `OLLAMA_DEEP_MODEL`) uses the deep model (`deepseek-r1:14b`). On a 16GB laptop with `OLLAMA_MAX_LOADED_MODELS=1`, Ollama auto-evicts the scan model and loads the deep model when a deep call lands (cost ~30-60s per swap). **2776 tests / 157 files 100% green · tsc clean · vite build OK · 5 new deep-model tests.**
+
+### Q1 — Ek time par ek hi model? YES (recommended)
+
+**The right strategy for 16GB:**
+- **OLLAMA_MODEL=qwen3:8b** — scan path (5.5-6.5 GB). Board compute runs every 30s now (v20.5 latency cut); council call rides this small model → fast JSON.
+- **OLLAMA_DEEP_MODEL=deepseek-r1:14b** — deep path (9-10 GB). User clicks "Deep" on one symbol → council auto-swaps to the larger model for that one call, then swaps back to scan model on the next board cycle.
+- **OLLAMA_MAX_LOADED_MODELS=1** in Ollama service env (Windows) — only one model in KV cache at a time. Ollama auto-evicts + re-loads on the swap; SmartAI's code paths are model-agnostic — they just request the model they want.
+- **OLLAMA_KEEP_ALIVE=10m** — keep the hot model loaded for 10 min after the last request (so scanning bursts don't thrash the model in/out repeatedly).
+- **OLLAMA_NUM_PARALLEL=1** — no concurrent Ollama requests (the box can't handle parallel inference on two models simultaneously).
+- **OLLAMA_FLASH_ATTENTION=1** — faster attention (a bit more RAM, worth it).
+
+**RAM budget with this setup:**
+| Component | ~RAM |
+|---|---|
+| Windows + background | 3.5–4.5 GB |
+| Chrome automation profile (3 tabs) | 1.5–3 GB |
+| Node server (SmartAI) | 0.4–1 GB |
+| ml-service base (Python, HF OFF) | 0.5–1 GB |
+| Ollama qwen3:8b (scan, loaded most of the time) | 5.5–6.5 GB |
+| **Total (scan mode)** | **~11–16 GB → workable, tight** |
+| Ollama deepseek-r1:14b (deep call, auto-swap) | 9–10 GB |
+| **Total (deep mode, swap)** | **~15–19 GB → tight, but only for ~30-60s** |
+
+The RAM governor (`v20.6` module `server/ai/ramGovernor.js`) will catch the deep-mode transient — if free drops under 2GB during the 14B inference, RED state blocks new auto entries (positions still managed) + Telegram CRITICAL alert. The scan path resumes automatically once the 14B model is evicted.
+
+### Q2 — ml-service HF models + Ollama simultaneously? NO (on 16GB)
+
+**The honest answer:** No, do NOT enable `HF_MODELS_ENABLED=true` alongside Ollama on a 16GB laptop. The math:
+- Chronos-T5 (torch) + FinBERT (torch) = ~2-3 GB additional RAM after load + ~1 GB torch runtime overhead
+- Combined with qwen3:8b (6GB) + Windows (4GB) + Chrome (2GB) + Node (0.7GB) + Python (0.7GB) = **~14-16 GB → INSTANT SWAP**
+
+**What you CAN do (the "alternating phase" pattern):**
+1. **Default state:** `HF_MODELS_ENABLED=false` (v20.6 default) — Ollama runs alone. This is what you want for live auto-trading.
+2. **Scheduled batch (weekly/daily):** Stop the SmartAI server (or set `LLM_LOCAL_ONLY=0` + `LLM_PRIORITY=` empty + stop Ollama service) → set `HF_MODELS_ENABLED=true` → restart ml-service → run the retraining batch (`/hf/forecast` for Chronos, `/hf/sentiment` for FinBERT) → stop ml-service → flip back.
+
+This is exactly what the audit doc (`app/docs/audit.md` §4 Phase 7 calibration) describes — HF models are most useful for: (1) retraining the LightGBM signal model with HF embeddings, (2) FinBERT sentiment on news, (3) Chronos-T5 forecasts. None of these need to run continuously — they're batch jobs, ideally overnight or when the laptop isn't actively auto-trading.
+
+### Implementation: OLLAMA_DEEP_MODEL dual-model flow
+
+**Code changes:**
+- `server/ai/llmSentinel.js:35-45` — new env `OLLAMA_DEEP_MODEL` (default unset, falls back to `OLLAMA_MODEL`). `ollamaCompatCfg({deep:true})` now returns `{ url, defModel: OLLAMA_DEEP_MODEL, deepModel }` when `deep=true`.
+- `server/ai/llmChain.js:146-220` — `councilAsk(prompt, deps, opts={})` now accepts `opts.deep=true`; the ollama leg passes `{deep}` to `ollamaCompatCfg()`. New exported `councilAskDeep(prompt, deps)` is a thin wrapper: `councilAsk(prompt, deps, {deep:true})`.
+- `server/ai/signals.js:81` — import `councilAskDeep` from `llmChain.js`.
+- `server/ai/signals.js:788` — `aiCouncilVerify(candidates, deps, market, opts={})` now accepts `opts.deep=true`; if true, calls `councilAskDeep(prompt, deps)` instead of `councilAsk(prompt, deps)`.
+- `server/ai/signals.js:2504` — `getDeepSignal` now passes `{deep: true}` to `aiCouncilVerify`. The board path (`aiCouncilVerify` call at signals.js:1599) does NOT pass `opts.deep` → scan model is always used there.
+- `.env.example:497-505` — `OLLAMA_DEEP_MODEL` documented with the worked example + RAM-budget table.
+
+**Test:** `test/llmChainDeepModel.test.ts` (5 tests) locks:
+1. `councilAskDeep` is exported.
+2. Scan path (councilAsk with `LLM_LOCAL_ONLY=1`) uses `qwen3:8b` (the scan model).
+3. Deep path (councilAskDeep) uses `deepseek-r1:14b` (the deep model).
+4. Scan path uses scan model even after a deep path ran (no cross-contamination).
+5. `councilAskDeep` is a thin wrapper around `councilAsk(opts.deep=true)`.
+
+### Verification
+- `npm run typecheck` → clean.
+- `npm test` → **2776 tests / 157 files, all passing** (+5 new deep-model tests in `llmChainDeepModel.test.ts`).
+- `npm run build` → clean.
+
+### Recommended `.env` (16GB laptop setup)
+```env
+# Local-only LLM (skip all cloud providers)
+LLM_LOCAL_ONLY=1
+LLM_PRIORITY=ollama
+# Scan model (5.5-6.5GB, fast JSON)
+OLLAMA_MODEL=qwen3:8b
+# Deep model (9-10GB, deepseek-r1:14b — auto-swap, ~30-60s)
+OLLAMA_DEEP_MODEL=deepseek-r1:14b
+# RAM governor (catches deep-mode transient)
+RAM_YELLOW_FREE_GB=3.5
+RAM_RED_FREE_GB=2
+# Self-improvement loop DISABLED by default
+# SELFIMPROVE_ENABLED=false  (default off — leave unset)
+# HF models DISABLED by default (do NOT enable alongside Ollama on 16GB)
+# HF_MODELS_ENABLED=false  (default off)
+```
+
+Windows Ollama service env (NOT `.env` — set in the Ollama service config):
+```
+OLLAMA_MAX_LOADED_MODELS=1
+OLLAMA_NUM_PARALLEL=1
+OLLAMA_KEEP_ALIVE=10m
+OLLAMA_FLASH_ATTENTION=1
+```
+
+## v20.6.0 — SELF-IMPROVEMENT LOOP REMOVED + LOCAL-FIRST LLM + RAM GOVERNOR + SIZING ENGINE + BROWSER HARDENING (2026-10-01)
+
+User shared a comprehensive 9-phase auto-trading reimplementation plan (local Ollama · wallet-sized 5–10x · browser-driven) for a 16GB RAM laptop setup, and explicitly asked to **completely remove the Self-Improvement Engine — Super Intelligence Loop** because it was "load-causing and affecting trade signals", and **clean up the site**. This pass implements the explicit asks + the most impactful Phase 1/3/6 items from the plan; the remaining Phases (2/4/5/7/8/9) are documented in the new `app/docs/audit.md` as deferred work. **2771 tests / 156 files 100% green · tsc clean · vite build OK · 3 new test files (32 new tests).**
+
+### Critical: Self-Improvement Engine / Super Intelligence Loop — REMOVED FROM DEFAULT RUNTIME
+
+**Strategy (do NOT delete loop modules — `council.js` dynamically `await import('./lessonsEngine.js')` for the lessonsBlock prompt; deleting would crash that path):**
+
+1. **Default `SELFIMPROVE_ENABLED=false`** in `.env.example` (was `=true`). The loop never arms on a fresh install.
+2. **Loop intervals gated behind the flag** in `server/index.js:3007-3087` — even if someone flips the flag to `true`, the heavy loop is opt-in; the default log line announces "DISABLED by default — signal-generation path is now free of this load".
+3. **SelfImprovementPanel unmounted from `CoinDcxTab.tsx`** (line 432) and its import removed — no UI load, no 60s polling of `/api/ai/self/status` + `/api/ai/self/proposals`. The panel file stays in place so external imports don't crash.
+4. **The 14 `/api/ai/self/*` routes stay mounted** in `routes.js:1670-1736` — they're inert without the loop, available for manual one-shot ops.
+5. **Modules LEFT IN PLACE** (touching them breaks signal generation):
+   - `adaptive.js` (v6.7, NOT v19.0) — `applyAdaptiveWeights` runs every board tick in `signals.js`; DO NOT TOUCH.
+   - `signalMemory.js` (v12.4) — `applySignalTrustGuards` is the per-signal OB/OS + flip-cooldown gate; INDEPENDENT of the loop.
+   - `selfHeal.js` (v19.1) — server stability watchdog; INDEPENDENT.
+   - `boardAccountability.js` (v20.2) — board→trackRecord bridge; INDEPENDENT.
+   - `mlHealth.js` (v18.1) — cached ml-service reachability probe; INDEPENDENT.
+
+**Effect:** the trade-signal path is now free of the self-improvement load (no harvest pass walking the ledger; no drift probe computing PSI/calibration; no weekly LLM-driven lessons call inflating the council prompt's token budget; no evolution ledger writes). The CoinDcxTab production bundle shrank from 130.54 kB → 114.20 kB (the SelfImprovementPanel + its 60s polling hooks gone).
+
+### Phase 1a — Local-first LLM (`llmChain.js`)
+
+- New env `LLM_PRIORITY` (comma-separated provider list; providers NOT in the list are skipped entirely — no fetch, no key probe). Default (env unset) = historical order `gemini→groq→cerebras→openrouter→huggingface→nvidia→ollama` (backward-compatible).
+- New env `LLM_LOCAL_ONLY=1` — short-circuit ALL cloud providers and try ONLY the local Ollama engine. Designed for the 16GB laptop setup (Chrome + Node + Ollama all running locally; cloud calls add latency + cost + bandwidth).
+- New env `OLLAMA_MODEL=qwen3:8b` recommended (faster + better JSON than the repo's historical `llama3.1:8b`); the auto-trading plan's "thinking" output strip (`<think>…</think>`) is handled by the existing `tryParseJson` regex.
+- Tests: `test/llmChainEnv.test.ts` (7 tests) locks the env-driven order + local-only short-circuit.
+
+### Phase 1b — RAM Governor (`server/ai/ramGovernor.js`, NEW module)
+
+- Three-state traffic light: GREEN (>3.5GB free) / YELLOW (2–3.5GB) / RED (<2GB).
+- `ramCanEnter()` returns `state !== 'RED'` (RED blocks new entries; positions still managed).
+- `ramCanLLM()` returns `state === 'GREEN'` (YELLOW blocks LLM calls → deterministic mode; HF models unload).
+- RSS-floor guard: if process RSS alone exceeds `TOTAL_PHYSICAL - RAM_RSS_RESERVE_MB` (default 600MB), force YELLOW even if "free" reads high (the degenerate swap scenario right before a full lockup).
+- Telegram CRITICAL alert on every fresh RED entry (state change). Tunables: `RAM_YELLOW_FREE_GB` (3.5), `RAM_RED_FREE_GB` (2.0), `RAM_TICK_SEC` (10), `RAM_RSS_RESERVE_MB` (600).
+- Wired into `server/index.js` boot (after `initSelfHeal`).
+- Tests: `test/ramGovernor.test.ts` (9 tests) locks state transitions + alert behavior + RSS-floor + custom tunables.
+
+### Phase 1c — ml-service HF models disabled by default (`ml-service/app/main.py`)
+
+- `hf_models` (Chronos-T5 torch + FinBERT torch) mount is now gated behind `HF_MODELS_ENABLED=true` (default false).
+- `expert_mode` mount similarly gated behind `EXPERT_MODE_ENABLED=true` (default false) — it imports torch + HF models internally.
+- Default install gets only the base LightGBM/sklearn ML service — saves RAM for the local Ollama engine.
+
+### Phase 3 — Sizing engine (`server/exec/sizing.js`, NEW module + tests)
+
+- Pure-functional `computeSizing({ equity, freeUSDT, entry, stopLoss, riskPct, tierLeverage, instrument, ... })`.
+- Core invariants (locked by `test/sizing.test.ts`, 16 tests):
+  1. `qty × slDistPct × entry ≤ riskUSDT × 1.001` (risk cap held with rounding slack)
+  2. `liqDistancePct(lev) ≥ 2.5 × slDistPct × 100` (SL inside liquidation distance — both sides in percent)
+  3. `margin ≤ freeUSDT × 0.9` (cash headroom)
+  4. `leverage = clamp(tierCap, 5, 10) ∧ ≤ maxSaneLeverage ∧ ≤ instrument.maxLeverage`
+- Worked example locked: 1000 USDT · 1% risk · 1.5% SL → notional ≈ 667, 5x → margin ≈ 133, max loss ≈ 10.
+- Leverage lesson locked: 10x gives SAME MAX LOSS as 5x (smaller margin, more free cash — leverage doesn't change risk).
+- SKIP verdicts: `SKIP_LOW_EQUITY`, `SKIP_MIN_QTY`, `SKIP_MARGIN_CAP`, `SKIP_LIQ_TOO_CLOSE`, `SKIP_BAD_INPUT`.
+- Account-level brakes (env keys documented in `.env.example`, applied in a future Phase 3b wiring pass): `DAILY_LOSS_LIMIT_PCT=3`, `WEEKLY_DD_HALF_SIZE_PCT=8`, `MAX_CONCURRENT=3`, `LOSS_STREAK_PAUSE=3`.
+- The `maxSaneLeverage` formula: `lev ≤ 0.95 / (2.5 × slDistPct) = 0.38 / slDistPct` — e.g. 1% SL → 38 (clamped to 10), 5% SL → 7, 8% SL → 4 (below levMin 5 → SKIP_LIQ_TOO_CLOSE).
+
+### Phase 6 — Browser hardening (`Start-AutoBrowser.bat`)
+
+Added 7 Chrome flags:
+- `--disable-background-timer-throttling` — minimized/background tab `setInterval`/`setTimeout` slow nahi hota; signal-reaction latency (PROTRADER_TICK_SEC=30) minimized.
+- `--disable-renderer-backgrounding` — background tab compositor pause nahi hota; page repaint fresh.
+- `--disable-backgrounding-occluded-windows` — covered-by-other-window Chrome tab throttle nahi hota.
+- `--disable-features=CalculateNativeWinOcclusion` — same, for newer Chrome (post-126).
+- `--disable-hang-monitor` — "Page unresponsive" prompt suppressed.
+- `--disable-popup-blocking` — automation alerts block na ho.
+- `--disable-component-update` — silent extension updates restart nahi kar sakte.
+
+Power-plan guidance in `.bat` comments: Sleep OFF, Hibernate OFF, "Plugged in" only.
+
+### Phase 0 — Audit doc (`app/docs/audit.md`, NEW)
+
+Comprehensive 8-section audit:
+- §0 What was read (and what wasn't)
+- §1 Existing asset map (10 areas with file:line references)
+- §2 Real GAPS (G1-G10, code-level confirmed)
+- §3 v20.6 fixes shipped (this changelog entry in expanded form)
+- §4 Deferred work (Phases 2/4/5/7/8/9 with effort estimates)
+- §5 Definition of Done (v1) — 7 criteria
+- §6 Verification of v20.6 fixes (typecheck + tests + build)
+- §7 Risks (10 rows with mitigations)
+- §8 First-week checklist (post-deploy verification)
+
+### `.env.example` updates (lines 480-557)
+
+All new env keys documented with comments:
+- LLM: `LLM_PRIORITY`, `LLM_LOCAL_ONLY`, `OLLAMA_MODEL`, `OLLAMA_BASE` + Windows Ollama service env notes
+- RAM: `RAM_YELLOW_FREE_GB`, `RAM_RED_FREE_GB`, `RAM_TICK_SEC`, `RAM_RSS_RESERVE_MB`
+- ml-service: `HF_MODELS_ENABLED`, `EXPERT_MODE_ENABLED`
+- Execution port: `EXEC_MODE`, `SMARTAI_EXEC_NODE`
+- Sizing: `SIZE_RISK_PCT`, `SIZE_RISK_PCT_MAX`, `SIZE_MAX_MARGIN_USE_PCT`, `LEV_DEFAULT`, `LEV_MIN`, `LEV_MAX`, `LEV_MIN_LIQ_TO_SL_RATIO`
+- Account brakes: `DAILY_LOSS_LIMIT_PCT`, `WEEKLY_DD_HALF_SIZE_PCT`, `MAX_CONCURRENT`, `LOSS_STREAK_PAUSE`
+- Exit ladder: `EXIT_T1_R`, `EXIT_T1_PCT`, `EXIT_T2_R`, `EXIT_T2_PCT`, `TRAIL_ATR_MULT`, `GIVEBACK_ARM_R`, `GIVEBACK_PCT`, `ENTRY_LIMIT_TTL_SEC`
+- Reversal: `REV_CANDLE_TF`, `REV_CLASSES_REDUCE`, `REV_CLASSES_CLOSE`
+- LLM role: `LLM_ROLE=veto`
+
+### Verification
+- `npm run typecheck` → clean.
+- `npm test` → **2771 tests / 156 files, all passing** (+3 new test files, +32 new tests: `sizing.test.ts` 16, `ramGovernor.test.ts` 9, `llmChainEnv.test.ts` 7).
+- `npm run build` → clean (Vite production bundle, 2249 modules; CoinDcxTab chunk shrank 130.54→114.20 kB after SelfImprovementPanel removal).
+- `python3 -c "import ast; ast.parse(open('ml-service/app/main.py').read())"` → OK.
+- `node --check` on every touched file → OK.
+
 ## v20.5.1 — SELFHEAL EVENT-LOOP FREEZE FALSE-POSITIVE FIX + COINDCX FUTURES WALLET MOZILLA UA + LADDER ESCAPE-HATCH (2026-10-01)
 
 User reported console flooded with impossible values (`worst lag 180224.0s in the last 30s`, `306446.3s`, etc.) and CoinDCX futures USDT wallet STILL not reading despite the v20.5.0 UA fix. Both fixed; **2739 tests / 153 files 100% green · tsc clean · vite build OK · new selfheal ns→ms regression lock added**.

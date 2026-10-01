@@ -78,7 +78,7 @@ import { llmValidateSignal, llmValidateCached, llmValidatorEnabled, inBorderline
 // ONE shared provider chain (sentinel + 6 cloud engines + local ollama).
 // ollamaProbe comes from llmSentinel directly so llmChain test mocks
 // (councilAsk/aiKeysPresent only) keep working untouched.
-import { councilAsk, aiKeysPresent } from './llmChain.js';
+import { councilAsk, councilAskDeep, aiKeysPresent } from './llmChain.js';
 import { ollamaProbe } from './llmSentinel.js';
 
 // v9: how many coins the Superintelligence Signal Board scans for the
@@ -785,7 +785,7 @@ Respond STRICT JSON only (no markdown):
  * failing degrades to this legacy single-shot path — never offline
  * just because the debate chain hiccuped.
  */
-export async function aiCouncilVerify(candidates, deps, market) {
+export async function aiCouncilVerify(candidates, deps, market, opts = {}) {
   // v18.8: cloud keys OR a reachable local ollama — the council goes
   // online for a zero-cloud-key local install too (the "AI language
   // engines offline" message dies with an Ollama on the machine).
@@ -819,7 +819,11 @@ Respond STRICT JSON only (no markdown):
 
   // v18.8: the ONE shared chain — sentinel health-aware, HF/NVIDIA
   // capable, ends at the keyless local ollama engine (90s local budget).
-  const asked = await councilAsk(prompt, deps);
+  // v20.6.1: opts.deep = true → the deep path (getDeepSignal) uses
+  // OLLAMA_DEEP_MODEL (deepseek-r1:14b) instead of OLLAMA_MODEL
+  // (qwen3:8b) for the local-engine leg. The board path always passes
+  // opts.deep=false (default) — the scan model is never swapped.
+  const asked = opts.deep ? await councilAskDeep(prompt, deps) : await councilAsk(prompt, deps);
   const verdicts = asked.json;
   const model = asked.model;
 
@@ -2493,6 +2497,10 @@ export async function getDeepSignal(symbol, market, deps, opts = {}) {
   // being asked to verify — 'PENDING'/conf 0 starved the prompt.
   // v10.5: MTF agreement caps STRONG here too when the tape read conflicts.
   const preConsensus = aggregateVotes(votes, gatesFor(deps), _deepMtfAgreement != null ? { mtfAgreement: _deepMtfAgreement } : {});
+  // v20.6.1: deep path → aiCouncilVerify gets opts.deep=true → council
+  // uses OLLAMA_DEEP_MODEL (deepseek-r1:14b) instead of OLLAMA_MODEL
+  // (qwen3:8b). On 16GB with OLLAMA_MAX_LOADED_MODELS=1, Ollama auto-
+  // swaps (cost ~30-60s). Scan path (board) never triggers this.
   const council = await aiCouncilVerify([{
     symbol: sym,
     side: preConsensus.side,
@@ -2502,7 +2510,7 @@ export async function getDeepSignal(symbol, market, deps, opts = {}) {
     ind: ctx.ind,
     plan: buildTradePlan(preConsensus, ctx, mkt, { maxRiskPct: riskCapFor(deps) }),
     votes,
-  }], deps, mkt).catch(() => ({ verdicts: {}, online: false }));
+  }], deps, mkt, { deep: true }).catch(() => ({ verdicts: {}, online: false }));
   const verdict = council?.verdicts?.[sym];
   if (verdict) {
     const av = aiCouncilVoteFromVerdict(verdict);
