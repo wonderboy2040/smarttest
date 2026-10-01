@@ -120,17 +120,24 @@ describe('v20.7 reconciler — leader lease', () => {
   it('isLeader() = false when SMARTAI_EXEC_NODE mismatch → canEnterNew=false', () => {
     const port = new PaperPort({ startingEquityUSDT: 1000 });
     initReconciler({ port, env: { SMARTAI_EXEC_NODE: 'render' }, heartbeatFile: HEARTBEAT, killFlagFile: KILL_FLAG });
-    // The leader node is set from env at init time; if the local env says
-    // 'render' but the SMARTAI_EXEC_NODE was 'laptop', isLeader would be true.
-    // For this test, simulate by setting the env to a different node than
-    // what the reconciler was initialized with.
-    // In practice: the env IS the local node name. If you set
-    // SMARTAI_EXEC_NODE=laptop, you ARE the laptop. So isLeader() is
-    // always true if you set the env. The leader lease is about MATCHING
-    // the env to the configured execution node — which is always true
-    // locally. The check is more relevant in a distributed setup where
-    // multiple nodes query each other's heartbeat.
+    // Leader = SMARTAI_EXEC_LEADER (default 'laptop'); this node = 'render' → NOT leader.
+    expect(isLeader()).toBe(false);
+    expect(leaderNode()).toBe('laptop');
+    expect(canEnterNew()).toBe(false);
+  });
+
+  it('isLeader() = true when SMARTAI_EXEC_NODE matches an explicit SMARTAI_EXEC_LEADER', () => {
+    const port = new PaperPort({ startingEquityUSDT: 1000 });
+    initReconciler({ port, env: { SMARTAI_EXEC_NODE: 'render', SMARTAI_EXEC_LEADER: 'render' }, heartbeatFile: HEARTBEAT, killFlagFile: KILL_FLAG });
     expect(isLeader()).toBe(true);
+    expect(leaderNode()).toBe('render');
+  });
+
+  it('isLeader() = true when SMARTAI_EXEC_NODE is unset (single-node setup)', () => {
+    const port = new PaperPort({ startingEquityUSDT: 1000 });
+    initReconciler({ port, env: {}, heartbeatFile: HEARTBEAT, killFlagFile: KILL_FLAG });
+    expect(isLeader()).toBe(true);
+    expect(canEnterNew()).toBe(true);
   });
 });
 

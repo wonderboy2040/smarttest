@@ -3101,9 +3101,9 @@ coindcxEnvBootstrap((line) => console.log(line)).catch((e) =>
 //   1. Default SELFIMPROVE_ENABLED=false in .env.example (below).
 //   2. Rip the 4 setInterval blocks — even if someone flips the
 //      flag to true, no loop runs (heavy work must be triggered
-//      manually via the /api/ai/self/* routes when needed).
+//      manually — the /api/ai/self/* routes were removed in v20.6.3).
 //   3. Unmount SelfImprovementPanel from CoinDcxTab (no UI load).
-//   4. Keep routes.js handlers — they're inert without the loop.
+//   4. (v20.6.3) routes.js handlers + SelfImprovementPanel.tsx were then REMOVED.
 //
 // Modules LEFT IN PLACE (touching them breaks signal generation):
 //   • adaptive.js (v6.7, NOT v19.0) — applyAdaptiveWeights runs on
@@ -3156,9 +3156,9 @@ try {
     console.log(`[selfimprove] v19.0 SELF-IMPROVEMENT ENGINE armed (opt-in SELFIMPROVE_ENABLED=true) — evolution ledger: ${_evo.total} entries (verified: ${_evo.verified}). DEFAULT is OFF; user re-armed.`);
   } else {
     // v20.6 default: the loop is OFF. No intervals, no harvest, no
-    // drift watch, no lessons, no gate-tune. The /api/ai/self/*
-    // routes stay mounted for manual one-shot ops if needed.
-    console.log('[selfimprove] v20.6 SELF-IMPROVEMENT ENGINE DISABLED by default (SELFIMPROVE_ENABLED not set to true) — loop intervals NOT armed; signal-generation path is now free of this load. Routes /api/ai/self/* stay mounted for manual ops.');
+    // drift watch, no lessons, no gate-tune. (The /api/ai/self/*
+    // routes were removed in v20.6.3.)
+    console.log('[selfimprove] v20.6 SELF-IMPROVEMENT ENGINE DISABLED by default (SELFIMPROVE_ENABLED not set to true) — loop intervals NOT armed; signal-generation path is now free of this load. The /api/ai/self/* routes were removed in v20.6.3.');
   }
 } catch (e) {
   console.log(`[selfimprove] arm check failed (non-fatal — app continues): ${String(e?.message || e).slice(0, 120)}`);

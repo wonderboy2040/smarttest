@@ -39,6 +39,9 @@ import { ratchetSl } from '../ai/coindcxOrders.js';
 import { computeSizing, liqDistancePct } from './sizing.js';
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
+// Quantities use the instrument qty step (0.0001) — NEVER r2 (2 decimals would
+// round a small BTC/ETH reduce-qty down to 0 and silently skip the exit).
+const qtyR = (v) => (Number.isFinite(v) ? Math.floor(v * 10000 + 1e-9) / 10000 : 0);
 
 const DEFAULTS = Object.freeze({
   // exit ladder (audit doc §4b — config-driven, defaults from the plan)
@@ -207,7 +210,7 @@ export class PositionManager {
 
       // ---- T1 hit (≈1R) ----
       if (st.stage === 'ENTRY' && this._hitT1(st, mark)) {
-        const reduceQty = r2(st.qty * (this._cfg.exitT1Pct / 100));
+        const reduceQty = qtyR(st.qty * (this._cfg.exitT1Pct / 100));
         await this._port.reduce({ positionId: p.id, qty: reduceQty });
         // SL → breakeven + fees (rough: breakeven = entry; fees ~0.05%)
         const be = st.side === 'LONG' ? st.entry * 1.0005 : st.entry * 0.9995;
@@ -218,7 +221,7 @@ export class PositionManager {
       }
       // ---- T2 hit (≈2R) ----
       else if (st.stage === 'T1_HIT' && this._hitT2(st, mark)) {
-        const reduceQty = r2(st.qty * (this._cfg.exitT2Pct / 100));
+        const reduceQty = qtyR(st.qty * (this._cfg.exitT2Pct / 100));
         await this._port.reduce({ positionId: p.id, qty: reduceQty });
         // SL → T1 level
         const t1Level = st.side === 'LONG' ? this._rLevel(st, 1) : this._rLevel(st, 1);
@@ -277,7 +280,8 @@ export class PositionManager {
         actions.push({ id: p.id, kind: 'reversal-close', classes: n });
         this._state.delete(p.id);
       } else if (n >= this._cfg.revClassesReduce) {
-        const reduceQty = r2(st.qty * 0.5);
+        // 50% of what is STILL open (T1/T2 may already have trimmed the position)
+        const reduceQty = qtyR((Number(p.qty) > 0 ? Number(p.qty) : st.qty) * 0.5);
         await this._port.reduce({ positionId: p.id, qty: reduceQty });
         actions.push({ id: p.id, kind: 'reversal-reduce', classes: n, reduceQty });
       } else if (n >= 1) {

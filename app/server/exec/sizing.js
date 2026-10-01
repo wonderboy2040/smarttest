@@ -145,13 +145,14 @@ export function computeSizing(p) {
     const cappedQty = cappedNotional / entry;
     const cappedRisk = cappedQty * Math.abs(entry - stopLoss);
     if (cappedRisk < riskUSDT * 0.1) return _skip('SKIP_MARGIN_CAP', `margin ${r2(margin)} > cap ${r2(marginCap)} (free ${r2(freeUSDT)})`);
+    if (!_minQtyOK(_roundQty(cappedQty, p.instrument), p.instrument)) return _skip('SKIP_MIN_QTY', `capped qty ${_roundQty(cappedQty, p.instrument)} < minQty ${p.instrument?.minQty ?? '—'}`);
     // accept the capped version — risk is now smaller than asked; that's fine
     return _ok({
       equity, entry, stopLoss, riskPct, slDistPct, riskUSDT: cappedRisk,
       notional: cappedNotional, margin: marginCap, leverage,
       qty: _roundQty(cappedQty, p.instrument),
       guards: {
-        marginOK: true, marginCapUsed: true, liqGuard: liqDistancePct(leverage) >= liqToSlRatio * slDistPct,
+        marginOK: true, marginCapUsed: true, liqGuard: liqDistancePct(leverage) >= liqToSlRatio * slDistPct * 100,
         minQtyOK: _minQtyOK(_roundQty(cappedQty, p.instrument), p.instrument),
         cappedReason: `margin capped to free×0.9 (${r2(marginCap)}); risk reduced to ${r2(cappedRisk)}`,
       },
@@ -169,12 +170,13 @@ export function computeSizing(p) {
     const reducedNotional = headroom * leverage;
     const reducedQty = reducedNotional / entry;
     const reducedRisk = reducedQty * Math.abs(entry - stopLoss);
+    if (!_minQtyOK(_roundQty(reducedQty, p.instrument), p.instrument)) return _skip('SKIP_MIN_QTY', `reduced qty ${_roundQty(reducedQty, p.instrument)} < minQty ${p.instrument?.minQty ?? '—'}`);
     return _ok({
       equity, entry, stopLoss, riskPct, slDistPct, riskUSDT: reducedRisk,
       notional: reducedNotional, margin: headroom, leverage,
       qty: _roundQty(reducedQty, p.instrument),
       guards: {
-        marginOK: true, marginCapUsed: false, liqGuard: liqDistancePct(leverage) >= liqToSlRatio * slDistPct,
+        marginOK: true, marginCapUsed: false, liqGuard: liqDistancePct(leverage) >= liqToSlRatio * slDistPct * 100,
         minQtyOK: _minQtyOK(_roundQty(reducedQty, p.instrument), p.instrument),
         cappedReason: `Σ-margin headroom ${r2(headroom)} < full margin ${r2(margin)}; risk reduced to ${r2(reducedRisk)}`,
       },
@@ -191,7 +193,7 @@ export function computeSizing(p) {
     notional, margin, leverage, qty,
     guards: {
       marginOK: margin <= marginCap, marginCapUsed: false,
-      liqGuard: liqDistancePct(leverage) >= liqToSlRatio * slDistPct,
+      liqGuard: liqDistancePct(leverage) >= liqToSlRatio * slDistPct * 100,
       minQtyOK: true,
     },
   });
@@ -203,7 +205,10 @@ function _roundQty(rawQty, instrument) {
     // default: 4 decimal places (USDT perp convention)
     return Math.round(rawQty * 10000) / 10000;
   }
-  return Math.floor(rawQty / step) * step;
+  // floor to the step, then trim float noise (0.30000000000000004 → 0.3)
+  const decimals = Math.min(12, (String(step).split('.')[1] || '').replace(/e.*$/, '').length || 0);
+  const floored = Math.floor(rawQty / step + 1e-9) * step;
+  return Number(floored.toFixed(decimals));
 }
 function _minQtyOK(qty, instrument) {
   const min = Number(instrument?.minQty);

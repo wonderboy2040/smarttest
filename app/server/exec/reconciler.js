@@ -64,8 +64,13 @@ export function initReconciler({ port, positionManager = null, alertSink = null,
   _state.alertSink = typeof alertSink === 'function' ? alertSink : null;
   _state.heartbeatFile = heartbeatFile || HEARTBEAT_FILE_DEFAULT;
   _state.killFlagFile = killFlagFile || KILL_FLAG_FILE_DEFAULT;
-  _state._leaderNode = String(env.SMARTAI_EXEC_NODE || 'laptop');
-  _state._iAmLeader = String(env.SMARTAI_EXEC_NODE || 'laptop') === _state._leaderNode || !env.SMARTAI_EXEC_NODE;
+  // Leader lease: SMARTAI_EXEC_LEADER = the ONE node allowed to place orders
+  // (default 'laptop'); SMARTAI_EXEC_NODE = the name of THIS node. Unset NODE
+  // → treated as the leader (single-node setups keep working). A mismatch
+  // (e.g. a Render copy with SMARTAI_EXEC_NODE=render) → never enters new
+  // trades, preventing duplicate orders when both nodes are up.
+  _state._leaderNode = String(env.SMARTAI_EXEC_LEADER || 'laptop');
+  _state._iAmLeader = !env.SMARTAI_EXEC_NODE || String(env.SMARTAI_EXEC_NODE) === _state._leaderNode;
   // initial kill-flag file check
   _checkKillFlagFile();
   // initial heartbeat
