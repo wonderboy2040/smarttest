@@ -278,16 +278,19 @@ export async function coindcxPrivateGET(path, apiKey, secret, params = {}, { uni
     ? '?' + new URLSearchParams(qsEntries.map(([k, v]) => [k, String(v)])).toString()
     : '';
   const headers = {
-    // v20.4.3 / v20.5: a stable User-Agent avoids Cloudflare-front 401s
-    // on signed wallet GETs — the CoinDCX WAF commonly 403/401s UA-less
-    // requests on the derivatives private GET family (futures wallet,
-    // margin, etc.) and the !r.ok branch wraps every non-2xx into a
-    // misleading "Invalid credentials" error to the user. Spot POST
-    // works without a UA (more permissive rule) but the futures wallet
-    // ladder rungs all hit the WAF block. This single header makes the
-    // 7-rung WALLET_AUTH_LADDER succeed on rung 1 (GET-body/ms/num) and
-    // clears the 5-min sticky-rung + cooldown amplifiers downstream.
-    'User-Agent': 'wealthai-coindcx/1.0',
+    // v20.5.1: switch from `wealthai-coindcx/1.0` to the SAME Mozilla UA the
+    // PUBLIC futures-instruments fetch uses (lines 837, 853). CoinDCX's WAF
+    // on the derivatives private GET family (futures wallet / margin /
+    // positions-GET) is more aggressive than just UA-matching — a custom
+    // product UA still got 401'd for some installs (the v20.5 fix didn't
+    // unblock everyone). The Mozilla UA is the one string the team has
+    // CONFIRMED passes through the WAF on this host (it's what the public
+    // fetchGlobalFuturesInstruments call rides). Flow through both the
+    // body-mode `_httpsGetJson` and the legacy `fetch` branch.
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
+    // CoinDCX's documented contract requires Accept: application/json on
+    // the signed GET family — some installs get 406 without it.
+    'Accept': 'application/json',
     // body mode carries JSON — the Python sample sets this header and
     // the Node `request({json:true})` form sets it implicitly.
     ...(bodyMode ? { 'Content-Type': 'application/json' } : {}),

@@ -491,7 +491,18 @@ function credGuard() {
  *   permutation, forever. coindcxPrivateGET now defaults to the
  *   documented body mode; the ladder leads with the body rungs. */
 const WALLET_PROBE_COOLDOWN_MS = 5 * 60_000;
-const _walletsTransport = { mode: null, coolUntil: 0 };
+// v20.5.1: force a FULL ladder re-probe every 10 minutes even when the
+// cooldown is armed and sticky mode is set. Without this escape hatch,
+// a server that hit the cooldown with a stale UA / transient 401 keeps
+// retrying ONLY rung 1 every poll and re-arming the cooldown forever —
+// a deploy that fixes the underlying transport (UA / signature / WAF
+// rule change) never gets a chance to actually take effect until the
+// user manually reconnects. With this counter, the 11th attempt post-
+// cooldown-arming (i.e. ~10 polls at 60s cadence = ~10min) silently
+// does a full 7-rung sweep and re-establishes sticky on whichever rung
+// wins. Never throws; never blocks the cooldown's fail-fast intent on
+// the first 10 polls.
+const _walletsTransport = { mode: null, coolUntil: 0, probesSinceSweep: 0 };
 function _walletList(resp) {
   if (Array.isArray(resp)) return resp;
   if (Array.isArray(resp?.wallets)) return resp.wallets;
@@ -578,12 +589,21 @@ export function lastFuturesKeyScope() { return _scopeProbe ? { ..._scopeProbe } 
 export function resetWalletTransportForReconnect() {
   _walletsTransport.mode = null;
   _walletsTransport.coolUntil = 0;
+  _walletsTransport.probesSinceSweep = 0;
   _scopeProbe = null;
   _scopeProbeInflight = null;
 }
 export async function fetchFuturesWallets() {
   const { apiKey, secret } = credGuard();
-  const probeCooling = Date.now() < _walletsTransport.coolUntil;
+  // v20.5.1: count every probe so a stuck cooldown doesn't lock the
+  // ladder to rung 1 forever. Every 10 probes (= ~10 polls × 60s = 10
+  // min), force a FULL ladder sweep even while cooling — the deploy
+  // may have fixed the underlying transport and the only way to find
+  // out is to actually try every rung again.
+  _walletsTransport.probesSinceSweep = (_walletsTransport.probesSinceSweep || 0) + 1;
+  const forceSweep = _walletsTransport.probesSinceSweep >= 10;
+  if (forceSweep) _walletsTransport.probesSinceSweep = 0;
+  const probeCooling = Date.now() < _walletsTransport.coolUntil && !forceSweep;
   // sticky rung first; a legacy pre-v12.1 sticky value maps onto the
   // ladder ('GET-s' → 'GET-s/str', 'GET-ms' → 'GET-ms/str'). v12.3: the
   // resolved rung is what gets filtered out of the tail (a stale id that

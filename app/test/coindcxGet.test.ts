@@ -90,12 +90,16 @@ describe('coindcxPrivateGET (v12.3 documented GET-with-body auth)', () => {
     expect(cap.headers['Content-Type']).toBe('application/json');
     expect(cap.headers['Content-Length']).toBe(Buffer.byteLength(cap.body![0], 'utf8'));
     expect(cap.headers['X-AUTH-APIKEY']).toBe('KEY');
-    // v20.5: a stable User-Agent MUST ride the headers — CoinDCX's WAF
-    // 403/401s UA-less requests on the derivatives private GET family
-    // (the live futures-wallet incident that prompted this fix). Without
-    // this lock the regression shipped silently because every rung just
-    // surfaced as misleading "[401] Invalid credentials" errors.
-    expect(cap.headers['User-Agent']).toBe('wealthai-coindcx/1.0');
+    // v20.5.1: the User-Agent MUST be the same Mozilla browser string the
+    // PUBLIC futures-instruments fetch uses (lines 837/853 of coindcx.js).
+    // A custom product UA like `wealthai-coindcx/1.0` is still 401'd by
+    // CoinDCX's WAF on the derivatives private GET family (the v20.5 fix
+    // did not unblock every install); the Mozilla UA is the one string
+    // the team has CONFIRMED passes through.
+    expect(cap.headers['User-Agent']).toBe('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36');
+    // CoinDCX documented contract also requires Accept: application/json
+    // on the signed GET family — some installs get 406 without it.
+    expect(cap.headers['Accept']).toBe('application/json');
     // …and the signature is HMAC-SHA256 over that EXACT string
     const expected = crypto.createHmac('sha256', 'SECRET').update(cap.body![0]).digest('hex');
     expect(cap.headers['X-AUTH-SIGNATURE']).toBe(expected);

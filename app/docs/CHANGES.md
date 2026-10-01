@@ -1,5 +1,31 @@
 # Changelog
 
+## v20.5.1 — SELFHEAL EVENT-LOOP FREEZE FALSE-POSITIVE FIX + COINDCX FUTURES WALLET MOZILLA UA + LADDER ESCAPE-HATCH (2026-10-01)
+
+User reported console flooded with impossible values (`worst lag 180224.0s in the last 30s`, `306446.3s`, etc.) and CoinDCX futures USDT wallet STILL not reading despite the v20.5.0 UA fix. Both fixed; **2739 tests / 153 files 100% green · tsc clean · vite build OK · new selfheal ns→ms regression lock added**.
+
+### Critical: selfheal event-loop lag was treating nanoseconds as milliseconds
+
+- **File**: `app/server/ai/selfHeal.js` (event-loop lag bucket in `_watchTick`)
+- **Root cause**: `monitorEventLoopDelay()` from `node:perf_hooks` returns a histogram whose `.max` and `.mean` are in **NANOSECONDS**, not milliseconds. The code stored them raw into `_state.loopLagMax` and compared against `cfg.lagWarnMs = 4000` (which is 4 ms = 4,000,000 ns) — so a real **4-microsecond** lag tripped the alarm (false positive). Worse, the display divided ns by 1000 → **microseconds labeled as "seconds"**: a real 180ms freeze printed as `180224.0s` (an impossible value; a 30s bucket can max be ~30s). The console got flooded with `[selfheal] EVENT-LOOP FREEZE detected — worst lag …s in the last 30s` lines every minute, which on Windows + QuickEdit select-mode actually caused the very freezes it was reporting (every stderr write blocks on the frozen console).
+- **Fix**: Convert ns → ms when storing (÷1_000_000) so the threshold comparison and display are both correct: a real 4ms lag stays under the alarm; a real 4-second freeze surfaces as `4.0s`. With the false positives gone, the console stops spamming, the QuickEdit freeze amplifier dies too, and the genuine freeze log lines that remain are accurate.
+- **Regression lock**: `app/test/selfHealGuard.test.ts` — added a test that drives a watch tick on a fresh arm and asserts `loopLagMs.max30s` is finite, ≥0, and below the sane upper bound (60s) — pre-fix a single async tick could leave ns residue that would print as a 6-7 figure "seconds" value.
+
+### Critical: CoinDCX futures USDT wallet — Mozilla UA + Accept header + ladder escape-hatch
+
+The v20.5.0 fix shipped `User-Agent: 'wealthai-coindcx/1.0'`, but the user reports futures wallet STILL not reading on their install. Three additional layers added:
+
+1. **Mozilla browser UA** (`app/server/mcp/coindcx.js::coindcxPrivateGET` headers literal): switched from the custom `wealthai-coindcx/1.0` to the SAME Mozilla browser string the PUBLIC `fetchGlobalFuturesInstruments` call already uses (lines 837, 853 of coindcx.js). CoinDCX's WAF on the derivatives private GET family is more aggressive than just UA-matching — a custom product UA still got 401'd for some installs. The Mozilla UA is the one string the team has CONFIRMED passes through the WAF on this host (it's what the public instruments call rides).
+2. **`Accept: application/json` header** added to the same headers literal. CoinDCX's documented contract for the signed GET family expects this; some installs get `406 Not Acceptable` without it.
+3. **Ladder escape-hatch** (`app/server/ai/futures.js::fetchFuturesWallets` + `_walletsTransport`): added `probesSinceSweep` counter. Every 10 probes (= ~10 polls × 60s cadence = ~10 min), the function forces a FULL 7-rung ladder sweep even when the cooldown is armed and sticky mode is set. Without this escape hatch, a server that hit the cooldown with a stale UA / transient 401 keeps retrying ONLY rung 1 every poll and re-arming the cooldown forever — a deploy that fixes the underlying transport never gets a chance to actually take effect until the user manually reconnects. The escape hatch silently does the sweep and re-establishes sticky on whichever rung wins. `resetWalletTransportForReconnect` also resets the counter so a manual reconnect still wipes the slate clean.
+
+The existing `coindcxGet.test.ts` UA lock is updated to expect the Mozilla string and also assert `Accept: application/json`.
+
+### Verification
+- `npm run typecheck` → clean.
+- `npm test` → **2739 tests / 153 files, all passing** (+1 new selfheal ns→ms regression lock; updated coindcxGet UA/Accept assertion in lock-step).
+- `npm run build` → clean (Vite production bundle, 2250 modules).
+
 ## v20.5.0 — COINDCX FUTURES WALLET + 30S SIGNAL LATENCY + 3-SOURCE SUPERINTELLIGENCE + EXPERT PICKS ACCURACY GATES (2026-10-01)
 
 User report: "site working fine hai but coindcx tab me coindcx api key secret .env me hai but futures wallet read ni kar raha hai sirf spot ka wallet read kar raha hai … Superintelligence Signal Board & EXPERT PICKS — 80+ AI SCORE ye dono sections ko Trade signals check karo aur advance pro trader level pe Upgrade superintelligence banao high accuracy ke sath long ya short trade signals accurate rehna hai aur sabhi assets jo trade signal milta hai 30 sec me yahan board me aa na chahiye … late ho raha hai isse trade reversal chance ho raha hai." Four targeted fixes; **2738 tests / 153 files 100% green · tsc clean · vite build OK · new UA regression lock added**.

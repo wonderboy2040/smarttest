@@ -198,8 +198,21 @@ function _watchTick() {
     // event-loop lag bucket
     if (_state._hist) {
       try {
-        _state.loopLagMean = Math.round(_state._hist.mean);
-        _state.loopLagMax = Math.round(_state._hist.max);
+        // v20.5.1 FIX (event-loop freeze false positives): perf_hooks
+        // monitorEventLoopDelay() returns a histogram whose .max and
+        // .mean are in NANOSECONDS, not milliseconds. The previous
+        // code stored them raw into loopLagMax and compared against
+        // lagWarnMs (4000 ms) — but treating ns as ms meant a real
+        // 4-microsecond lag tripped the alarm (false positive), and
+        // the display divided ns by 1000 → microseconds labeled as
+        // "seconds" → "180224.0s in the last 30s" flooded the console
+        // (impossible value; a 30s bucket can max be ~30s). Convert
+        // ns → ms here (÷1_000_000) so the threshold and display
+        // are both correct: 4ms real lag stays under the alarm; a
+        // 4-second freeze surfaces as "4.0s".
+        const NS_PER_MS = 1_000_000;
+        _state.loopLagMean = Math.round(_state._hist.mean / NS_PER_MS);
+        _state.loopLagMax = Math.round(_state._hist.max / NS_PER_MS);
         if (_state.loopLagMax > _state.cfg.lagWarnMs && now - _state._lastLagLogAt > _state.cfg.lagLogThrottleMs) {
           _state._lastLagLogAt = now;
           _state.lagAlerts++;
