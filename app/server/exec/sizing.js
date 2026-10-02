@@ -117,7 +117,14 @@ export function computeSizing(p) {
   let leverage = clamp(tierLev, levMin, levMax);
   leverage = Math.min(leverage, saneLev);
   leverage = Math.min(leverage, instrumentMax);
-  leverage = Math.max(levMin, leverage);
+  // v20.7.3 FIX: the old bare `Math.max(levMin, leverage)` re-raised leverage
+  // ABOVE the instrument cap whenever instrument.maxLeverage < levMin —
+  // breaking invariant 4 (leverage ≤ instrument.maxLeverage). The levMin
+  // floor itself is INTENTIONAL (test-locked): a sane-lev cap below levMin
+  // must lead to the invariant-2 SKIP path ("can't fit even at levMin"),
+  // never to a quiet sub-floor trade. So: floor at levMin, but the
+  // instrument cap stays the final authority.
+  leverage = Math.min(Math.max(levMin, leverage), instrumentMax);
 
   // ---- invariant 2: liq distance ≥ ratio × SL distance ----
   // liqDistancePct(lev) returns PERCENT (e.g. 19 for 5x).

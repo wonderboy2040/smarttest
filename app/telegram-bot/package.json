@@ -7,10 +7,9 @@
   "scripts": {
     "start": "node bot.mjs",
     "dev": "node --watch bot.mjs",
-    "check": "node --check bot.mjs && node --check ai-chat.mjs && node --check market.mjs && node --check analysis.mjs && node --check algo.mjs && node --check config.mjs && node --check cloud.mjs && node --check backtester.mjs"
+    "check": "node --check bot.mjs && node --check ai-chat.mjs && node --check market.mjs && node --check analysis.mjs && node --check algo.mjs && node --check config.mjs && node --check backtester.mjs && node --check siteAgents.mjs && node --check siteSync.mjs && node --check mcp-tools.mjs"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.0",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "node-cron": "^4.6.0",

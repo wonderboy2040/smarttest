@@ -34,6 +34,11 @@ def train_target_models(all_symbols_df: pd.DataFrame = None) -> dict:
         return {"error": "Not enough data."}
 
     combined = pd.concat(all_features, ignore_index=True)
+    # v20.7.3 FIX (temporal leakage): sort globally by date so the 80/20
+    # positional split trains on the PAST and tests on the FUTURE — see
+    # the same fix in train_signal.py.
+    if "date" in combined.columns:
+        combined = combined.sort_values(["date", "symbol"], kind="stable").reset_index(drop=True)
     combined = combined.dropna(subset=["fwd_return"])
 
     feature_cols = get_feature_columns(combined)

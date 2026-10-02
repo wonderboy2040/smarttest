@@ -28,6 +28,11 @@ def walk_forward_backtest(
 
     df = df.dropna(subset=["label", "fwd_return"])
     df = df[~df[feature_cols].isin([np.inf, -np.inf]).any(axis=1)]
+    # v20.7.3 FIX (temporal leakage): walk-forward windows are positional —
+    # a symbol-blocked frame let a train window cross into another symbol's
+    # future dates. Sort globally by date first.
+    if "date" in df.columns:
+        df = df.sort_values(["date", "symbol"], kind="stable").reset_index(drop=True)
 
     if len(df) < window + step * 2:
         return {"error": f"Not enough data: {len(df)} rows, need {window + step * 2}"}

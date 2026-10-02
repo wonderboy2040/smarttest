@@ -1795,6 +1795,10 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
       best.symbol, { ltp: best.plan.entry, levels: 20 },
     ).catch(() => null);
   let out = null;
+  // v20.7.3: tracks how many split legs actually filled (futures AND spot
+  // loops below) — a later leg refused by the one-per-pair gate must NOT
+  // turn a partially-filled entry into a "failed" one.
+  let splitOpenedLegs = 0;
   if (wantFutures || best.market === 'GLOBALFUTURES') {
     const isGlobal = best.market === 'GLOBALFUTURES';
     const riskUSDT = riskINR / usdInr;
@@ -1849,7 +1853,18 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
           sendTelegram,
         });
       }
-      if (!out?.ok) break; // a failed leg stops the split (next tick retries fresh)
+      if (out?.ok) { splitOpenedLegs++; continue; }
+      // A failed leg normally stops the split (next tick retries fresh).
+      // EXCEPTION (v20.7.3): legs 2+ refused by the one-per-pair gate mean
+      // the entry DID happen — leg 1's position is open and journaled.
+      // Treating that as a failed entry would skip the cooldown stamp,
+      // near-miss markers and honest audit logging while a real (under-
+      // sized) position exists. Mark it as a truncated split instead.
+      if (leg > 0 && splitOpenedLegs > 0 && /one-per-pair|already open/i.test(String(out?.error || ''))) {
+        log('info', `SLIPPAGE GUARD ${best.symbol}: split truncated to ${splitOpenedLegs}/${legs} legs — one-per-pair cap held`);
+        out = { ...out, ok: true, splitIncomplete: true, error: `split truncated to ${splitOpenedLegs}/${legs} legs (${out?.error})` };
+      }
+      break;
     }
   } else {
     // spot (INR)
@@ -1874,7 +1889,13 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
         source: 'agent',
         sendTelegram,
       });
-      if (!out?.ok) break;
+      if (out?.ok) { splitOpenedLegs++; continue; }
+      // v20.7.3: same one-per-pair truncation semantics as the futures loop above.
+      if (leg > 0 && splitOpenedLegs > 0 && /one-per-pair|already open/i.test(String(out?.error || ''))) {
+        log('info', `SLIPPAGE GUARD ${best.symbol}: split truncated to ${splitOpenedLegs}/${legs} legs — one-per-pair cap held`);
+        out = { ...out, ok: true, splitIncomplete: true, error: `split truncated to ${splitOpenedLegs}/${legs} legs (${out?.error})` };
+      }
+      break;
     }
   }
 

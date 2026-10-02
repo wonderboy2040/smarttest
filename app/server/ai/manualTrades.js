@@ -540,9 +540,15 @@ export function activateReversalOnManualTrade(t, price, { usdInr = 84, cfg } = {
   const opposite = t.side === 'BUY' ? 'SHORT' : 'LONG';
   // the exact flip plan — ₹ thresholds → price levels at the LIVE price
   // (the same math the futures-desk engine stamps on its legs)
+  // v20.7.3 FIX: priceLevelsForLeg divides ₹ thresholds by USDINR — correct
+  // for USDT-margined perps, but India equities / crypto-spot prices are in
+  // INR, so the same division made the printed flip SL/TP ~84× too tight.
+  // INR-domain trades must pass fx = 1 (mirrors manualPnlOf's `fx` logic).
+  const _flipIsUsd = t.market === 'FUTURES' || t.market === 'GLOBALFUTURES';
   const { sl, tp } = priceLevelsForLeg({
     side: opposite, entry: px, qty: t.qty,
-    lossCapINR: cfg.lossCapINR, profitTargetINR: cfg.profitTargetINR, usdInr,
+    lossCapINR: cfg.lossCapINR, profitTargetINR: cfg.profitTargetINR,
+    usdInr: _flipIsUsd ? usdInr : 1,
   });
   t.reversal = {
     ...(t.reversal || {}),

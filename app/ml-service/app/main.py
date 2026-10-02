@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool  # v20.7.3: unblock the event loop for sync LLM calls
 from pydantic import BaseModel
 from typing import Optional, List
 import secrets
@@ -425,6 +426,11 @@ async def get_pricepoints(symbol: str):
 @app.post("/refresh")
 async def refresh_data():
     ohlcv = fetch_all_symbols()
+    # v20.7.3 FIX: same guard as /train (FIX CRIT) — fetch_all_symbols
+    # returns an EMPTY frame when yfinance/Binance fail and no parquet
+    # store exists; ohlcv["symbol"] then raises KeyError -> 500.
+    if ohlcv is None or "symbol" not in ohlcv.columns or ohlcv.empty:
+        raise HTTPException(status_code=503, detail="No OHLCV data fetched — upstream APIs may be down.")
     prediction_cache.clear()
     return {"status": "refreshed", "symbols": int(ohlcv["symbol"].nunique()), "rows": len(ohlcv)}
 
@@ -451,6 +457,10 @@ async def get_regime():
     regime_symbols = ["SPY", "QQQ", "VIX"]
     available = [s for s in regime_symbols if s in ohlcv["symbol"].unique()]
 
+    # v20.7.3 FIX: pd.concat([]) raises ValueError when NO regime symbol is
+    # available (empty upstream store) -> 500. Guard like the dropna case.
+    if not available:
+        raise HTTPException(status_code=503, detail="No regime symbols available (SPY/QQQ/VIX missing from the data store).")
     regime_data = []
     for sym in available:
         sdf = ohlcv[ohlcv["symbol"] == sym].copy().set_index("date")
@@ -464,6 +474,11 @@ async def get_regime():
         regime_data.append(feat)
 
     combined = pd.concat(regime_data, axis=1).dropna()
+    # v20.7.3 FIX: if the store's symbol set drifted from training time,
+    # combined[feature_cols] raises KeyError -> 500. Intersect + guard.
+    missing_cols = [c for c in feature_cols if c not in combined.columns]
+    if missing_cols:
+        raise HTTPException(status_code=503, detail=f"Regime feature drift — missing columns: {missing_cols[:3]}...")
     # FIX CRIT: if dropna removes all rows (sparse data), `X[-1:]` is empty
     # → hmm.predict([]) raises ValueError. Guard explicitly.
     if combined.empty:
@@ -534,7 +549,10 @@ async def analyze_symbol(req: PredictionRequest):
 
     system_prompt = get_7step_system_prompt()
     user_prompt = build_analysis_prompt(brain_result)
-    llm_text = router_ask_llm(system_prompt, user_prompt)
+    # v20.7.3 FIX: router_ask_llm is BLOCKING (sync urllib, up to 6 providers
+    # x 30-60s). Inside `async def` it froze the uvicorn event loop (and with
+    # it /health + the Docker HEALTHCHECK). Run it in the threadpool.
+    llm_text = await run_in_threadpool(router_ask_llm, system_prompt, user_prompt)
 
     used_provider = "none"
     if llm_text:
@@ -581,7 +599,8 @@ async def orchestrate_signals():
 
     system_prompt = get_7step_system_prompt()
     user_prompt = build_signals_prompt(results)
-    llm_text = router_ask_llm(system_prompt, user_prompt)
+    # v20.7.3 FIX: blocking LLM router -> threadpool (see /analyze note).
+    llm_text = await run_in_threadpool(router_ask_llm, system_prompt, user_prompt)
 
     if not llm_text:
         llm_text = "\n".join([
@@ -620,13 +639,11 @@ except Exception as _me_err:  # noqa: BLE001
 # can NEVER break the base service. /hf/status reports what's
 # available; /hf/forecast and /hf/sentiment answer 503 gracefully.
 # ============================================================
-try:
-    from app.hf_models import router as _hf_router
-    app.include_router(_hf_router, prefix="/hf")
-    print("[ml-service] hf models router mounted — /hf/status, /hf/forecast, /hf/sentiment")
-except Exception as _hf_err:  # noqa: BLE001
-    print(f"[ml-service] hf models NOT mounted (non-fatal): {_hf_err}")
-
+# v20.7.3 FIX: the UNCONDITIONAL mount that used to live here made the
+# v20.6 HF_MODELS_ENABLED gate below dead code — /hf/* was always
+# reachable (and registered twice when the flag was true), defeating
+# the RAM budget the flag exists for. Removed; only the gated mount
+# remains.
 
 # ============================================================
 # v20.6 — HF models DISABLED by default on a local 16GB laptop setup.

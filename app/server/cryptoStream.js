@@ -319,8 +319,11 @@ async function pollOnce() {
     // Date.now() se re-stamp karne par 60s ANCHOR_MAX_AGE_MS guard
     // kabhi trigger nahi hota tha aur stale projection "fresh" dikhti
     // thi (eviction + staleness chips dono dhokha khaate the).
+    // v20.7.3 FIX: deep-stale source was missed — a batch up to 3 minutes
+    // old still got Date.now(), so the anchor guard never tripped.
     const tsrc = lastTickerSource();
-    const batchAt = tsrc === 'coindcx-rest-stale' ? (lastTickerAt() || Date.now()) : Date.now();
+    const isStaleSrc = tsrc === 'coindcx-rest-stale' || tsrc === 'coindcx-rest-deep-stale';
+    const batchAt = isStaleSrc ? (lastTickerAt() || Date.now()) : Date.now();
     const byMarket = _getByMarket(tickers);
     for (const base of _subscribed) {
       const t = byMarket.get(`${base}INR`);

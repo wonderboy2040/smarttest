@@ -146,17 +146,25 @@ async function _reconcileTick() {
       for (const p of positions) {
         if (!pmIds.has(p.id)) {
           // orphan — adopt (don't close, just record). Protection check:
-          // if no SL on exchange → flatten + alert (the CORE RULE)
-          if (p.sl == null) {
+          // if no SL on exchange → flatten + alert (the CORE RULE).
+          // v20.7.3: numeric trigger fields often use 0 as the "unset"
+          // sentinel — treat sl<=0 as unprotected too.
+          if (p.sl == null || Number(p.sl) <= 0) {
             try { await _state.port.close({ positionId: p.id }); } catch {}
             _alertCall(`🚨 ORPHAN ${p.pair} no SL on exchange — FLATTENED (core rule).`);
           }
         }
       }
-      // ghosts (PM has, exchange doesn't) → close in PM journal with honest reason
+      // ghosts (PM has, exchange doesn't) → close in PM journal with honest reason.
+      // v20.7.3 FIX: the ghost was only ALERTED, never removed from PM state —
+      // it survived forever and re-alerted (Telegram push) every 12s tick.
+      // Now: alert once, then forget it from the manager (the exchange is
+      // the source of truth; the close already happened off-book — native
+      // SL/TP/liq/manual).
       for (const s of pmState) {
         if (!knownIds.has(s.id)) {
           _alertCall(`⚠️ GHOST ${s.pair} in PM journal but not on exchange — closed (likely native SL/TP/liq/manual).`);
+          try { _state.positionManager.forget?.(s.id); } catch { /* best-effort */ }
         }
       }
     }

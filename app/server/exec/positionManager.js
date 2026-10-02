@@ -36,7 +36,7 @@
 // same code path runs in api / browser / paper mode.
 // ============================================================
 import { ratchetSl } from '../ai/coindcxOrders.js';
-import { computeSizing, liqDistancePct } from './sizing.js';
+import { computeSizing, liqDistancePct, tierLeverage } from './sizing.js';
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 // Quantities use the instrument qty step (0.0001) — NEVER r2 (2 decimals would
@@ -163,6 +163,10 @@ export class PositionManager {
     }
 
     // ---- 6. record state for the exit ladder ----
+    // origRisk anchors the R-multiple ladder to the ORIGINAL stop distance.
+    // (st.sl later moves to breakeven/T1 as the ladder progresses — deriving
+    // R from the mutated SL would collapse the ladder math: T2 would trigger
+    // at entry*1.001 instead of a true 2R. v20.7.3 fix.)
     this._state.set(filled.id, {
       stage: 'ENTRY',
       peakUnrealizedR: 0,
@@ -174,6 +178,7 @@ export class PositionManager {
       side: filled.side,
       entry: filled.avgPrice,
       sl: stopLoss,
+      origRisk: Math.abs(Number(filled.avgPrice) - stopLoss),
       tp1: plan?.target1, tp2: plan?.target2,
       qty: filled.qty,
       leverage: filled.leverage,
@@ -223,8 +228,8 @@ export class PositionManager {
       else if (st.stage === 'T1_HIT' && this._hitT2(st, mark)) {
         const reduceQty = qtyR(st.qty * (this._cfg.exitT2Pct / 100));
         await this._port.reduce({ positionId: p.id, qty: reduceQty });
-        // SL → T1 level
-        const t1Level = st.side === 'LONG' ? this._rLevel(st, 1) : this._rLevel(st, 1);
+        // SL → T1 level (1R from the ORIGINAL stop distance — see _rLevel)
+        const t1Level = this._rLevel(st, 1);
         await this._port.setProtection({ positionId: p.id, sl: t1Level, tp: st.tp2 });
         st.sl = t1Level; st.stage = 'RUNNER';
         actions.push({ id: p.id, kind: 't2', reduceQty, newSl: t1Level });
@@ -301,9 +306,10 @@ export class PositionManager {
   // ---- helpers ----
   _tierLeverage(tier, signal) {
     // map signal tier + verifiedScore + regimeAligned + slDistPct + fundingNormal → 5/7/10x
-    // (delegates to sizing.js::tierLeverage)
+    // (delegates to sizing.js::tierLeverage — static import; the old dynamic
+    // require() could never run inside an ES module and silently pinned
+    // leverage to 5x. v20.7.3 fix.)
     try {
-      const { tierLeverage } = require('./sizing.js');
       return tierLeverage({
         tier,
         verifiedScore: signal?.verifiedScore ?? signal?.__verifiedScore,
@@ -327,7 +333,11 @@ export class PositionManager {
     return st.side === 'LONG' ? mark >= t2 : mark <= t2;
   }
   _rLevel(st, rMultiple) {
-    const risk = Math.abs(st.entry - st.sl);
+    // R multiples anchor to the ORIGINAL risk (entry → initial stop), NOT the
+    // live st.sl — after T1 the SL sits at breakeven, so |entry − st.sl| ≈ 0.05%
+    // of entry and the ladder would collapse (T2 would fire one candle after
+    // T1 at essentially the same price). v20.7.3 fix.
+    const risk = st.origRisk ?? Math.abs(st.entry - st.sl);
     return st.side === 'LONG' ? st.entry + rMultiple * risk : st.entry - rMultiple * risk;
   }
   _slHit(st, mark) {
@@ -335,6 +345,14 @@ export class PositionManager {
   }
   _log(msg) { try { console.error(msg); } catch {} }
   _alertCall(msg) { if (this._alert) try { this._alert(msg); } catch {} }
+
+  /**
+   * Forget a position from manager state (the reconciler calls this for
+   * GHOSTS — positions the exchange no longer returns, i.e. closed
+   * off-book by native SL/TP/liq/manual). Without this the ghost sat in
+   * _state forever and re-alerted every reconcile tick. v20.7.3.
+   */
+  forget(positionId) { return this._state.delete(positionId); }
 
   // test hooks
   _stateForTests() { return Array.from(this._state.entries()).map(([id, s]) => ({ id, ...s })); }

@@ -220,9 +220,13 @@ apiRouter.use((req, res, next) => {
 // SECURITY (audit H-1): the LLM relay routes (/api/groq, /api/gemini,
 // /api/claude, ...) burn the owner's paid API keys. CORS does NOT stop
 // non-browser clients — anyone could `curl -X POST` this server and use
-// the keys as a free relay. Two protections:
+// the keys as a free relay. Three protections:
 //   1. If BOT_API_SECRET is set → Bearer token required on all relay routes.
 //   2. Per-IP rate limit (30 req/min) always applies as a backstop.
+//   3. FAIL-CLOSED (v20.7.3): no BOT_API_SECRET → relay only answers
+//      loopback/private addresses (local dev). The bot's Express server
+//      is a PUBLIC web service (Render) — an unset secret must never
+//      leave paid keys open to the internet.
 // Public read-only routes (/config, /ai-status) are exempt.
 // ============================================================
 const BOT_API_SECRET = process.env.BOT_API_SECRET || '';
@@ -231,7 +235,7 @@ function relayRateCheck(ip) {
   const now = Date.now();
   if (_relayAttempts.size > 1000) {
     for (const [k, v] of _relayAttempts) {
-      if (!v.length || now - v[v.length - 1] > 60_000) _relayAttempts.delete(k);
+      if (!v.length || now - v[v[v.length - 1]] > 60_000) _relayAttempts.delete(k);
     }
   }
   const arr = (_relayAttempts.get(ip) || []).filter(t => now - t < 60_000);
@@ -239,6 +243,24 @@ function relayRateCheck(ip) {
   arr.push(now);
   _relayAttempts.set(ip, arr);
   return true;
+}
+// v20.7.3: loopback/private-IP test for the fail-closed relay gate.
+// Handles plain IPv4, IPv6-mapped IPv4 (::ffff:127.0.0.1) and ::1.
+function _isLoopbackOrPrivateIp(ip) {
+  if (!ip || typeof ip !== 'string') return false;
+  const v = ip.toLowerCase().trim();
+  if (v === '::1' || v === '::') return true;
+  let v4 = null;
+  const mapped = v.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) v4 = mapped[1];
+  else if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(v)) v4 = v;
+  if (!v4) return false;
+  const p = v4.split('.').map(Number);
+  if (p.length !== 4 || p.some(n => !Number.isFinite(n) || n < 0 || n > 255)) return false;
+  return p[0] === 127 || p[0] === 10
+    || (p[0] === 192 && p[1] === 168)
+    || (p[0] === 172 && p[1] >= 16 && p[1] <= 31)
+    || (p[0] === 169 && p[1] === 254);
 }
 apiRouter.use((req, res, next) => {
   // Public read-only endpoints stay open.
@@ -257,6 +279,13 @@ apiRouter.use((req, res, next) => {
     if (auth !== BOT_API_SECRET) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
+    return next();
+  }
+  // v20.7.3 FAIL-CLOSED: no secret configured → only local/private callers.
+  if (ip !== 'unknown' && !_isLoopbackOrPrivateIp(ip)) {
+    return res.status(503).json({
+      error: 'LLM relay disabled: BOT_API_SECRET is not configured on the bot server. Set it in the bot environment to enable relay routes.',
+    });
   }
   next();
 });
@@ -887,6 +916,13 @@ function startTyping(chatId) {
 // ========================================
 bot.onText(/^\/start(@\w+)?$/i, async (msg) => {
   const chatId = msg.chat.id;
+  // v20.7.3 SECURITY FIX: /start rendered the owner's LIVE portfolio state
+  // (position counts, sync freshness, USD/INR) to ANY Telegram user. Every
+  // other command checks isAuthorized — /start now does too; unauthorized
+  // users only get a private-bot notice.
+  if (!isAuthorized(msg)) {
+    return safeSend(msg.chat.id, '🔒 <b>This is a private trading bot.</b> Aap authorized nahi ho. Owner: TELEGRAM_CHAT_ID env me apna chat id set karo.');
+  }
   console.log(`📥 /start from ${msg.from?.first_name || chatId}`);
 
   const welcome = `🧠 <b>${BOT_NAME} ${BOT_VERSION}</b>
@@ -964,6 +1000,10 @@ Bina / ke koi bhi message likho = AI chat (7-engine auto failover + Quant Brain)
 // ========================================
 bot.onText(/^\/help(@\w+)?$/i, async (msg) => {
   const chatId = msg.chat.id;
+  // v20.7.3 SECURITY FIX: same authorization gate as every other command.
+  if (!isAuthorized(msg)) {
+    return safeSend(msg.chat.id, '🔒 <b>This is a private trading bot.</b> Aap authorized nahi ho.');
+  }
   console.log(`📥 /help from ${msg.from?.first_name || chatId}`);
 
   const help = `❓ <b>${BOT_NAME} ${BOT_VERSION} — Command Reference</b>
@@ -1644,7 +1684,9 @@ bot.onText(/^\/selftest(@\w+)?$/i, async (msg) => {
   await check('Market intelligence', 'market · digest', () => fetchMarketIntelligence(), { isOk: (r) => !!r });
   await check('Bond yields', 'live', () => fetchBondYields(), { isOk: (r) => Array.isArray(r) && r.length > 0 });
   await check('Forex USD/INR', 'forex', () => fetchForexRate(), { isOk: (r) => Number(r) > 50 && Number(r) < 150 });
-  if (isTavilyAvailable) {
+  // v20.7.3 FIX: isTavilyAvailable is a FUNCTION — calling it without ()
+  // made the reference always truthy, so the "key missing" row never fired.
+  if (isTavilyAvailable()) {
     await check('FII/DII flow (Tavily)', 'fiidii', () => fetchFIIDIIData(TAVILY_API_KEY), { isOk: (r) => !!r });
     await check('IPO tracker (Tavily)', 'ipo', () => fetchIPOData(TAVILY_API_KEY), { isOk: (r) => !!r });
   } else {
@@ -3897,7 +3939,8 @@ bot.onText(/^\/(fiidii|fii|dii)(@\w+)?$/i, async (msg) => {
   if (!isAuthorized(msg)) return;
   // v10.15 (recheck #2 S2): missing-key commands say WHAT they need
   // instead of failing opaquely — evidence-first triage ke liye.
-  if (!isTavilyAvailable) {
+  // v20.7.3 FIX: call the function (was a bare truthy reference).
+  if (!isTavilyAvailable()) {
     return safeSend(msg.chat.id, '⚠️ <b>FII/DII flows need the Tavily key</b> — <code>TAVILY_API_KEY</code> env var set nahi hai (Render me add karo). Command ka code sahi hai; key ke bina live search possible nahi.');
   }
   await safeSend(msg.chat.id, '🏛️ <b>Fetching FII/DII flows...</b>', { parse_mode: 'HTML' });
@@ -3917,7 +3960,8 @@ bot.onText(/^\/(fiidii|fii|dii)(@\w+)?$/i, async (msg) => {
 bot.onText(/^\/ipo(@\w+)?$/i, async (msg) => {
   if (!isAuthorized(msg)) return;
   // v10.15 (recheck #2 S2): the clear needs-key message
-  if (!isTavilyAvailable) {
+  // v20.7.3 FIX: call the function (was a bare truthy reference).
+  if (!isTavilyAvailable()) {
     return safeSend(msg.chat.id, '⚠️ <b>IPO tracker needs the Tavily key</b> — <code>TAVILY_API_KEY</code> env var set nahi hai (Render me add karo). Command ka code sahi hai; key ke bina live search possible nahi.');
   }
   await safeSend(msg.chat.id, '🚀 <b>Fetching IPO data...</b>', { parse_mode: 'HTML' });

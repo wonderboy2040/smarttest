@@ -38,6 +38,13 @@ def train_signal_model(all_symbols_df: pd.DataFrame = None) -> dict:
         return {"error": "Not enough data per symbol for training."}
 
     combined = pd.concat(all_features, ignore_index=True)
+    # v20.7.3 FIX (temporal leakage): the per-symbol blocks are each
+    # chronological, but pd.concat stacks SYMBOLS — TimeSeriesSplit cuts by
+    # ROW POSITION, so a train window could contain symbol A's 2025 rows
+    # while the validation window held symbol B's 2016 rows (future info in
+    # training). Sort GLOBALLY by date so positional splits are honest.
+    if "date" in combined.columns:
+        combined = combined.sort_values(["date", "symbol"], kind="stable").reset_index(drop=True)
     combined = combined.dropna(subset=["label", "fwd_return"])
 
     feature_cols = get_feature_columns(combined)

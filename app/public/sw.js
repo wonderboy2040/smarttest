@@ -10,8 +10,16 @@
  *   3. Hashed static assets: stale-while-revalidate
  *   4. /api/* and /api/stream: NEVER intercepted (network only;
  *      SSE pass-through, private data never touches CacheStorage)
- * ACTIVATE evicts EVERY cache older than v20 — including any
- * private-API leftovers from pre-v12.7 denylist days.
+ * ACTIVATE evicts EVERY cache older than the current version —
+ * including any private-API leftovers from pre-v12.7 denylist
+ * days.
+ * v20.7.3 FIX (cache bloat): the version string was frozen at
+ * 'v20' across all deploys — new content-hashed chunks were
+ * cached but the OLD ones were never evicted (the SW itself was
+ * byte-identical, so install/activate never re-ran). The build
+ * now stamps a unique suffix into dist/sw.js (see
+ * vite.config.ts → stamp-sw-version), so every deploy gets a
+ * fresh cache and the activate-eviction below cleans the orphans.
  * ============================================================ */
 
 const CACHE_VERSION = 'smartai-pro-v20';
@@ -64,6 +72,9 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Static assets → stale-while-revalidate
+  // v20.7.3 FIX: offline + uncached (fresh post-deploy chunk) used to
+  // resolve respondWith(undefined) → hard TypeError. Return a proper
+  // network-error Response instead.
   event.respondWith(
     caches.open(CACHE_VERSION).then(async (cache) => {
       const cached = await cache.match(req);
@@ -72,7 +83,7 @@ self.addEventListener('fetch', (event) => {
           if (res.ok) cache.put(req, res.clone()).catch(() => {});
           return res;
         })
-        .catch(() => cached);
+        .catch(() => cached || Response.error());
       return cached || network;
     })
   );

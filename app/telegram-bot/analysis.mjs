@@ -611,13 +611,17 @@ export function generateCompareReport(data1, data2) {
   msg += `<code>Change      ${((data1.change >= 0 ? '+' : '') + data1.change.toFixed(2) + '%').padEnd(10)} ${((data2.change >= 0 ? '+' : '') + data2.change.toFixed(2) + '%').padEnd(10)}</code>\n`;
   msg += `<code>RSI         ${(data1.rsi || 50).toFixed(0).padEnd(10)} ${(data2.rsi || 50).toFixed(0).padEnd(10)}</code>\n`;
 
-  if (data1.weekChange !== undefined) {
+  // v20.7.3 FIX: the Yahoo fallback object carries no week/month/3M change
+  // fields — when TV answered for symbol A but only Yahoo for symbol B,
+  // data2.weekChange.toFixed() threw TypeError and killed the whole
+  // /compare command. Guard on BOTH symbols having the field.
+  if (data1.weekChange !== undefined && data2.weekChange !== undefined) {
     msg += `<code>Week        ${((data1.weekChange >= 0 ? '+' : '') + data1.weekChange.toFixed(1) + '%').padEnd(10)} ${((data2.weekChange >= 0 ? '+' : '') + data2.weekChange.toFixed(1) + '%').padEnd(10)}</code>\n`;
   }
-  if (data1.monthChange !== undefined) {
+  if (data1.monthChange !== undefined && data2.monthChange !== undefined) {
     msg += `<code>Month       ${((data1.monthChange >= 0 ? '+' : '') + data1.monthChange.toFixed(1) + '%').padEnd(10)} ${((data2.monthChange >= 0 ? '+' : '') + data2.monthChange.toFixed(1) + '%').padEnd(10)}</code>\n`;
   }
-  if (data1.threeMonthChange !== undefined) {
+  if (data1.threeMonthChange !== undefined && data2.threeMonthChange !== undefined) {
     msg += `<code>3-Month     ${((data1.threeMonthChange >= 0 ? '+' : '') + data1.threeMonthChange.toFixed(1) + '%').padEnd(10)} ${((data2.threeMonthChange >= 0 ? '+' : '') + data2.threeMonthChange.toFixed(1) + '%').padEnd(10)}</code>\n`;
   }
 
@@ -1027,6 +1031,16 @@ export function generateDigestReport(intel, cryptos, bonds, usdInr, portfolio, l
 // ========================================
 // FII/DII Report
 // ========================================
+// v20.7.3: escape untrusted web content for parse_mode:HTML messages.
+// (bot.mjs has its own copy; this module is imported standalone.)
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function generateFIIDIIReport(fiiData) {
   const timeStr = getISTTime();
   let msg = `🏛️ <b>FII / DII FLOW TRACKER</b>\n`;
@@ -1036,11 +1050,13 @@ export function generateFIIDIIReport(fiiData) {
   if (!fiiData || !fiiData.summary) {
     msg += `⚠️ FII/DII data unavailable. Try again during market hours.\n`;
   } else {
-    msg += `📊 <b>Latest Data:</b>\n${fiiData.summary}\n\n`;
+    // v20.7.3 FIX: Tavily-sourced summaries/titles/URLs are EXTERNAL web
+    // content — a raw < / & breaks parse_mode:HTML rendering. Escape.
+    msg += `📊 <b>Latest Data:</b>\n${escapeHtml(fiiData.summary)}\n\n`;
     if (fiiData.sources?.length > 0) {
       msg += `🔗 <b>Sources:</b>\n`;
       for (const src of fiiData.sources) {
-        msg += `• <a href="${src.url}">${src.title}</a>\n`;
+        msg += `• <a href="${escapeHtml(String(src.url || ''))}">${escapeHtml(String(src.title || 'source'))}</a>\n`;
       }
     }
   }
@@ -1061,11 +1077,12 @@ export function generateIPOReport(ipoData) {
   if (!ipoData || !ipoData.summary) {
     msg += `⚠️ IPO data unavailable. Try again later.\n`;
   } else {
-    msg += `📋 <b>Latest IPO Updates:</b>\n${ipoData.summary}\n\n`;
+    // v20.7.3 FIX: escape external web content (see generateFIIDIIReport).
+    msg += `📋 <b>Latest IPO Updates:</b>\n${escapeHtml(ipoData.summary)}\n\n`;
     if (ipoData.sources?.length > 0) {
       msg += `🔗 <b>Sources:</b>\n`;
       for (const src of ipoData.sources) {
-        msg += `• <a href="${src.url}">${src.title}</a>\n`;
+        msg += `• <a href="${escapeHtml(String(src.url || ''))}">${escapeHtml(String(src.title || 'source'))}</a>\n`;
       }
     }
   }

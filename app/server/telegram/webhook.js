@@ -110,7 +110,12 @@ function inferDeskFromText(text) {
 /** Split "/intraday BTC ka setup?" → { cmd: 'intraday', query: 'BTC ka setup?' } */
 export function parseCommand(text) {
   const t = String(text || '').trim();
-  const m = t.match(/^\/(intraday|crypto|status|help|start|trade|weeklyreview|whoami)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
+  // v20.7.3 FIX: 'portfolio' was missing from the command regex — the full
+  // /portfolio handler existed (net-worth digest + red-flag engine) and
+  // HELP_TEXT advertised it, but parseCommand could never return it, so
+  // /portfolio fell through to the plain-text LLM routing (broken feature
+  // + wasted tokens).
+  const m = t.match(/^\/(intraday|crypto|status|help|start|trade|weeklyreview|whoami|portfolio)(?:@\w+)?(?:\s+([\s\S]*))?$/i);
   if (!m) return { cmd: null, query: t };
   return { cmd: m[1].toLowerCase(), query: (m[2] || '').trim() };
 }

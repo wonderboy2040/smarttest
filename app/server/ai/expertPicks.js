@@ -100,6 +100,11 @@ async function _cachedUniverse(key, ttlMs, fn) {
 // (futures.js, coindcxOrders.js, manualTrades.js, globalRisk.js) uses 84 —
 // during a Yahoo FX outage the analysis layer priced coins ~13% above what
 // the execution/wallet layer assumed. ONE static estimate everywhere: 84.
+// v20.7.3 FIX: this private cache also BYPASSED the v20.2 SINGLE USDINR
+// SOURCE (lib/usdinr.js) — the board could sit an hour behind the money
+// layers and flat-84'd on outage even when a disk-backed last-known-good
+// rate existed. Successful reads now RECORD into the shared store and
+// outages fall back to last-known-good, matching every other module.
 let _usdInr = { at: 0, val: 84 };
 export async function fetchUsdInr() {
   if (Date.now() - _usdInr.at < 3600_000) return _usdInr.val;
@@ -111,9 +116,19 @@ export async function fetchUsdInr() {
     if (r.ok) {
       const j = await r.json();
       const p = Number(j?.chart?.result?.[0]?.meta?.regularMarketPrice);
-      if (p > 50 && p < 200) { _usdInr = { at: Date.now(), val: p }; return p; }
+      if (p > 50 && p < 200) {
+        _usdInr = { at: Date.now(), val: p };
+        try { const { usdInrRecord } = await import('./lib/usdinr.js'); usdInrRecord(p, 'expert-picks'); } catch { /* shared store optional */ }
+        return p;
+      }
     }
-  } catch { /* keep last/84 */ }
+  } catch { /* fall through to last-known-good */ }
+  // v20.7.3: prefer the shared last-known-good rate over flat 84.
+  try {
+    const { usdInrLastKnown } = await import('./lib/usdinr.js');
+    const lk = usdInrLastKnown();
+    if (lk != null) { _usdInr = { at: Date.now(), val: lk }; return lk; }
+  } catch { /* keep private cache/84 */ }
   return _usdInr.val;
 }
 

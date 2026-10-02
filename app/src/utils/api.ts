@@ -2,7 +2,7 @@ import { PriceData, Position } from '../types';
 import { EXACT_TICKER_MAP, guessMarket, API_URL as VITE_API_URL, DEFAULT_USD_INR, isCryptoSymbol, getTodayString } from './constants';
 // FIX H10: imports must come before any runtime code per ES module style +
 // future bundler strictness. Was previously after `getApiUrl()`.
-import { isAnyMarketOpen, isIndiaMarketOpen, isUSMarketOpen } from './telegram';
+import { isAnyMarketOpen, isIndiaMarketOpen, isUSMarketOpen, getTimeInZone } from './telegram';
 
 // Proxy base helper — resolves backend server URL dynamically
 // 1. Checks localStorage ('WEALTH_AI_BACKEND_URL')
@@ -338,11 +338,12 @@ export function getIndiaPollInterval(): number {
   // only the enrichment/fallback path.
   if (isIndiaMarketOpen()) return 3000;
   // Pre-market warm-up so prices render the instant NSE opens at 9:15 AM IST.
-  const now = new Date();
-  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const day = ist.getDay();
+  // v20.7.3 FIX: reuse telegram.ts's robust getTimeInZone (the old
+  // `new Date(now.toLocaleString('en-US', { timeZone }))` round-trip is
+  // locale-implementation-dependent — FIX M16 documented exactly this).
+  const { day, h, m } = getTimeInZone('Asia/Kolkata');
   if (day !== 0 && day !== 6) {
-    const mins = ist.getHours() * 60 + ist.getMinutes();
+    const mins = h * 60 + m;
     if (mins >= 540 && mins < 555) return 3000; // 9:00-9:15 AM IST pre-open warm-up
     if (mins >= 525 && mins < 540) return 5000;  // 8:45-9:00 AM IST early warm-up
   }
@@ -363,11 +364,10 @@ export function getUSPollInterval(): number {
   if (isUSMarketOpen()) return 3000;
   // Pre-market warm-up: 15 min before US open (9:15-9:30 AM ET / 6:45-7:00 PM IST).
   // Poll fast so the VERY FIRST trade at 9:30 AM ET (7:00 PM IST) renders instantly.
-  const now = new Date();
-  const est = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const day = est.getDay();
+  // v20.7.3 FIX: same robust getTimeInZone path as the India poller above.
+  const { day, h, m } = getTimeInZone('America/New_York');
   if (day !== 0 && day !== 6) {
-    const mins = est.getHours() * 60 + est.getMinutes();
+    const mins = h * 60 + m;
     if (mins >= 555 && mins < 570) return 3000; // 9:15-9:30 AM ET pre-open warm-up
     if (mins >= 540 && mins < 555) return 5000;  // 9:00-9:15 AM ET early warm-up
   }

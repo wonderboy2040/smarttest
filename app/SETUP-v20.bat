@@ -25,7 +25,15 @@ REM ============================================================
 cd /d "%~dp0"
 
 REM ---- [1/9] payload check ----
-set "SRC=%~dp0app"
+REM v20.7.3 FIX: ye script repo me app/ ke ANDAR hai. Agar yahin se chal rahi
+REM hai (server\index.js script ke apne folder me hai), payload wahi hai —
+REM app\app dhoondhna galat [ERROR] deta tha. Zip layout (script root me)
+REM ke liye purana %~dp0app path hi chalega.
+if exist "%~dp0server\index.js" (
+  set "SRC=%~dp0"
+) else (
+  set "SRC=%~dp0app"
+)
 if not exist "%SRC%\server\index.js" (
   echo.
   echo [ERROR] app folder nahi mila. Ye zip PURA extract karo

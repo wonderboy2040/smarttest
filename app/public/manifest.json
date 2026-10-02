@@ -11,7 +11,7 @@
   ],
   "background_color": "#020617",
   "theme_color": "#020617",
-  "orientation": "portrait",
+  "orientation": "any",
   "categories": [
     "finance",
     "productivity",

@@ -177,18 +177,25 @@ export class PaperPort {
     if (!p) return { ok: false, error: 'position not found' };
     const reduce = Math.min(Number(qty), p.qty);
     p.qty = r2(p.qty - reduce);
-    // free up margin proportional to the reduction
-    const marginReturn = (p.margin || 0) * (reduce / (reduce + p.qty));
+    // v20.7.3 FIX (margin accounting): free the proportional share AND
+    // decrement p.margin. The old code never decremented p.margin, so a
+    // reduce-to-zero freed 100% of the margin and the close branch then
+    // added the FULL original margin again (double-free) — partial-then-
+    // close over-credited by the previously-freed fraction.
+    const share = reduce / (reduce + p.qty);
+    const marginReturn = (p.margin || 0) * share;
     this._free += marginReturn;
-    this._fillLog.push({ at: Date.now(), kind: 'reduce', id: positionId, qty: reduce });
+    p.margin = r2(Math.max(0, (p.margin || 0) - marginReturn));
+    // v20.7.3 FIX (PnL accounting): realize PnL on EVERY slice — the old
+    // code only booked PnL on the final reduce-to-zero slice, so partial
+    // exits at different prices silently dropped their realized PnL.
+    const pnl = (p.side === 'LONG' ? 1 : -1) * reduce * ((p.markPrice || p.avgPrice) - p.avgPrice);
+    this._equity += pnl;
+    this._fillLog.push({ at: Date.now(), kind: 'reduce', id: positionId, qty: reduce, pnl: r2(pnl) });
     if (p.qty <= 0.0001) {
-      // realized P&L
-      const pnl = (p.side === 'LONG' ? 1 : -1) * reduce * ((p.markPrice || p.avgPrice) - p.avgPrice);
-      this._equity += pnl;
-      this._free += p.margin || 0;
       this._positions.delete(positionId);
     }
-    return { ok: true, raw: { remainingQty: p.qty } };
+    return { ok: true, raw: { remainingQty: p.qty, realizedPnl: r2(pnl) } };
   }
   async close({ positionId }) {
     const p = this._positions.get(positionId);

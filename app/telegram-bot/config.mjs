@@ -116,7 +116,10 @@ export const DEFAULT_US_SIP = 50;
 export const DEFAULT_USD_INR = 85.5;
 
 // ML Service
-export const ML_SERVICE_URL = process.env.ML_SERVICE_URL || 'http://localhost:8000';
+// v20.7.3: the old ML_SERVICE_URL export was DEAD (nothing imported it) and
+// misleading — it pointed at the retired Python :8000 path while bot.mjs
+// defines its own ML_SERVICE_URL (…:8080/api/ml, the Node ml-engine).
+// Removed to stop future confusion.
 
 export const CORS_PROXIES = [''];
 

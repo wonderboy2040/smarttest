@@ -10,7 +10,9 @@ import { computeUnifiedEntry } from './entryPriceEngine';
 // could come second, include date, or use a different separator in some ICU
 // builds). Use `Intl.DateTimeFormat.formatToParts` and read weekday/hour/minute
 // explicitly so the parser is robust across Node/V8 versions.
-function getTimeInZone(tz: string): { h: number; m: number; day: number } {
+// v20.7.3: exported so api.ts poll-interval helpers reuse the SAME robust
+// path (they were still on the old toLocaleString round-trip hack).
+export function getTimeInZone(tz: string): { h: number; m: number; day: number } {
   // v5.0 perf: Intl.DateTimeFormat construction costs ~0.1-1ms and this
   // helper fires on EVERY WebSocket price message and EVERY market-status
   // render (tvWebsocket.validatePrice + Dashboard header). Hoist the

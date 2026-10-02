@@ -37,8 +37,16 @@ export const SSE_MAX_LOOPBACK = 8; // the desktop app's own browser
  *  (the Windows portable app — browser → 127.0.0.1:8080). */
 export function isLoopbackIp(ip) {
   if (!ip) return false;
-  const raw = String(ip).trim().toLowerCase();
-  // strip IPv6-mapped IPv4 and port suffixes best-effort
+  let raw = String(ip).trim().toLowerCase();
+  // v20.7.3: actually strip IPv6-mapped IPv4 and IPv4 port suffixes (the
+  // comment always claimed this — now it does it). Also accepts the
+  // hexadecimal form ::ffff:7f00:1.
+  raw = raw.replace(/^\[|\]$/g, '');
+  const portStripped = raw.replace(/:\d+$/, '');
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(portStripped)) raw = portStripped;
+  if (raw === '::ffff:7f00:1') return true;
+  const mapped = raw.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) raw = mapped[1];
   return LOOPBACK_IPS.has(raw);
 }
 

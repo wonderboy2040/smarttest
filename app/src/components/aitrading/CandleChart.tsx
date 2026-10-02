@@ -126,10 +126,13 @@ export const CandleChart = memo(function CandleChart({
     : name === 'LTP' ? '#fbbf24' : '#34d399';
 
   // X labels: 4 sparse time marks along the series.
+  // v20.7.3 FIX: pin the label timezone to IST — 'en-IN' only sets the
+  // FORMAT locale, so non-IST users saw candle stamps in their local tz
+  // next to the IST-canonical session clock (09:15 open showed as 04:45).
   const timeLabel = (t: number) => {
     const d = new Date(t);
-    return tf === '1d' ? d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
-      : d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false });
+    return tf === '1d' ? d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', timeZone: 'Asia/Kolkata' })
+      : d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata' });
   };
 
   return (

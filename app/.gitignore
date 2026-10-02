@@ -51,3 +51,11 @@ Thumbs.db
 
 # System generated
 .system_generated/
+
+# v20.7.3: ml-service runtime artifacts (parquet store + trained models)
+ml-service/store/
+*.parquet
+*.pkl
+
+# v20.7.3: telegram-bot runtime state
+telegram-bot/streak-data.json

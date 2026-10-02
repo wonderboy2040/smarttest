@@ -1,5 +1,49 @@
 # Changelog
 
+## v20.7.3 — FULL-SITE DEEP RECHECK: 24 issues fixed (exec math, security, streams, ML leakage) (2026-10-02)
+
+Full-repo deep review (4 parallel audit passes: server core, server/ai, frontend, telegram-bot + ml-service + configs). **2818 tests / 161 files 100% green · tsc clean · vite build OK · routes check PASS · all .mjs/.py syntax clean.**
+
+### HIGH — money-path math + security
+
+1. **positionManager.js — exit-ladder R-collapse:** `_rLevel()` derived R from the MUTATED `st.sl` (breakeven after T1), so T2 fired at ~entry*1.001 instead of 2R and the whole 40/30/30 ladder degenerated. Now `origRisk` is stamped at entry and anchors every R-multiple (SL-hit checks still use the live `st.sl`).
+2. **positionManager.js — `require()` inside ESM:** `_tierLeverage()` could never import `sizing.js::tierLeverage` (ReferenceError swallowed by catch) — leverage was silently pinned to 5x. Static import now; the 7x/10x tier policy actually runs.
+3. **agent.js — split-order legs killed by the one-per-pair gate:** leg 2+ of a slippage-split entry was rejected ("position already open"), so the entry was logged as FAILED while a real under-sized position existed — cooldown stamp, near-miss markers and audit trail all skipped. A one-per-pair refusal of leg>0 (after a successful leg) is now treated as a truncated split (`ok:true, splitIncomplete:true`). Fixed in BOTH the futures and spot loops.
+4. **bot.mjs — LLM relay fail-open:** with `BOT_API_SECRET` unset (the default), the paid-key relay routes on the PUBLIC Render deployment were protected only by a 30 req/min IP limit. Now fail-closed: no secret → relay answers loopback/private IPs only (503 + setup instructions for everyone else).
+5. **bot.mjs — /start + /help unauthenticated:** /start rendered the owner's live portfolio state (position counts, sync freshness, USD/INR) to ANY Telegram user. Both commands now enforce the same `isAuthorized` gate as the other 68 commands.
+
+### MEDIUM — accounting, streams, ML integrity
+
+6. **port.js — PaperPort margin double-free + missing PnL:** partial reduces never decremented `p.margin` (reduce-to-zero freed 100%, then the close branch freed the FULL margin again), and intermediate partial-exit PnL was never realized (only the final slice booked). Margin is now decremented per slice and every slice realizes its own PnL.
+7. **index.js — SSE dead-tick drift bug:** the <0.05% dead-tick filter overwrote the stored baseline with the UNSENT price — a steady sub-threshold drift never pushed ANY tick and clients displayed stale prices while the market moved %. Baseline is now the last SENT price (clock refreshes only).
+8. **reconciler.js — ghost-alert spam:** GHOST positions (closed off-book by native SL/TP/liq) were alerted but never removed from PM state → Telegram push every 12s forever. Now alerted once + `PositionManager.forget(id)` removes them. Orphan check also treats `sl <= 0` as unprotected (numeric-trigger sentinel).
+9. **manualTrades.js — flip plan SL/TP ~84x too tight for INR trades:** `priceLevelsForLeg` divides ₹ thresholds by USDINR (correct for USDT perps) — India equities/crypto-spot got flip levels 0.017 instead of 1.50 per share. INR-domain trades now pass `usdInr: 1` (mirrors `manualPnlOf`).
+10. **expertPicks.js — divergent USDINR cache:** the board's private 1h cache bypassed the v20.2 SINGLE USDINR SOURCE — it could sit an hour behind the money layers and flat-84'd on outage even with a disk LKG rate. Successful reads now record into `lib/usdinr.js`; outages fall back to last-known-good.
+11. **webhook.js — /portfolio unreachable:** the command was missing from `parseCommand`'s regex, so the full net-worth-digest handler never ran (queries fell through to the LLM). Added to the regex.
+12. **ml-service main.py — HF gate dead code:** `/hf/*` was mounted UNCONDITIONALLY before the `HF_MODELS_ENABLED` check (and twice when set) — the RAM-budget flag did nothing. Unconditional mount removed.
+13. **ml-service — temporal leakage in walk-forward validation:** `pd.concat` stacks per-symbol blocks, but `TimeSeriesSplit`/positional windows split by ROW — training windows contained other symbols' FUTURE dates (inflated F1/Sharpe). train_signal.py / train_target.py / backtest.py now sort globally by date before splitting.
+14. **ml-service main.py — event-loop freezes:** the blocking 6-provider LLM router (sync urllib, 30-60s each) ran inside `async def` endpoints, stalling /health + the Docker HEALTHCHECK. Now `run_in_threadpool` (/analyze, /orchestrate/signals).
+15. **ml-service main.py — /refresh 500:** `fetch_all_symbols()` returns an empty frame on upstream failure; `ohlcv["symbol"]` raised KeyError. Same guard as /train added. `/regime` also guards empty symbol sets + feature drift (was pd.concat([]) / KeyError 500s).
+16. **bot.mjs — dead Tavily guards:** `isTavilyAvailable` (a FUNCTION) was used without `()` at 3 sites — the "key missing" early-returns never fired. Fixed.
+17. **sw.js — CacheStorage bloat:** `CACHE_VERSION` was frozen across all deploys; install/activate never re-ran and every deploy stranded 1-3MB of orphaned hashed chunks. The build now stamps a unique suffix into `dist/sw.js` (vite plugin `stamp-sw-version`), so each deploy opens a fresh cache and activate evicts the old one. SWR offline+uncached path also returns `Response.error()` instead of `undefined`.
+
+### LOW — hardening + hygiene
+
+18. **sizing.js — instrument-cap override:** the trailing `Math.max(levMin, …)` re-raised leverage ABOVE `instrument.maxLeverage` when the cap < levMin. Now `Math.min(Math.max(levMin, lev), instrumentMax)` — the levMin floor (needed for the SKIP_LIQ_TOO_CLOSE semantics) stays, the instrument cap is final.
+19. **cryptoStream.js — deep-stale re-stamp:** `coindcx-rest-deep-stale` batches (up to 3 min old) got `Date.now()`, so the 60s anchor guard never tripped. Both stale sources now use the upstream batch clock.
+20. **index.js — /api/cloud/save-key blind trust:** a 200-with-`{ok:false}` Apps Script response was reported as saved. Now mirrors /api/cloud/save's body verification.
+21. **routes.js — API key exposure:** the wallet diagnostic returned first-4 + last-4 of the CoinDCX key; now tail-4 only (matches secrets.js convention).
+22. **index.js — API_TOKEN < 12 chars:** silently disabled service auth; now a loud boot warning explains the fix.
+23. **analysis.mjs — /compare crash + HTML escaping:** `data2.weekChange.toFixed()` threw when symbol B fell back to the Yahoo source (no change fields) — guards added on both symbols. FII/DII + IPO reports now escape Tavily-sourced summaries/titles/URLs for parse_mode:HTML.
+24. **Config hygiene:** `.gitignore` + `app/.gitignore` cover ml-service `store/`, `*.parquet`, `*.pkl`, bot `streak-data.json`; new `ml-service/.dockerignore` (store/tests/.env excluded from the image); `SETUP-v20.bat` resolves its payload correctly when run from inside the repo's `app/` folder; drifted `tools/windows/Start-AutoBrowser.bat` re-synced with the hardened v20.6 version; telegram-bot `check` script now covers all 10 modules; dead `cloud.mjs` deleted + unused `@google/generative-ai` dep removed; dead misleading `ML_SERVICE_URL` export removed from config.mjs; `manifest.json` orientation portrait→any (landscape trading terminal); CandleChart x-labels pinned to IST; api.ts poll helpers reuse the robust `getTimeInZone` (FIX M16 pattern) instead of the locale-dependent `toLocaleString` round-trip; sseCap `isLoopbackIp` actually strips IPv6-mapped/port forms (comment promised, code didn't).
+25. **Orphan cleanup:** `SelfImprovementPanel.tsx` was accidentally re-added by a later commit (v20.6.3 removed it; nothing imported it) — deleted again, the removal test is green once more.
+
+### Known-accepted (documented, not changed)
+
+- **Session token in localStorage + SSE `?session=` query param** — EventSource cannot send headers cross-origin (documented tradeoff); a full PIN-derived-key/short-lived-stream-ticket redesign would touch the working auth flow and is deferred as conscious work.
+- **secureStorage `VITE_ENCRYPTION_KEY` is bundle-visible** — client-side "AES-256 at rest" is obfuscation against devtools shoulder-surfing, not a real boundary (a PIN-derived key is the proper fix; deferred).
+- **`transferSpotToFutures` auto-margin** on live margin shortfall is journaled + deliberate, but remains a one-click wallet-movement side effect worth a future confirmation gate.
+
 ## v20.6.3 — SELF-IMPROVEMENT LOOP COMPLETELY REMOVED (panel + routes gone) + MANUAL FUTURES WALLET RECONNECT (2026-10-01)
 
 User reported: "Self Improvement Engine Isko Completely site se remove kardo site me abhi show kar raha hai … Expert Picks Top 5 Picks ye dono theek se kaam nhi kar rahe hai coindcx TAB me Symbols Discovery aur Trade Signal Analysis inn sabko Light weight freedom kardo accurate and higher accuracy strong signals ke liye aur AUTO trade hai jo jab browser karne par Full Access Control dedo … Coindcx Futures wallet read nhi ho raha hai". This pass:

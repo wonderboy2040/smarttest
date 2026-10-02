@@ -622,6 +622,17 @@ if (!!TG.token !== !!TG.chatId) {
   process.env.TG_CHAT_ID = '';
 }
 
+// v20.7.3: service auth requires API_TOKEN >= 12 chars (see requireAuth) —
+// a shorter token passes validateEnv() but every forked-bot loopback call
+// silently 401s. Warn loudly at boot instead of failing opaquely later.
+if (process.env.API_TOKEN && process.env.API_TOKEN.length < 12) {
+  console.warn(
+    `[wealth-ai] WARNING: API_TOKEN is ${process.env.API_TOKEN.length} chars — service auth (forked-bot loopback calls) ` +
+    'requires >= 12 chars and is currently DISABLED. Generate a longer token ' +
+    '(e.g. `node -e "console.log(crypto.randomUUID().replace(/-/g,\'\'))"`) and update BOTH app\\.env and the Telegram bot env.'
+  );
+}
+
 // OpenAI-compatible providers — body is forwarded almost as-is.
 const OPENAI_COMPAT = {
   groq: { url: 'https://api.groq.com/openai/v1/chat/completions', defModel: 'openai/gpt-oss-120b' },
@@ -1395,6 +1406,11 @@ app.get('/api/stream', (req, res) => {
   // nothing). ~33 subscribed keys × ~200B/frame at ~1Hz was ~0.3-0.4GB/day
   // of pure egress for price noise the UI's 800ms batcher smoothed away
   // anyway. A REAL move (>0.05%) still lands within its 1s slot.
+  // v20.7.3 FIX: the dead-tick branch used to overwrite the stored price
+  // with the UNSSENT price — a steady <0.05%/sec drift never crossed the
+  // threshold against the previous tick, so nothing was EVER pushed and
+  // clients displayed stale prices while the market drifted several %.
+  // The baseline must stay the last SENT price (clock refreshes only).
   const lastSent = {};
   const unsub = feedSubscribe((key, tick) => {
     if (_dead || !keys.has(key)) return;
@@ -1406,7 +1422,7 @@ app.get('/api/stream', (req, res) => {
       const price = Number(tick?.price);
       if (Number.isFinite(prevPrice) && prevPrice > 0 && Number.isFinite(price)
         && Math.abs(price - prevPrice) / prevPrice < 0.0005) {
-        lastSent[key] = { at: now, price }; // refresh the clock, push nothing
+        lastSent[key] = { at: now, price: prevPrice }; // refresh clock ONLY — keep last SENT price as baseline
         return;
       }
     }
@@ -2626,7 +2642,22 @@ app.post('/api/cloud/save-key', async (req, res) => {
       body: JSON.stringify({ action: 'saveKey', authToken: CLOUD_AUTH_TOKEN, groqKey, timestamp: Date.now() }),
       signal: AbortSignal.timeout(10000),
     });
-    return res.json({ ok: upstream.ok });
+    // v20.7.3 FIX: mirror the /api/cloud/save verification — the Apps Script
+    // can return HTTP 200 with { ok:false } (silent data loss if we trust
+    // the status code alone). Read the body once, parse, honour ok:false.
+    let body = null;
+    try {
+      const text = await upstream.text();
+      try { body = JSON.parse(text); } catch {
+        const match = text.match(/\{[\s\S]*\}/);
+        if (match) { try { body = JSON.parse(match[0]); } catch { /* not JSON */ } }
+      }
+    } catch { /* unreadable body */ }
+    const savedOk = upstream.ok && !(body && body.ok === false);
+    if (!savedOk) {
+      console.warn(`☁️ Cloud save-key: upstream rejected — HTTP ${upstream.status}, body: ${JSON.stringify(body).slice(0, 200)}`);
+    }
+    return res.json({ ok: savedOk, error: savedOk ? undefined : (body?.error || `HTTP ${upstream.status}`) });
   } catch (e) {
     return jsonError(res, 502, 'Cloud sync key save failed.', e);
   }

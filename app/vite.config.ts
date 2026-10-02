@@ -1,11 +1,39 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { readFileSync, writeFileSync } from 'node:fs';
+
+// v20.7.3 FIX (service-worker cache bloat): public/sw.js shipped a frozen
+// CACHE_VERSION ('smartai-pro-v20') across every deploy — content-hashed
+// chunks accumulated in CacheStorage forever (install/activate never re-ran
+// because the SW bytes never changed). This build hook stamps a unique
+// per-build suffix into dist/sw.js, so each deploy opens a FRESH cache and
+// the SW's activate-eviction deletes the previous one.
+const SW_BUILD_STAMP = `b${Date.now().toString(36)}`;
+function stampSwVersion() {
+  return {
+    name: 'stamp-sw-version',
+    apply: 'build' as const,
+    enforce: 'post' as const,
+    closeBundle() {
+      try {
+        const sw = 'dist/sw.js';
+        const src = readFileSync(sw, 'utf8');
+        if (src.includes("const CACHE_VERSION = 'smartai-pro-v20';")) {
+          writeFileSync(sw, src.replace(
+            "const CACHE_VERSION = 'smartai-pro-v20';",
+            `const CACHE_VERSION = 'smartai-pro-v20-${SW_BUILD_STAMP}';`,
+          ));
+        }
+      } catch { /* best-effort — dev/preview unaffected */ }
+    },
+  };
+}
 
 // https://vite.dev/config/
 export default defineConfig({
   base: './',
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), stampSwVersion()],
   esbuild: {
     ...(process.env.NODE_ENV === 'production' ? { drop: ['console', 'debugger'] } : {}),
     legalComments: 'none',

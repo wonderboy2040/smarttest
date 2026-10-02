@@ -51,7 +51,28 @@ echo  Port    : 9222 (Chrome DevTools)
 echo.
 echo [1/2] Automation browser start ho raha hai
 echo       + CoinDCX aur Dhan tabs khul rahe hain...
-start "" "%BROWSER%" --remote-debugging-port=9222 --user-data-dir="%PROFILE%" --no-first-run --no-default-browser-check --hide-crash-restore-bubble --window-size=1400,900 "https://coindcx.com/trade" "https://web.dhan.co"
+REM ============================================================
+REM v20.6 BROWSER HARDENING FLAGS
+REM   --disable-background-timer-throttling — minimized/background
+REM     tabs me setInterval/jsetTimeout slow nahi hota; signal-reaction
+REM     latency (PROTRADER_TICK_SEC=30) minimized rahe.
+REM   --disable-renderer-backgrounding — background tab ka compositor
+REM     pause nahi hota; page repaint fresh rehta hai.
+REM   --disable-backgrounding-occluded-windows — covered-by-other-
+REM     window Chrome ka tab throttle nahi hota.
+REM   --disable-features=CalculateNativeWinOcclusion — same as above,
+REM     newer Chrome ke liye (post-126).
+REM   --disable-hang-monitor — "Page unresponsive" prompt kaba nahi.
+REM   --disable-popup-blocking — automation alerts block na ho.
+REM   --disable-component-update — silent extension updates restart
+REM     nahi kar sakti.
+REM   --no-default-browser-check --no-first-run — already the case.
+REM Windows power plan: Sleep OFF, Hibernate OFF, "Plugged in" only.
+REM Screen-lock ke saath CDP chalta rehta hai (jo 9222 port open hai
+REM woh background me bhi requests serve karta hai), par tab ke
+REM re-render cycle ke liye power-plan sleep OFF hona chahiye.
+REM ============================================================
+start "" "%BROWSER%" --remote-debugging-port=9222 --user-data-dir="%PROFILE%" --no-first-run --no-default-browser-check --hide-crash-restore-bubble --window-size=1400,900 --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows --disable-features=CalculateNativeWinOcclusion --disable-hang-monitor --disable-popup-blocking --disable-component-update "https://coindcx.com/trade" "https://web.dhan.co"
 
 echo       5 sec wait (browser boot + port open)...
 timeout /t 5 /nobreak >nul

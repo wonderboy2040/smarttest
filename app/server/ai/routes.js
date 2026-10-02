@@ -720,7 +720,10 @@ export function registerAITradingRoutes(app, deps) {
       } catch (e) {
         trace.push({ rung: 'GET-body/ms/num', ok: false, error: String(e?.message || e).slice(0, 300), status: e?.status });
       }
-      res.json({ ok: true, connected, walletPath: WALLETS_PATH, apiKeyPrefix: creds.apiKey ? `${creds.apiKey.slice(0, 4)}…${creds.apiKey.slice(-4)}` : '—', elapsedMs: Date.now() - t0, trace, note: '401=auth/scope; 403=WAF; 404=endpoint moved; 5xx=server; ok:true+responseLength=0=no USDT balance' });
+      // v20.7.3 FIX: mask the tail only — the old first-4+last-4 exposure
+      // handed 8 chars of live key material to the client (the leading 4
+      // add nothing diagnostic; matches secrets.js masking convention).
+      res.json({ ok: true, connected, walletPath: WALLETS_PATH, apiKeyPrefix: creds.apiKey ? `…${creds.apiKey.slice(-4)}` : '—', elapsedMs: Date.now() - t0, trace, note: '401=auth/scope; 403=WAF; 404=endpoint moved; 5xx=server; ok:true+responseLength=0=no USDT balance' });
     } catch (e) { jsonError(res, 500, 'wallet diagnose failed', e); }
   });
 
