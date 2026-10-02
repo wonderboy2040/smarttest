@@ -749,17 +749,22 @@ export async function walletSnapshot() {
   const spotRows = Array.isArray(spot) ? spot : [];
   const spotINR = spotRows.find(w => w.currency === 'INR') || { free: 0, locked: 0, total: 0 };
   const spotUSDT = spotRows.find(w => w.currency === 'USDT') || { free: 0, locked: 0, total: 0 };
+  // v20.7.2: CoinDCX futures wallets can be USDT-margined OR INR-margined.
+  // The user's diagnostic confirmed their wallet returns INR — the old code
+  // only looked for USDT → showed 0 in the UI. Now surface BOTH.
   const futUSDT = futRows.find(w => w.currency === 'USDT') || { free: 0, locked: 0, total: 0, crossUserMargin: 0 };
+  const futINR = futRows.find(w => w.currency === 'INR') || { free: 0, locked: 0, total: 0, crossUserMargin: 0 };
   const equityINR = r2(
     (spotINR.total || 0)
     + (spotUSDT.total || 0) * usdInr
-    + (futUSDT.total || 0) * usdInr,
+    + (futUSDT.total || 0) * usdInr
+    + (futINR.total || 0),
   );
   return {
     ok: true,
     connected: coindcxConnected(),
     usdInr: r2(usdInr),
-    fxStale, // v10.14: true = static-84 or >10min-cached rate (equityINR is an estimate)
+    fxStale,
     spot: {
       inr: spotINR,
       usdt: spotUSDT,
@@ -768,16 +773,14 @@ export async function walletSnapshot() {
     },
     futures: {
       usdt: futUSDT,
+      inr: futINR,
       error: Array.isArray(fut) ? null : fut?.error || 'unavailable',
-      // v12.2: the key-scope verdict from the last probe (null before
-      // the first probe / on non-401 faults) — 'no_scope' = the API key
-      // itself is futures-less, 'ok' = only the wallets-GET auth is at
-      // fault. The UI badges this next to the error text.
       scope: lastFuturesKeyScope()?.verdict || null,
+      rows: futRows.filter(w => w.currency !== 'USDT' && w.currency !== 'INR' && w.total > 0).slice(0, 12),
     },
     equityINR,
-    // what the AGENT may deploy right now (futures margin first, spot INR as the fallback venue)
     deployableFuturesUSDT: r2(Math.max(0, (futUSDT.free || 0))),
+    deployableFuturesINR: r2(Math.max(0, (futINR.free || 0))),
     deployableSpotINR: r2(Math.max(0, (spotINR.free || 0))),
     fetchedAt: Date.now(),
   };

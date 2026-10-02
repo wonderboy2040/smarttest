@@ -699,6 +699,31 @@ export function registerAITradingRoutes(app, deps) {
     }
   });
 
+  // v20.7.1: FUTURES WALLET DIAGNOSTIC — GET /api/ai/wallet/diagnose
+  app.get('/api/ai/wallet/diagnose', async (_req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      const cd = await import('../mcp/coindcx.js');
+      const creds = cd.coindcxEnvCreds ? cd.coindcxEnvCreds() : null;
+      const connected = cd.coindcxConnected();
+      if (!connected || !creds) {
+        return res.json({ ok: false, error: 'CoinDCX not connected', connected });
+      }
+      const WALLETS_PATH = '/exchange/v1/derivatives/futures/wallets';
+      const trace = [];
+      const t0 = Date.now();
+      try {
+        const r = await cd.coindcxPrivateGET(WALLETS_PATH, creds.apiKey, creds.secret, {}, {
+          unit: 'ms', tsType: 'num', mode: 'body',
+        });
+        trace.push({ rung: 'GET-body/ms/num', ok: true, responseLength: Array.isArray(r) ? r.length : 0, sample: Array.isArray(r) && r.length > 0 ? r[0] : null });
+      } catch (e) {
+        trace.push({ rung: 'GET-body/ms/num', ok: false, error: String(e?.message || e).slice(0, 300), status: e?.status });
+      }
+      res.json({ ok: true, connected, walletPath: WALLETS_PATH, apiKeyPrefix: creds.apiKey ? `${creds.apiKey.slice(0, 4)}…${creds.apiKey.slice(-4)}` : '—', elapsedMs: Date.now() - t0, trace, note: '401=auth/scope; 403=WAF; 404=endpoint moved; 5xx=server; ok:true+responseLength=0=no USDT balance' });
+    } catch (e) { jsonError(res, 500, 'wallet diagnose failed', e); }
+  });
+
   // ============================================================
   // v20.7 EXECUTION STACK routes — Phase 2/4/5 control surface
   // ------------------------------------------------------------

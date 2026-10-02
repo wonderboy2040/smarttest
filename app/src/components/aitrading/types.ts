@@ -1185,15 +1185,14 @@ export interface WalletView {
   };
   futures: {
     usdt: WalletRow | { free: number; locked: number; total: number; crossUserMargin?: number | null };
+    inr?: WalletRow | { free: number; locked: number; total: number; crossUserMargin?: number | null };
     error: string | null;
-    /** v12.2: last key-scope probe verdict — 'no_scope' = the API key
-     *  itself is Global-Futures-less (spot works, derivatives 401),
-     *  'ok' = key auth passes derivatives (wallets-GET auth at fault),
-     *  null = probe not run / non-401 fault. */
     scope?: 'no_scope' | 'ok' | 'unknown' | null;
+    rows?: WalletRow[];
   };
   equityINR: number;
   deployableFuturesUSDT: number;
+  deployableFuturesINR?: number;
   deployableSpotINR: number;
   fetchedAt: number;
   error?: string;

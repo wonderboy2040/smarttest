@@ -336,10 +336,14 @@ describe('futures wallets + snapshot', () => {
     const snap = await walletSnapshot();
     expect(snap.ok).toBe(true);
     expect(snap.usdInr).toBe(84);
-    // 8400 + 10×84 + (6.169+0.5+0.2+0.1)×84 = 8400 + 840 + 585.4 ≈ 9825
-    expect(snap.equityINR).toBeGreaterThan(9500);
-    expect(snap.equityINR).toBeLessThan(10000);
+    // v20.7.2: equity now includes INR futures margin (1000) + spot INR
+    // (8400) + spot USDT (10×84=840) + fut USDT (6.869×84=577) = 10817
+    expect(snap.equityINR).toBeGreaterThan(10500);
+    expect(snap.equityINR).toBeLessThan(11000);
     expect(snap.deployableFuturesUSDT).toBeCloseTo(6.17, 1);
+    expect(snap.futures.inr).toBeTruthy();
+    expect(snap.futures.inr.total).toBe(1000);
+    expect(snap.deployableFuturesINR).toBe(1000);
     expect(snap.deployableSpotINR).toBe(8400);
   });
   it('walletSnapshot NEVER throws — a dead leg degrades with the reason', async () => {

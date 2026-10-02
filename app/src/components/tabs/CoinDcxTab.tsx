@@ -102,8 +102,9 @@ const WalletCard = memo(function WalletCard() {
   const inr = w?.spot?.inr as { free?: number; locked?: number } | undefined;
   const usdt = w?.spot?.usdt as { free?: number; locked?: number } | undefined;
   const fut = w?.futures?.usdt as { free?: number; locked?: number; total?: number; crossUserMargin?: number | null } | undefined;
+  const futINR = w?.futures?.inr as { free?: number; locked?: number; total?: number; crossUserMargin?: number | null } | undefined;
   const err = w?.spot?.error || w?.futures?.error;
-  const showReconnect = !!(w?.futures?.error) || !!(w?.futures?.scope === 'no_scope') || !!(w?.futures && !w.futures.usdt?.total);
+  const showReconnect = !!(w?.futures?.error) || !!(w?.futures?.scope === 'no_scope');
   const onReconnect = useCallback(async () => {
     if (reconnecting) return;
     setReconnecting(true);
@@ -173,6 +174,14 @@ const WalletCard = memo(function WalletCard() {
           {(fut?.locked != null && fut.locked > 0) && <div className="text-[9px] font-mono text-slate-500">locked {fut.locked.toFixed(2)}</div>}
           {(fut?.total != null && fut.total > 0) && <div className="text-[9px] font-mono text-slate-600">total {fut.total.toFixed(2)}</div>}
           {fut?.crossUserMargin != null && fut.crossUserMargin > 0 && <div className="text-[9px] font-mono text-amber-400/80">cross {fut.crossUserMargin.toFixed(2)}</div>}
+        </div>
+        {/* v20.7.2: INR-margined futures wallet — the user's diagnostic
+            confirmed their wallet returns INR. This card surfaces it. */}
+        <div className="bg-black/25 rounded-xl p-2.5 text-center">
+          <div className="text-[9px] font-black text-slate-500 tracking-wider">FUTURES MARGIN (INR)</div>
+          <div className="text-sm font-black font-mono text-violet-300">{futINR?.free != null ? `₹${futINR.free.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '—'}</div>
+          {(futINR?.locked != null && futINR.locked > 0) && <div className="text-[9px] font-mono text-slate-500">locked ₹{futINR.locked.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>}
+          {(futINR?.total != null && futINR.total > 0) && <div className="text-[9px] font-mono text-slate-600">total ₹{futINR.total.toLocaleString('en-IN', { maximumFractionDigits: 0 })}</div>}
         </div>
         <div className="bg-black/25 rounded-xl p-2.5 text-center">
           <div className="text-[9px] font-black text-slate-500 tracking-wider">TOTAL EQUITY (₹)</div>
