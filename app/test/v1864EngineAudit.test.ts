@@ -26,6 +26,8 @@ vi.mock('../server/ai/signals.js', () => ({ getSignals: vi.fn() }));
 vi.mock('../server/ai/browserAgent.js', () => ({
   browserConnect: vi.fn(async () => ({ connected: true, tabs: { coindcx: { found: true }, dhan: { found: true } } })),
   browserStatus: vi.fn(() => ({ connected: true, tabs: { coindcx: { found: true }, dhan: { found: true } } })),
+  cxPairUrl: vi.fn((pair: string, product: string = 'futures') =>
+    product === 'spot' ? `https://coindcx.com/trade/${pair}` : `https://coindcx.com/futures/${pair}`),
   cxEnsureTradePage: vi.fn(async () => { throw new Error('no browser'); }),
   cxSelectPair: vi.fn(async () => ({ ok: false })),
   cxPlaceOrder: vi.fn(async () => ({ ok: false })),

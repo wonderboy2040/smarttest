@@ -87,7 +87,7 @@ import { portfolioRedFlags, narratePortfolio } from './portfolioNarrative.js';
 import { manualReversalCycles } from './manualTrades.js';
 import {
   executeGlobalSignal, watchGlobalPositions, closeGlobalPosition,
-  globalFuturesMarketsView,
+  globalFuturesMarketsView, fetchGlobalQuotes,
 } from './globalFutures.js';
 // v10.5.3 REALTIME POSITIONS — SSE diff-push of open-position LTP/PnL
 // (replaces the 5s REST poll the console used to call "ULTRA STREAM").
@@ -154,6 +154,13 @@ import {
   updateExcursion, manualStats,
 } from './manualTrades.js';
 import { getTick as _getTick } from '../liveFeed.js';
+// v20.7.5 THE 15s SIGNAL RECHECK LOOP — every STRONG/ACTION board
+// signal re-validated against live prices every 15s (SL-through ·
+// adverse drift · T1/T2 touch) + staggered committee re-votes, with
+// Telegram pushes on flips/invalidations and a live panel view.
+import {
+  startSignalRecheckLoop, signalRecheckStatus, buildTickStoreResolver, recheckEnabled as _recheckEnabled,
+} from './signalRecheck.js';
 // v18.6.4: 30s TV-batch micro-cache for the tracker's India fallback —
 // the 5s poll no longer fires an uncached TV scanner POST per cycle.
 const _tvIndiaBatchCache = new Map();
@@ -162,7 +169,7 @@ const _tvIndiaBatchCache = new Map();
 // tick store keeps updating for OPEN trades with ZERO browser SSE
 // clients (app tab hidden, reconnect blip, feed restart).
 import {
-  ensureCryptoSubscribed, releaseCryptoSubscribed, cryptoClientUp, cryptoClientDown,
+  ensureCryptoSubscribed, releaseCryptoSubscribed, cryptoClientUp, cryptoClientDown, fetchCoinDcxTickers,
 } from '../cryptoStream.js';
 import { ensureInSubscribed, releaseInSubscribed, inClientUp, inClientDown } from '../inStream.js';
 import { ensureCxRtSubscribed, releaseCxRtSubscribed, cxRtClientUp, cxRtClientDown } from './cxRtStream.js';
@@ -200,6 +207,61 @@ import { mcpAuditView } from './mcpAudit.js';
 // v13.2 A4: real portfolio risk analytics (Sharpe/Sortino/correlation/rebalance)
 import { computePortfolioRiskAnalytics } from './riskAnalytics.js';
 import { getAssetsSnapshot } from '../mcp/portfolioSync.js';
+
+// ------------------------------------------------------------
+// v20.7.5: the 15s recheck loop's LTP resolver — tick store FIRST
+// (free, freshest when any SSE client/poller holds the symbol), then
+// each market's own CACHED batch chain (CoinDCX tickers are WS-first
+// upstream-cached · futures RT is 20s-cached · global quotes 5s-cached
+// · India TV batch rides a 30s micro-cache so the 15s cadence never
+// becomes a scanner hammer). Returns Map<symbol, {price, src}>.
+// ------------------------------------------------------------
+const _recheckTickHit = buildTickStoreResolver({ getTick: _getTick });
+const _recheckIndiaCache = { at: 0, rows: null };
+async function _recheckFetchLtp(market, symbols) {
+  const out = new Map();
+  const list = [...new Set((Array.isArray(symbols) ? symbols : []).map(s => String(s || '').toUpperCase()).filter(Boolean))];
+  if (!list.length) return out;
+  for (const s of list) {
+    const hit = _recheckTickHit(market, s);
+    if (hit) out.set(s, hit);
+  }
+  const missing = list.filter(s => !out.has(s));
+  if (!missing.length) return out;
+  try {
+    if (market === 'CRYPTO') {
+      // spot INR domain — matches the CRYPTO board's ₹ plans
+      const tickers = await fetchCoinDcxTickers();
+      for (const s of missing) {
+        const t = (Array.isArray(tickers) ? tickers : []).find(x => x?.market === `${s}INR`);
+        const px = t ? parseFloat(t.last_price) : NaN;
+        if (px > 0) out.set(s, { price: px, src: 'coindcx-tickers' });
+      }
+    } else if (market === 'FUTURES') {
+      const rows = await fetchFuturesPrices(); // 20s cache — free at 15s cadence
+      for (const s of missing) {
+        const r = (Array.isArray(rows) ? rows : []).find(x => x?.base === s);
+        if (r?.last > 0) out.set(s, { price: r.last, src: r.source || 'futures-rt' });
+      }
+    } else if (market === 'INDIA') {
+      if (!_recheckIndiaCache.rows || Date.now() - _recheckIndiaCache.at > 30_000) {
+        const rows = await fetchTVIndiaBatch(missing).catch(() => null);
+        if (rows && Object.keys(rows).length) { _recheckIndiaCache.rows = rows; _recheckIndiaCache.at = Date.now(); }
+      }
+      const rows = _recheckIndiaCache.rows || {};
+      for (const s of missing) {
+        if (rows[s]?.ltp > 0) out.set(s, { price: rows[s].ltp, src: 'tv-india' });
+      }
+    } else if (market === 'GLOBALFUTURES') {
+      const q = await fetchGlobalQuotes(); // 5s cache
+      for (const s of missing) {
+        const row = q?.get?.(s);
+        if (row?.price > 0) out.set(s, { price: row.price, src: row.source || 'global-rt' });
+      }
+    }
+  } catch { /* honest miss — the row stays PENDING and retries in 15s */ }
+  return out;
+}
 
 // ------------------------------------------------------------
 // v10.9 CONTROLLED TRADE APPROVAL — the Telegram webhook's SINGLE
@@ -486,11 +548,29 @@ export function registerAITradingRoutes(app, deps) {
   app.get('/api/ai/deep/:symbol', async (req, res) => {
     try {
       const market = normMarket(req.query.market);
-      const out = await getDeepSignal(req.params.symbol, market, depsForSignals());
+      // v20.7.5: ?fresh=1 — a USER-CLICKED 🔬 always runs the ensemble NOW
+      // (30s cache read bypassed, single-flight guarded server-side). The
+      // 15s modal auto-recheck polls WITHOUT the flag and rides the cache.
+      const fresh = String(req.query.fresh || '') === '1';
+      const out = await getDeepSignal(req.params.symbol, market, depsForSignals(), fresh ? { fresh: true } : {});
       if (!out?.ok) return res.status(404).json(out);
+      res.set('Cache-Control', 'no-store');
       res.json(out);
     } catch (e) {
       jsonError(res, 500, 'deep signal failed', e);
+    }
+  });
+
+  // ---------------- v20.7.5: 15s signal recheck (live watchlist) ----------------
+  // The STRONG/ACTION signals' live re-validation state — polled by the
+  // frontend panel at the SAME 15s cadence the loop runs. no-store: this
+  // IS the freshness surface.
+  app.get('/api/ai/signal-recheck', (_req, res) => {
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(signalRecheckStatus());
+    } catch (e) {
+      jsonError(res, 500, 'signal recheck status failed', e);
     }
   });
 
@@ -2001,6 +2081,24 @@ export function registerAITradingRoutes(app, deps) {
   // stop (unlike futures create_tpsl), so this closes the up-to-60s
   // SL latency window on violent candles.
   startInstaPushSink({ getSignals, depsForSignals, fastWatchSpot: () => watchPositions({ sendTelegram }), tgEnv: TG });
+
+  // v20.7.5 THE 15-SECOND SIGNAL RECHECK LOOP — the user's explicit ask:
+  // "AI ko sabhi trading 80+ signals (Strong + Action) har 15 sec me
+  // recheck karta rahe." Every STRONG/ACTION board signal across all
+  // four desks gets a live-price recheck each 15s tick (tick store →
+  // per-market cached batches — never a cold universe scan) and a
+  // staggered committee re-vote (~60s/symbol, ≤3/tick via the 30s-
+  // cached deep path). Flips / SL-throughs / grade drift push to
+  // Telegram (own 30-min dedupe) and the /api/ai/signal-recheck panel
+  // view. AI_SIGNAL_RECHECK=off disables. When no STRONG/ACTION
+  // signals exist the tick is a few map reads (free).
+  startSignalRecheckLoop({
+    getSignals,
+    getDeepSignal,
+    depsForSignals,
+    send: sendTelegram,
+    fetchLtp: _recheckFetchLtp,
+  });
 
   // v10.16 SECTION 2: the MANUAL TRADE monitor — 5s LTP sweep + 30s
   // conviction re-vote (cached deep path) + telegram pushes on flip /

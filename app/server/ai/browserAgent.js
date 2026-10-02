@@ -155,6 +155,15 @@ class CdpPage {
     await this.send('Page.navigate', { url });
     await new Promise((r) => setTimeout(r, 2500));
   }
+  // v20.7.4: live page URL (navigate decision + pair-page verify).
+  async currentUrl() {
+    try {
+      const res = await this.send('Runtime.evaluate', {
+        expression: 'location.href', returnByValue: true, timeout: 4000,
+      });
+      return String(res?.result?.value || '');
+    } catch { return ''; }
+  }
   async screenshot(name) {
     try {
       const res = await this.send('Page.captureScreenshot', { format: 'jpeg', quality: 60 });
@@ -164,13 +173,19 @@ class CdpPage {
   }
 }
 
+let _shotSaves = 0;
 function saveShot(name, b64) {
   try {
     if (!fs.existsSync(SHOT_DIR)) fs.mkdirSync(SHOT_DIR, { recursive: true });
     const file = path.join(SHOT_DIR, `${Date.now()}-${String(name).replace(/[^a-z0-9_-]/gi, '_')}.jpg`);
     fs.writeFileSync(file, Buffer.from(b64, 'base64'));
-    const all = fs.readdirSync(SHOT_DIR).filter((f) => f.endsWith('.jpg')).sort();
-    while (all.length > MAX_SHOTS) { try { fs.unlinkSync(path.join(SHOT_DIR, all.shift())); } catch {} }
+    // v20.7.4 FIX: readdirSync + sort + unlink loop HAR shot pe chal raha
+    // tha — event-loop freeze ka contributor (selfheal EVENT-LOOP FREEZE
+    // log). Ab prune sirf har 10ve save pe (first + every 10th).
+    if (++_shotSaves % 10 === 1) {
+      const all = fs.readdirSync(SHOT_DIR).filter((f) => f.endsWith('.jpg')).sort();
+      while (all.length > MAX_SHOTS) { try { fs.unlinkSync(path.join(SHOT_DIR, all.shift())); } catch {} }
+    }
     return path.basename(file);
   } catch { return null; }
 }
@@ -290,8 +305,28 @@ const DOM_HELPERS = `
 
 // ---------------- CoinDCX in-page operations ----------------
 const CX_OPEN_URL = 'https://coindcx.com/trade';
+// v20.7.4 FIX: FUTURES desk ka official URL /futures/{PAIR} hai
+// (user-verified live: https://coindcx.com/futures/B-ETH_USDT). Purana
+// code /trade/{B-PAIR_USDT} spot URL kholta tha jahan na futures order
+// panel hota hai na wahi search box — "select-pair: search box nahi
+// mila" error ka root cause yahi tha.
+export function cxPairUrl(pair, product = 'futures') {
+  const p = String(pair || '').toUpperCase();
+  return product === 'spot'
+    ? `https://coindcx.com/trade/${p}`
+    : `https://coindcx.com/futures/${p}`;
+}
 const CX_STYLES = {
-  searchBox: ['input[data-testid*="search" i]', 'input[placeholder*="search" i]', '[class*="Search"] input', '[class*="search"] input'],
+  searchBox: [
+    'input[data-testid*="search" i]',
+    'input[placeholder*="search" i]',
+    '[class*="Search"] input',
+    '[class*="search"] input',
+    '[class*="pair" i] input[type="text"]',
+    '[class*="symbol" i] input[type="text"]',
+    'input[type="search"]',
+    'input[type="text"]', // v20.7.4 last resort: pehla visible text input (dropdown verify baad me)
+  ],
   pairItem: null, // text matched
   limitBtn: null, // text "Limit"
   priceInput: ['input[name="price"]', 'input[placeholder*="price" i]', '[class*="order"] input[type="text"]', '[class*="Price"] input'],
@@ -340,17 +375,43 @@ function cxHealthScript() {
 }
 
 // Search a pair and select it in the pair picker.
+// v20.7.4 FIX: pehle URL check — agar tab PEHLE SE hi us pair ke
+// direct page par hai (coindcx.com/futures/B-ETH_USDT) to wahan
+// koi search box hota hi nahi hai. Pair already selected hai; sirf
+// order panel ka alive hone verify karo aur seedha return karo.
+// Search-box flow sirf tab chalega jab URL me pair nahi mila.
 function cxSelectPairScript(pair) {
   return `
     ${DOM_HELPERS}
     try {
-      const box = bySelOrText(${JSON.stringify(selOverride('coindcx', 'searchBox') || CX_STYLES.searchBox)}, null);
-      if (!box) throw new Error('search box nahi mila');
+      const want = ${JSON.stringify(pair.toUpperCase())};
+      const wantTok = want.replace(/[^A-Z0-9]/g, '');
+      const urlTok = (location.pathname.split('/').pop() || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      // ---- DIRECT PAIR PAGE: search box exists hi nahi — verify panel ----
+      if (urlTok && wantTok && (urlTok === wantTok || urlTok.includes(wantTok) || wantTok.includes(urlTok))) {
+        const panel = await waitFor(() => {
+          const buy = $$('button, div[role="button"]').filter((el) => vis(el) && /^(buy|long)\\b/i.test((el.textContent || '').trim()))[0] || null;
+          const sell = $$('button, div[role="button"]').filter((el) => vis(el) && /^(sell|short)\\b/i.test((el.textContent || '').trim()))[0] || null;
+          const px = $$('input').find((el) => vis(el) && /price|entry|amount|qty/i.test(el.placeholder || el.name || el.getAttribute('aria-label') || '')) || null;
+          return (buy || sell || px) || null;
+        }, { timeout: 12000, poll: 600, label: 'order panel (direct pair page)' });
+        return JSON.stringify({ ok: true, pair: want, picked: 'url-direct: ' + location.pathname, panelFound: true, url: location.href });
+      }
+      // ---- FALLBACK: search-box flow (spot/old UI) ----
+      let box = bySelOrText(${JSON.stringify(selOverride('coindcx', 'searchBox') || CX_STYLES.searchBox)}, null);
+      if (!box) {
+        // v20.7.4: kai modern UIs me search input ek trigger (button/div)
+        // peeche chhupa hota hai — pehle use kholo, phir input dhoondo.
+        const trigger = $$('[class*="search" i], [class*="pair-select" i], [data-testid*="search" i]').filter(vis)[0]
+          || byText('button, div, span', /^\\s*search\\b/i);
+        if (trigger) { clickEl(trigger); await sleep(700); }
+        box = bySelOrText(${JSON.stringify(selOverride('coindcx', 'searchBox') || CX_STYLES.searchBox)}, null);
+      }
+      if (!box) throw new Error('search box nahi mila — URL me pair bhi nahi tha (pair page kholo ya selectors update karo: server/data/browser-selectors.json)');
       clickEl(box); await sleep(400); box.focus();
       setVal(box, ${JSON.stringify(pair)});
       box.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', bubbles: true }));
       await sleep(700);
-      const want = ${JSON.stringify(pair.toUpperCase())};
       const item = await waitFor(() => {
         const cands = $$('[class*="dropdown"] [class*="item"], [class*="result"], [role="option"], [class*="pair"], [class*="symbol"], [class*="suggestion"] li, [class*="suggestion"] div')
           .filter((el) => vis(el));
@@ -630,7 +691,23 @@ export function browserStatus() {
 }
 
 export async function cxEnsureTradePage(pairUrlHint) {
+  // v20.7.4 FIX: pageFor() createUrl sirf tab MISSING hone pe use karta
+  // hai — existing CoinDCX tab jis page par chhoda gaya ho wahi rehta
+  // tha (dashboard / purana spot page), phir cxSelectPair wahan search
+  // box dhoondhta rehta tha. Ab live URL check karke tab ko TARGET pair
+  // page par navigate karo (futures: /futures/B-PAIR_USDT).
   const page = await pageFor('coindcx', { createUrl: pairUrlHint || CX_OPEN_URL });
+  const target = String(pairUrlHint || CX_OPEN_URL);
+  try {
+    const wantTok = String(target).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const pairTok = (target.split('/').pop() || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const cur = await page.currentUrl();
+    const curTok = String(cur || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    // normalize kiye gaye current URL me target ka pair token na mile → navigate
+    if (!(pairTok && curTok.includes(pairTok)) && curTok !== wantTok) {
+      await page.navigate(target);
+    }
+  } catch { /* honest degrade — select-pair stage verify karega */ }
   return page;
 }
 

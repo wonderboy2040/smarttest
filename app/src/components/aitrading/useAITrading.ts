@@ -31,6 +31,10 @@ export interface DeepSignalResult {
   ltf?: LtfSnapshot | null;
   edge?: EdgeStats | null;
   priceSource?: string | null;
+  /** v20.7.5: server compute-time stamp — the deep modal's freshness
+   *  chip + 15s auto-recheck cadence read this (fresh=1 runs compute
+   *  NOW; cached answers carry the original compute time). */
+  recheckedAt?: number | null;
   error?: string;
 }
 
@@ -375,9 +379,15 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
 
   // v6.3 PRO: deep single-symbol analysis (every model vote, fresh run,
   // AI Council note) — powers the 🔬 button on each signal card.
-  const fetchDeep = useCallback(async (symbol: string, market: 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES'): Promise<DeepSignalResult> => {
+  // v20.7.5: `fresh` (default ON for user clicks) adds ?fresh=1 — the
+  // server BYPASSES its 30s deep cache and runs the ensemble NOW. The
+  // "deep analysis galat/purana data dikha rahi thi" report was exactly
+  // this: a cached answer older than the board card it sat next to.
+  // The 15s modal auto-recheck calls with fresh=false and rides the cache.
+  const fetchDeep = useCallback(async (symbol: string, market: 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES', opts?: { fresh?: boolean }): Promise<DeepSignalResult> => {
     try {
-      const r = await apiFetch(`${getProxyBase()}/api/ai/deep/${encodeURIComponent(symbol)}?market=${market}&t=${Date.now()}`, {
+      const freshQ = (opts?.fresh !== false) ? '&fresh=1' : '';
+      const r = await apiFetch(`${getProxyBase()}/api/ai/deep/${encodeURIComponent(symbol)}?market=${market}${freshQ}&t=${Date.now()}`, {
         signal: AbortSignal.timeout(40000),
       });
       const j = await r.json().catch(() => ({ ok: false, error: 'bad response' }));

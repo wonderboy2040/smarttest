@@ -1,5 +1,86 @@
 # Changelog
 
+## v20.7.5 — 15s SIGNAL RECHECK LOOP + DEEP ENSEMBLE ANALYSIS ACCURACY UPGRADE (2026-10-02)
+
+The user's two asks, delivered: (1) "AI ko sabhi trading 80+ signals — Strong or Action — har 15 sec recheck karta rahe", (2) "Deep Ensemble Analysis galat/purana info dikhati hai — superintelligence se upgrade karo". **2873 tests / 163 files 100% green · tsc clean · vite build OK (SW cache freshly stamped `bmuqz0tqu`).**
+
+### NEW 1 — THE 15-SECOND SIGNAL RECHECK LOOP (`server/ai/signalRecheck.js`, NEW module)
+
+Every **STRONG + ACTION** board signal (the "80+ AI score" tier + the tradeable tier) across **all four desks** (CRYPTO · FUTURES · INDIA · GLOBALFUTURES) is now re-validated every **15 seconds**:
+
+- **Watchlist** — built from the CACHED boards (`getSignals` with `warmOnly: true` — never triggers a cold universe scan; a stopped board = a paused watch, by design).
+- **Live price recheck (every 15s)** — per-symbol LTP resolved tick-store-first (free, freshest) with per-market cached-batch fallbacks wired in routes.js (CoinDCX tickers WS-first · futures RT 20s-cache · global quotes 5s-cache · India TV batch behind a 30s micro-cache so 15s cadence never hammers the scanner). Verdicts: **INVALIDATED** (live price through SL — the plan is dead, entry mat karo) · **WEAKENING** (>0.75×ATR adverse drift) · **TARGET_1/TARGET_2** (plan levels touched — opportunity freshness; the executors own fills) · **OK**.
+- **Staggered committee re-vote (~60s per symbol, ≤3 symbols/tick)** — the cached deep path re-votes the ensemble itself; side FLIPS and grade drift (STRONG→ACTION→WATCH) are caught against the board snapshot and the row's thesis fields (side/grade/conf/levels) refresh in place.
+- **Transition events** — NEW · INVALIDATED · FLIPPED · DEMOTED · PROMOTED · TARGET_1/2 · RECOVERED · DROPPED — land on the row's event log AND on **Telegram** (own 30-min per-symbol+event dedupe, the insta-push pattern).
+- **`GET /api/ai/signal-recheck`** — the live watchlist view (loop health + per-row state + event feed). `AI_SIGNAL_RECHECK=off` disables the loop (rows + status stay queryable).
+- Purity: selection/recheck/transition/format logic is pure + injected-deps (24 new tests in `test/signalRecheck.test.ts` — no live I/O).
+
+### NEW 2 — SIGNAL RECHECK PANEL (`src/components/aitrading/SignalRecheckPanel.tsx`, NEW)
+
+Board section `01r` on BOTH desks — polls the status endpoint at the same 15s cadence. Per row: desk tag · symbol · side · grade + AI score · live LTP + move% · state chip (problems sort FIRST) · plan levels · last-check age + check count · event log. Header chips: watched count · STRONG count · problem count · total checks · next-tick countdown · pause/resume. Event feed strip at the bottom.
+
+### UPGRADE 3 — DEEP ENSEMBLE ANALYSIS ACCURACY (the "galat info" fix, superintelligence edition)
+
+Root cause of "inaccurate/wrong info when opened": a 🔬 click could serve the **30s-cached** deep answer — computed before the board card the user is comparing it against — with no visible data age, no live recheck, and a 4-field indicator snapshot (rsi/adx/atr/vwap) that hid everything the committee actually read.
+
+- **`getDeepSignal` fresh-run support** — `opts.fresh` bypasses the 30s cache READ (single-flight guarded via the new `_deepInflight` map so double-clicks don't double-compute; results still write-through the cache for the auto-recheck). Route accepts `?fresh=1`; `fetchDeep` sends it on every user click. Exec paths keep the cached contract unchanged.
+- **15s self-recheck of the OPEN modal** (`useDeepAutoRecheck` in the NEW `src/components/aitrading/deepAnalysisExtras.tsx`) — while the modal is open the analysis re-runs every 15s (cache-riding); grade/side/confidence drift lands in a **VISIBLE transition log** ("STRONG LONG 82% → ACTION LONG 71%") instead of silently stale numbers. Stale responses are dropped by the same request-token discipline as the manual open.
+- **Freshness chips** — `AUTO-RECHECK 15s · next Xs` + `DATA Xs old` (green ≤20s / amber ≤60s / red beyond) + recheck counter. The payload now carries `recheckedAt`.
+- **FULL indicator transparency grid** (`DeepIndicatorGrid`) — replaced the 4-field snapshot: classic stack (RSI · ADX ±DI · MACD hist · Stoch · ATR · VWAP · Supertrend · BB %B · MFI · OBV slope · rel-vol · EMA 10/20/50/100/200 + stack bias · ROC) **plus the v20.7.4 confluence stack** (Fib swing + golden pocket + in-GP + bias · Volume Profile POC/VAH/VAL + price-vs-POC + value-area · chart patterns with direction + confidence · supply/demand zones with distance + in-zone · price-action CLV/body/bars/range-pos/bias). Missing fields render an honest '—'.
+- Both desks' modals upgraded (CoinDcxTab + IndiaIntradayTab); deep payload carries `recheckedAt` (DeepSignalResult type updated).
+
+### Misc
+
+- `signals.js` `__clearSignalCaches` also clears the fresh-run single-flight map (test-slate hygiene).
+- `mergeWatchlist` EXPIRED lifecycle fix — `expiredAt` is stamped on the FIRST expired pass (the naive order deleted the row immediately).
+- Version 20.7.4 → 20.7.5 (version.ts + package.json).
+
+## v20.7.4 — AUTO-TRADE FUTURES FIX + SMC v2 INDICATOR ENGINE (user-spec 9-indicator upgrade) (2026-10-02)
+
+User-reported live issues fixed + the full requested indicator stack added. **2849 tests / 162 files 100% green · tsc clean · vite build OK (SW cache freshly stamped).**
+
+### FIX 1 — AUTO-TRADE "select-pair: search box nahi mila" (HIGH, root cause found)
+
+- **Root cause**: `_placeBrowserCrypto` futures entries navigated to the SPOT URL `coindcx.com/trade/{pair}` — but the futures desk lives at `coindcx.com/futures/B-{SYM}_USDT` (user-verified live). On the correct futures page there IS no legacy search box, and `pageFor()` never navigated an EXISTING tab to the requested URL anyway (createUrl only applied when the tab was missing) — so the agent hunted a search box on whatever page the tab was left on and failed every entry.
+- **browserAgent.js**: new `cxPairUrl(pair, product)` builds the official futures/spot URL; `cxEnsureTradePage()` now reads the live page URL (`CdpPage.currentUrl()`) and NAVIGATES the tab to the target pair page when it isn't already there; `cxSelectPairScript` first checks `location.pathname` — on the direct pair page it skips the search entirely and just verifies the order panel is alive (12s wait). The legacy search-box fallback gained a search-trigger click step (modern UIs hide the input behind a button) + 4 more selector fallbacks.
+- **proTraderAuto.js**: futures desk now opens `https://coindcx.com/futures/{pair}`; spot keeps `/trade/`.
+
+### FIX 2 — "tick overlap" spam + repeated ENTRY FAILED loop (HIGH)
+
+- Browser-stage FAILED entries now put the symbol on a cooldown of `min(cooldownMin, 10)` minutes — previously only CLOSED trades cooled down, so the same ETH signal retried (and failed) EVERY 30s tick, flooding the console and keeping the tick busy (the exact user log pattern).
+- The tick-overlap skip log is now 5-minute throttled instead of firing every overlapping tick.
+
+### FIX 3 — EVENT-LOOP FREEZE (selfheal "worst lag 5.5s") contributors removed (MEDIUM)
+
+- **proTraderAuto journal cache**: `_journal()` did readFileSync + JSON.parse on EVERY `_trades()` call (4-6× per tick, 400-trade journal = MB-scale). Now an mtime-checked in-memory cache — statSync (microseconds) validates freshness, external writes still invalidate instantly.
+- **Screenshot prune made lazy**: `saveShot()` ran readdirSync + sort + unlinkSync on EVERY screenshot; now prunes only every 10th save.
+
+### UPGRADE — the user-spec 9-indicator stack (signal accuracy)
+
+Requested: Price Action · Fibonacci · SMC · Liquidity Sweep · Volume Profile · Chart Patterns · FVG · ICT · EMA · Supply & Demand. All now live in the ensemble:
+
+- **`lib/indicators.js`** (all pure, no look-ahead):
+  - `fibonacciRetracement()` — auto-swing leg detection, full 0.236-0.786 grid + 1.272/1.618 extensions, GOLDEN POCKET (0.618-0.65) zone + bias.
+  - `volumeProfile()` — VPVR binned typical-price×volume, POC + 70% Value Area (VAH/VAL), price-vs-POC side.
+  - `detectChartPatterns()` — multi-bar geometry on fractal pivots: Double Top/Bottom (forming vs neckline-broken confirmed), Head & Shoulders + inverse, Ascending/Descending Triangle, Bull/Bear Flag (impulse + tight drift).
+  - `supplyDemandZones()` — base (2-5 small bodies) + impulse-leaves-base footprint, demand/supply classification, freshness (untouched) + retest-in-zone flags. Base smallness is IMPULSE-relative (body ≤ 25% of impulse body).
+  - `priceActionStats()` — Close-Location-Value, body/range ratio, up/down bar count, range position, trend bias.
+  - `computeIndicatorsFromCandles()` now also emits `ema100`/`ema200` (macro layer), `chartPatterns`, `fib`, `volumeProfile`, `supplyDemand`, `priceAction`.
+- **`lib/smc.js` v2** (full ICT stack):
+  - `swingStructure()` — walking fractal swing map (HH/HL/LH/LL labels) with **BOS** (break of structure, continuation) and **CHoCH** (change of character, first hard reversal tell) events, no-look-ahead pivot confirmation.
+  - `equalLevels()` — EQH/EQL resting liquidity pools (stop clusters = price magnets).
+  - `premiumDiscount()` — ICT dealing-range read (premium/equilibrium/discount + bias).
+  - `ictKillZone()` — Asia / London-open / NY-AM session windows on the IST clock (ms or seconds).
+  - `smcVote()` upgraded — confluence now = sweep + OB + FVG + BOS/CHoCH + EQH/EQL pools + premium/discount + kill-zone confidence boost; cap raised 85 → 88 for full stacks.
+- **`models.js` — 12th ensemble seat `StructurePro` (w 1.15)**: BOS/CHoCH direction + Fib golden-pocket continuation + VP POC side + S/D zone retest + EMA100/200 macro alignment + premium/discount R:R amplification. Abstains honestly without candles.
+- **`expertPicks.js`** — 8th expert factor "Structure / Fib / VP" (w 0.09; trend/momentum/SMC rebalanced, sum exactly 1.0), fed by `ctx.__structure` the same way `__smc` works.
+- **`signals.js`** — pass-2 revival now also revives the structure seat from LTF candles (same pattern as the SMC revival) and threads `__structure` into all 3 `expertScoreFactors` call sites.
+
+### Tests
+
+- New `test/indicatorsV2.test.ts` — 31 tests pinning Fib levels/golden pocket, VP POC/VA, all chart patterns (synthetic confirmed/forming cases), S&D zone detection + retest, price-action stats, BOS/CHoCH (trend + fresh reversal), EQH pools, premium/discount, IST kill zones, upgraded smcVote bounds, StructurePro abstain/bullish/bearish + registry integration.
+- Updated registry-count locks: aiEnsemble (11→12), v67-core (10→11 quant), v2Models (14→15 flag-on bus), expertPicks weights/factors (7→8), browserAgent mocks gained `cxPairUrl`.
+
 ## v20.7.3 — FULL-SITE DEEP RECHECK: 24 issues fixed (exec math, security, streams, ML leakage) (2026-10-02)
 
 Full-repo deep review (4 parallel audit passes: server core, server/ai, frontend, telegram-bot + ml-service + configs). **2818 tests / 161 files 100% green · tsc clean · vite build OK · routes check PASS · all .mjs/.py syntax clean.**

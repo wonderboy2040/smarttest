@@ -22,9 +22,11 @@
 //   * Pure gate/reversal functions are exported for tests.
 // ============================================================
 
-import { loadJSON, saveJSON } from '../lib/store.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { loadJSON, saveJSON, DATA_DIR } from '../lib/store.js';
 import {
-  browserConnect, browserStatus,
+  browserConnect, browserStatus, cxPairUrl,
   cxEnsureTradePage, cxSelectPair, cxPlaceOrder, cxClosePosition, cxReadPositions,
   dhanEnsurePage, dhanSelectScrip, dhanPlaceOrder, dhanClosePosition,
 } from './browserAgent.js';
@@ -125,10 +127,33 @@ export function updateProTraderConfig(patch = {}) {
   return next;
 }
 
+let _jCache = null;
+let _jMtime = -1;
 function _journal() {
-  return loadJSON(JOURNAL_FILE, { trades: [] }) || { trades: [] };
+  // v20.7.4 FIX: pehle har _trades() call readFileSync + JSON.parse
+  // kar raha tha (ek tick me 4-6 baar — 400-trade journal MB-scale
+  // ho sakta hai) — event-loop freeze ka contributor. Ab mtime-checked
+  // cache: statSync (microseconds) se file badli ya nahi verify hota,
+  // sirf badle par re-read hota hai (external writes — tests / dusra
+  // process — turant dikhte hain, TTL race nahi).
+  const p = path.join(DATA_DIR, JOURNAL_FILE);
+  try {
+    const m = fs.statSync(p).mtimeMs;
+    if (_jCache && m === _jMtime) return _jCache;
+    _jCache = loadJSON(JOURNAL_FILE, { trades: [] }) || { trades: [] };
+    _jMtime = m;
+  } catch {
+    // file abhi nahi bani — fallback load (JSON.parse + merge) ek hi baar
+    if (!_jCache) _jCache = loadJSON(JOURNAL_FILE, { trades: [] }) || { trades: [] };
+    _jMtime = -1;
+  }
+  return _jCache;
 }
-function _saveJournal(j) { saveJSON(JOURNAL_FILE, j); }
+function _saveJournal(j) {
+  _jCache = j;
+  saveJSON(JOURNAL_FILE, j);
+  try { _jMtime = fs.statSync(path.join(DATA_DIR, JOURNAL_FILE)).mtimeMs; } catch { _jMtime = -1; }
+}
 function _trades() { return _journal().trades || []; }
 
 // ---------------- IST clock ----------------
@@ -238,6 +263,7 @@ const _s = {
   log: [],
   busyPlacing: false,
   _ticking: false,        // v18.6.4 re-entrancy guard — overlapped ticks double-click the browser
+  _overlapLogAt: 0,       // v20.7.4 — overlap skip-log throttle (5 min)
   _noBrowserLogAt: 0,
   _lastStatusBroadcast: 0,
 };
@@ -350,9 +376,13 @@ async function _placeBrowserCrypto(sig, cfg, fxPre = null) {
   // tab toggle is skipped). Prices are USDT → stake converts ₹→USDT.
   // fxPre: the SAME rate _tryEntry stamped on the journal row (one fetch,
   // one truth — pass null to fetch fresh on standalone calls).
+  // v20.7.4 FIX: futures URL ab OFFICIAL futures desk hai —
+  // https://coindcx.com/futures/B-{SYM}_USDT (user-verified live).
+  // Purana /trade/{pair} spot URL galag page kholta tha jahan futures
+  // search box milta hi nahi tha ("select-pair: search box nahi mila").
   const fx = isFut ? (Number(fxPre) > 50 ? Number(fxPre) : await _usdInr()) : 1;
   const total = isFut ? Math.round((Number(cfg.stakeINR) / fx) * 1e6) / 1e6 : Number(cfg.stakeINR);
-  const page = await cxEnsureTradePage(`https://coindcx.com/trade/${pair}`);
+  const page = await cxEnsureTradePage(cxPairUrl(pair, isFut ? 'futures' : 'spot'));
   const pick = await cxSelectPair(page, pair);
   if (!pick?.ok) return { ok: false, stage: 'select-pair', detail: pick };
   const useMargin = !isFut && Number(cfg.cryptoLeverage) > 1; // futures page: leverage native, no margin-tab toggle
@@ -709,8 +739,13 @@ export async function proTraderTick(deps = {}, sendTelegram) {
   // waits (select-pair 20s + place-order 30s + per-position close 25s)
   // 30s se aage nikal sakte hain — overlapped ticks double browser
   // clicks + journal read-modify-write races karte the.
+  // v20.7.4: skip-log ab 5-min throttled — har tick repeat hone wale
+  // "tick overlap" lines console flood kar rahe the.
   if (_s._ticking) {
-    _log('skip', 'tick overlap — previous tick abhi bhi chal raha hai (browser CDP wait). Skip.');
+    if (Date.now() - (_s._overlapLogAt || 0) > 5 * 60_000) {
+      _s._overlapLogAt = Date.now();
+      _log('skip', 'tick overlap — previous tick abhi bhi chal raha hai (browser CDP wait). Skip.');
+    }
     return { ok: true, overlapped: true };
   }
   _s._ticking = true;
@@ -746,6 +781,13 @@ export async function proTraderTick(deps = {}, sendTelegram) {
     for (const t of _trades()) {
       const closedAt = t.closed?.ts || 0;
       cooldowns[t.symbol] = Math.max(cooldowns[t.symbol] || 0, closedAt + cfg.cooldownMin * 60_000);
+      // v20.7.4 FIX: browser-stage FAILED entry bhi symbol ko cool down
+      // karo (min(cooldownMin,10) min) — warna wahi signal HAR 30s tick pe
+      // fail hota rehta tha (user log: ENTRY FAILED ETH LONG har tick,
+      // tick-overlap skip spam ka doosra root cause).
+      if (t.status === 'FAILED' && t.ts) {
+        cooldowns[t.symbol] = Math.max(cooldowns[t.symbol] || 0, t.ts + Math.min(cfg.cooldownMin, 10) * 60_000);
+      }
     }
     const { best, evaluated } = pickProTraderCandidate(all, cfg, {
       existingSymbols: open.map((t) => t.symbol), cooldowns, now: Date.now(),

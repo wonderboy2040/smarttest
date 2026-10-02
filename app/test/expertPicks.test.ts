@@ -56,18 +56,25 @@ const bearRegime = { btcChange: -1.6, btcTrend: 'DOWN' };
 
 describe('expertScoreFactors — side + composite score', () => {
   it('bullish confluence → LONG side with a high score', () => {
-    const r = expertScoreFactors({ tv: bullTv(), ltf: bullLtf(), regime: bullRegime, market: 'CRYPTO', smc: { dir: 1, conf: 70 } });
+    const r = expertScoreFactors({ tv: bullTv(), ltf: bullLtf(), regime: bullRegime, market: 'CRYPTO', smc: { dir: 1, conf: 70 }, structure: { dir: 1, conf: 65 } });
     expect(r).not.toBeNull();
     expect(r!.side).toBe('LONG');
     expect(r!.score).toBeGreaterThanOrEqual(EXPERT_MIN_STRONG);
     // every factor label + weight present, values 0-100
-    expect(r!.factors).toHaveLength(7);
+    // v20.7.4: structure seat (BOS/CHoCH + Fib + VP + S&D) ka 8th factor
+    expect(r!.factors).toHaveLength(8);
     const wSum = r!.factors.reduce((a, f) => a + f.weight, 0);
     expect(Math.abs(wSum - 1)).toBeLessThan(0.001);
     for (const f of r!.factors) {
       expect(f.value).toBeGreaterThanOrEqual(0);
       expect(f.value).toBeLessThanOrEqual(100);
     }
+    // structure factor bhi same aligned/against math follow karta hai
+    const structAligned = expertScoreFactors({ tv: bullTv(), ltf: bullLtf(), regime: bullRegime, market: 'CRYPTO', structure: { dir: 1, conf: 70 } })!;
+    const structAgainst = expertScoreFactors({ tv: bullTv(), ltf: bullLtf(), regime: bullRegime, market: 'CRYPTO', structure: { dir: -1, conf: 70 } })!;
+    const sA = structAligned.factors.find(f => f.key === 'structure')!.value;
+    const sB = structAgainst.factors.find(f => f.key === 'structure')!.value;
+    expect(sA).toBeGreaterThan(sB);
   });
 
   it('bearish confluence → SHORT side (factors grade the short)', () => {
@@ -98,9 +105,13 @@ describe('expertScoreFactors — side + composite score', () => {
   });
 
   it('weights dict is the documented composite', () => {
-    expect(EXPERT_WEIGHTS.trend).toBe(0.25);
-    expect(EXPERT_WEIGHTS.momentum).toBe(0.20);
-    expect(EXPERT_WEIGHTS.smc).toBe(0.15);
+    // v20.7.4: structure seat added — trend/momentum/smcs rebalanced, sum still 1.0
+    expect(EXPERT_WEIGHTS.trend).toBe(0.23);
+    expect(EXPERT_WEIGHTS.momentum).toBe(0.18);
+    expect(EXPERT_WEIGHTS.smc).toBe(0.13);
+    expect(EXPERT_WEIGHTS.structure).toBe(0.09);
+    const sum = Object.values(EXPERT_WEIGHTS).reduce((a, b) => a + b, 0);
+    expect(Math.abs(sum - 1)).toBeLessThan(0.001);
   });
 });
 

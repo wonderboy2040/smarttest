@@ -22,7 +22,7 @@ import {
 // promotion. Flag AI_INDIA_FULL_UNIVERSE=off reverts to the static base.
 import { tieredScanUniverse, absorbScanRows, fullIndiaUniverseEnabled, boardUniverseOverrides } from './indiaUniverse.js';
 import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandles } from './futures.js';
-import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfConfluenceEnabled, tapeVote, meshModelsEnabled } from './models.js';
+import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfConfluenceEnabled, tapeVote, meshModelsEnabled, structurePro } from './models.js';
 // v11.6 MESH-BACKED SEATS — the MCP mesh finally votes on trade
 // decisions (Phase 1A), shadow-gated (Phase 2) + honesty-gated (1B)
 // + correlation-discounted (1C), warmed at T3 cadence only (Phase 3).
@@ -169,6 +169,24 @@ function cacheSet(key, payload) {
     if (oldest === undefined) break;
     _cache.delete(oldest);
   }
+}
+
+// v20.7.5 DEEP FRESH-RUN single-flight: a user-clicked 🔬 with ?fresh=1
+// bypasses the 30s cache READ, but two concurrent fresh clicks (double
+// click, modal + 15s auto-recheck racing the manual open) must never run
+// the full deep compute twice for the same symbol — the second caller
+// joins the first's in-flight promise (the board's _boardInflight
+// pattern, scoped to the deep path).
+const _deepInflight = new Map(); // cacheKey → Promise
+function _deepSingleFlight(cacheKey, computeFn) {
+  const running = _deepInflight.get(cacheKey);
+  if (running) return running;
+  const p = (async () => {
+    try { return await computeFn(); }
+    finally { _deepInflight.delete(cacheKey); }
+  })();
+  _deepInflight.set(cacheKey, p);
+  return p;
 }
 
 // ---------------- Yahoo daily candles (for index/spot TA) ----------------
@@ -1479,6 +1497,19 @@ async function _computeBoard(mkt, deps, opts = {}) {
         votes.push({ id: 'smc', name: reg.name, role: reg.role, weight: reg.weight * (adaptiveMul?.smc?.mul ?? 1) * regimeMulFor(regimeLabel, 'smc'), ...smcV });
         ctx.__smc = { dir: smcV.dir, conf: smcV.conf };
       }
+      // v20.7.4 STRUCTURE revival — BOS/CHoCH + Fib golden pocket + VP
+      // POC + S/D zones ka full candle-geometry vote (pass-1 me TV-only
+      // ctx pe abstain hota tha; yahan LTF candles se zinda hota hai).
+      if (Array.isArray(ctx.candles) && ctx.candles.length >= 60) {
+        const structV = structurePro({ ...ctx, ind: { ...li } });
+        if (structV && structV.dir !== 0 && (structV.conf || 0) > 0) {
+          const reg2 = MODELS.find(m => m.id === 'structure');
+          const idx2 = votes.findIndex(v => v.id === 'structure');
+          if (idx2 >= 0) votes.splice(idx2, 1);
+          votes.push({ id: 'structure', name: reg2.name, role: reg2.role, weight: reg2.weight * (adaptiveMul?.structure?.mul ?? 1) * regimeMulFor(regimeLabel, 'structure'), ...structV });
+          ctx.__structure = { dir: structV.dir, conf: structV.conf };
+        }
+      }
       // pattern / sr / volume / volatility second vote from the LTF set
       const relVol = li.avgVolume20 > 0 ? (li.volume || 0) / li.avgVolume20 : null;
       const ltfCtx = {
@@ -1519,7 +1550,7 @@ async function _computeBoard(mkt, deps, opts = {}) {
     // AI score that ranks the candidate pool.
     const expert = expertScoreFactors({
       tv: ctx.__tv ? { ...ctx.__tv, ltp: ctx.ltp } : { ...ctx.ind, ltp: ctx.ltp },
-      ltf: ctx.__ltfInd, regime, market: mkt, smc: ctx.__smc,
+      ltf: ctx.__ltfInd, regime, market: mkt, smc: ctx.__smc, structure: ctx.__structure,
     });
     const pre = computeSuperScore({
       engineConf: consensus.confidence,
@@ -1893,7 +1924,7 @@ async function _computeBoard(mkt, deps, opts = {}) {
       // expert factors re-shape when the council flipped the side
       const expert = (c.expert && c.expert.side === consensus2.side) ? c.expert : expertScoreFactors({
         tv: c.ctx.__tv ? { ...c.ctx.__tv, ltp: c.ctx.ltp } : { ...c.ctx.ind, ltp: c.ctx.ltp },
-        ltf: enr?.ltfInd ?? c.ctx.__ltfInd ?? null, regime, market: mkt, smc: c.ctx.__smc,
+        ltf: enr?.ltfInd ?? c.ctx.__ltfInd ?? null, regime, market: mkt, smc: c.ctx.__smc, structure: c.ctx.__structure,
       });
       // ----------------------------------------------------------------
       // v20.5 SUPERINTELLIGENCE 3-SOURCE BLEND — when the LLM council is
@@ -2251,12 +2282,26 @@ export async function getDeepSignal(symbol, market, deps, opts = {}) {
   const mkt = raw === 'CRYPTO' ? 'CRYPTO' : raw === 'FUTURES' ? 'FUTURES' : raw === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : 'INDIA';
   const sym = String(symbol || '').toUpperCase().replace(/[^A-Z0-9\-]/g, '');
   if (!sym) return { ok: false, reason: 'symbol required' };
-  // optionsCtx changes which models participate (OptionsFlow) — cache
-  // the two flavors separately so /api/ai/options doesn't serve the
-  // board flavor's consensus (or vice versa) within the 30s TTL.
+  // v20.7.5 FRESH-RUN SUPPORT: the user's "deep ensemble analysis galat
+  // purana data dikha rahi hai" report had a real root cause — a 🔬 click
+  // could serve the 30s-cached answer (prices/votes up to half a minute
+  // old, computed BEFORE the board card the user is comparing against).
+  // opts.fresh → the cache READ is skipped and a brand-new ensemble run
+  // computes NOW (single-flight guarded so double-clicks don't double-
+  // compute; the result still WRITES the cache for the 15s auto-recheck
+  // that follows). The exec paths keep the cached contract (unchanged).
+  const wantFresh = opts?.fresh === true;
   const cacheKey = `deep:${mkt}:${sym}${opts?.optionsCtx ? ':opt' : ''}`;
-  const cached = cacheGet(cacheKey, 30_000);
-  if (cached) return cached;
+  if (!wantFresh) {
+    const cached = cacheGet(cacheKey, 30_000);
+    if (cached) return cached;
+  }
+  return _deepSingleFlight(cacheKey, () => _computeDeepSignal(sym, mkt, deps, opts, cacheKey));
+}
+
+/** v20.7.5: the deep-dive body, split out of getDeepSignal so the fresh
+ * path can single-flight it independently of the cached read. */
+async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
 
   const regime = await buildRegime(mkt === 'INDIA' ? 'INDIA' : mkt === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : 'CRYPTO');
   let ctx = null;
@@ -2683,7 +2728,7 @@ export async function getDeepSignal(symbol, market, deps, opts = {}) {
     try {
       const expertD = expertScoreFactors({
         tv: ctx.__tv ? { ...ctx.__tv, ltp: ctx.ltp } : { ...ctx.ind, ltp: ctx.ltp },
-        ltf: ltfInd ?? ctx.__ltfInd ?? null, regime, market: mkt, smc: ctx.__smc,
+        ltf: ltfInd ?? ctx.__ltfInd ?? null, regime, market: mkt, smc: ctx.__smc, structure: ctx.__structure,
       });
       // v20.5: deterministic fallback for the deep path's super score too.
       let aiConfD = verdict?.confidence ?? null;
@@ -2779,6 +2824,12 @@ export async function getDeepSignal(symbol, market, deps, opts = {}) {
     signal: built,
     indicators: ctx.ind,
     narrative,
+    // v20.7.5: freshness stamps — the deep modal shows exactly how old
+    // this ensemble run is (fresh=1 runs compute NOW; cached answers
+    // carry the compute time). The "inaccurate info" complaint is often
+    // a 30s-old answer read against a live price — the stamp makes the
+    // age visible instead of felt.
+    recheckedAt: Date.now(),
     ltf: ltfInd ? {
       label: mkt === 'INDIA' ? '15m' : '1h',
       rsi: ltfInd.rsi ?? null, macdHist: ltfInd.macd?.hist ?? null,
@@ -2879,6 +2930,10 @@ function _boardFallbackForExec(mkt, sym, opts = {}) {
 export function __clearSignalCaches() {
   _cache.clear();
   _boardInflight.clear();
+  // v20.7.5: in-flight fresh deep runs are part of the slate too — a
+  // prior test's single-flight promise must never leak into the next
+  // case's cacheKey.
+  _deepInflight.clear();
   // v12.4: board tests expect a CLEAN slate between cases — the signal
   // continuity memory (age/flip history) is part of that slate now
   // (a prior test's consensus for the same symbol would otherwise

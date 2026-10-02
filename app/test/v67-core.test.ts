@@ -246,14 +246,14 @@ describe('smc: liquidity sweep / order block / FVG', () => {
     expect(v.conf).toBe(0);
   });
 
-  it('runs inside the 10-model bus (registry integration)', () => {
+  it('runs inside the 11-model bus (registry integration)', () => {
     const votes = runQuantModels({
       market: 'CRYPTO', symbol: 'BTC', ltp: 100, changePct: 0, volume: 0,
       candles: mkCandles(Array.from({ length: 60 }, () => [100, 101, 99, 100])),
       ind: {}, regime: { btcChange: null }, options: null,
     });
     expect(votes.some(v => v.id === 'smc')).toBe(true);
-    expect(votes.length).toBe(10); // 10 quant models (aicouncil has no fn) — v9.3: +IntradayTape (abstains on crypto)
+    expect(votes.length).toBe(11); // 11 quant models (aicouncil has no fn) — v9.3: +IntradayTape · v20.7.4: +StructurePro
   });
 });
 

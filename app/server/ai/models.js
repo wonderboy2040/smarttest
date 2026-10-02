@@ -463,7 +463,76 @@ export function aiCouncilVoteFromVerdict(verdict) {
   return null;
 }
 
-import { smcVote } from './lib/smc.js';
+import { smcVote, swingStructure, premiumDiscount } from './lib/smc.js';
+import { fibonacciRetracement, volumeProfile, supplyDemandZones } from './lib/indicators.js';
+
+// ------------------------------------------------------------
+// 19. StructurePro — v20.7.4 THE STRUCTURE SEAT (SMC v2 stack)
+// ------------------------------------------------------------
+// User-spec indicator upgrade: BOS/CHoCH market structure + Fib
+// golden pocket + Volume-Profile POC/VA + Supply/Demand zone retests
+// + EMA100/200 macro alignment + premium/discount R:R — sab ek
+// weighted vote me. Reads the SAME LTF candles the SMC seat uses;
+// abstains honestly without candles (no double-counting TV rows).
+export function structurePro(ctx) {
+  const candles = Array.isArray(ctx?.candles) ? ctx.candles : null;
+  const ind = ctx?.ind || {};
+  if (!candles || candles.length < 60) {
+    return vote(0, 0, ['StructurePro: candles nahi — structure/Fib/VP/S&D sab candle-geometry hai (abstain)']);
+  }
+  const pts = [];
+  let score = 0, conf = 40;
+  const ltp = candles[candles.length - 1].close;
+
+  // 1) market structure — BOS/CHoCH (CHoCH = reversal, zyada weight)
+  const st = swingStructure(candles);
+  if (st?.event) {
+    const w = st.event.type === 'CHoCH' ? 1.6 : 1.1;
+    score += st.event.dir * w;
+    pts.push(`${st.event.type} ${st.event.dir > 0 ? 'bullish' : 'bearish'} — structure break @ ${Math.round(st.event.level)}`);
+  } else if (st?.trend) {
+    score += st.trend * 0.4;
+    pts.push(`structure ${st.trend > 0 ? 'up (HH/HL)' : 'down (LH/LL)'} — fresh break nahi`);
+  }
+
+  // 2) Fibonacci golden pocket (0.618-0.65 of the active leg)
+  const fib = fibonacciRetracement(candles);
+  if (fib?.inGoldenPocket) {
+    score += fib.direction === 'up' ? 1.0 : -1.0;
+    conf += 8;
+    pts.push(`Fib golden pocket ${Math.round(fib.goldenPocket.low)}–${Math.round(fib.goldenPocket.high)} of ${fib.direction}-leg — continuation zone`);
+  } else if (fib) {
+    pts.push(`Fib position ${fib.positionPct}% of ${fib.direction}-leg`);
+  }
+
+  // 3) volume profile — POC side + value area
+  const vp = volumeProfile(candles);
+  if (vp) {
+    if (vp.priceVsPoc === 'above') { score += 0.5; pts.push(`price above VP-POC ${Math.round(vp.poc)} — value support niche`); }
+    else if (vp.priceVsPoc === 'below') { score -= 0.5; pts.push(`price below VP-POC ${Math.round(vp.poc)} — value resistance upar`); }
+    if (vp.inValueArea) conf += 5;
+  }
+
+  // 4) supply/demand zone retest
+  const sd = supplyDemandZones(candles);
+  if (sd?.demand?.inZone) { score += 0.9; conf += 6; pts.push(`DEMAND zone ${Math.round(sd.demand.bottom)}–${Math.round(sd.demand.top)} me price — institutional support`); }
+  if (sd?.supply?.inZone) { score -= 0.9; conf += 6; pts.push(`SUPPLY zone ${Math.round(sd.supply.bottom)}–${Math.round(sd.supply.top)} me price — distribution`); }
+
+  // 5) EMA100/200 macro alignment
+  const e100 = Number(ind.ema100), e200 = Number(ind.ema200);
+  if (e100 > 0 && e200 > 0) {
+    if (e100 > e200 && ltp > e100) { score += 0.6; pts.push('EMA100>200 macro-up + price above EMA100'); }
+    else if (e100 < e200 && ltp < e100) { score -= 0.6; pts.push('EMA100<200 macro-down + price below EMA100'); }
+  }
+
+  // 6) premium/discount — R:R amplifier for the leaning side
+  const pd = premiumDiscount(candles);
+  if (pd?.zone === 'discount' && score > 0) { score += 0.4; pts.push(`discount zone (${pd.positionPct}% of range) — long R:R acha`); }
+  else if (pd?.zone === 'premium' && score < 0) { score -= 0.4; pts.push(`premium zone (${pd.positionPct}% of range) — short R:R acha`); }
+
+  const dir = score > 0.9 ? 1 : score < -0.9 ? -1 : 0;
+  return vote(dir, dir === 0 ? 30 : clamp(conf + Math.abs(score) * 15), pts);
+}
 
 // ------------------------------------------------------------
 // 11. IntradayTape — v9.3 THE 15-MINUTE TAPE SEAT
@@ -657,7 +726,8 @@ export const MODELS = [
   { id: 'sr', name: 'SRMatrix', role: 'Pivot levels + breakout / breakdown', weight: 1.1, fn: srMatrix },
   { id: 'options', name: 'OptionsFlow', role: 'PCR + max pain + IV percentile (contrarian)', weight: 1.0, fn: optionsFlow },
   { id: 'regime', name: 'MacroRegime', role: 'NIFTY/VIX gate (India) · BTC gate (crypto)', weight: 0.8, fn: macroRegime },
-  { id: 'smc', name: 'SmartMoneyICT', role: 'Liquidity sweeps + order blocks + FVG (SMC)', weight: 1.1, fn: smartMoneyICT },
+  { id: 'smc', name: 'SmartMoneyICT', role: 'Liquidity sweeps + order blocks + FVG + BOS/CHoCH + EQH/EQL + premium/discount (SMC v2)', weight: 1.1, fn: smartMoneyICT },
+  { id: 'structure', name: 'StructurePro', role: 'BOS/CHoCH structure + Fib golden pocket + Volume-Profile POC + Supply/Demand zones + EMA100/200 (v20.7.4)', weight: 1.15, fn: structurePro },
   // v10.5 MTF CONFLUENCE (Upgrade 1): flag ON → the tape seat is held
   // by IntradayTapeMTF (w 1.6, 5m/15m/1h confluence); flag OFF → the
   // exact v9.3 11-model board (plain IntradayTape w 1.3). Same seat —

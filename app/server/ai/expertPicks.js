@@ -71,9 +71,11 @@ export const DEFAULT_UNIVERSE_SIZE = 45;
 export const SPOT_LEVERAGE = 1;        // CoinDCX spot INR = no leverage
 
 // Score weights (sum = 1.0) — mirrors a prop desk's checklist.
+// v20.7.4: structure seat added (BOS/CHoCH + Fib + VP + S&D), trend
+// /momentum/smcs se thoda rebalance karke — total ab bhi exactly 1.0.
 export const EXPERT_WEIGHTS = {
-  trend: 0.25, momentum: 0.20, volume: 0.10, smc: 0.15,
-  volatility: 0.10, regime: 0.10, rr: 0.10,
+  trend: 0.23, momentum: 0.18, volume: 0.09, smc: 0.13, structure: 0.09,
+  volatility: 0.09, regime: 0.095, rr: 0.095,
 };
 
 // ---------------- universe discovery ----------------
@@ -313,7 +315,7 @@ export async function loadLtfCandles(base, market) {
  * factor is graded FOR that side (a coin in an uptrend with a squeeze
  * scores its breakout readiness, not its short-side risk).
  */
-export function expertScoreFactors({ tv, ltf, regime, market, smc = null }) {
+export function expertScoreFactors({ tv, ltf, regime, market, smc = null, structure = null }) {
   if (!tv && !ltf) return null;
   const ind = { ...(tv || {}), ...(ltf || {}) }; // LTF wins conflicts (fresher)
   const ltp = num(ind.ltp ?? ind.usdPrice) || num(tv?.usdPrice);
@@ -439,6 +441,11 @@ export function expertScoreFactors({ tv, ltf, regime, market, smc = null }) {
   const smv = smc && typeof smc === 'object' ? smc : null;
   const smcScore = smv ? smcAlignedValue(smv, side) : 50;
 
+  // v20.7.4 STRUCTURE factor — injected via structurePro (candles needed):
+  // BOS/CHoCH + Fib golden pocket + VP-POC + S/D zones ka net vote.
+  const stv = structure && typeof structure === 'object' ? structure : null;
+  const structureScore = stv ? smcAlignedValue(stv, side) : 50;
+
   // --- invert the side-shaped factors when SHORT (grade the SHORT) ---
   const sideTrend = side === 'LONG' ? trend : 100 - trend;
   const sideMomentum = side === 'LONG' ? momentum : 100 - momentum;
@@ -453,6 +460,7 @@ export function expertScoreFactors({ tv, ltf, regime, market, smc = null }) {
     EXPERT_WEIGHTS.momentum * sideMomentum +
     EXPERT_WEIGHTS.volume * sideVolume +
     EXPERT_WEIGHTS.smc * smcScore +
+    EXPERT_WEIGHTS.structure * structureScore +
     EXPERT_WEIGHTS.volatility * sideVolatility +
     EXPERT_WEIGHTS.regime * sideRegime +
     EXPERT_WEIGHTS.rr * sideRr,
@@ -463,6 +471,7 @@ export function expertScoreFactors({ tv, ltf, regime, market, smc = null }) {
     { key: 'momentum', label: 'Momentum', value: Math.round(sideMomentum), weight: EXPERT_WEIGHTS.momentum },
     { key: 'volume', label: 'Volume Flow', value: Math.round(sideVolume), weight: EXPERT_WEIGHTS.volume },
     { key: 'smc', label: 'SMC / ICT', value: Math.round(smcScore), weight: EXPERT_WEIGHTS.smc },
+    { key: 'structure', label: 'Structure / Fib / VP', value: Math.round(structureScore), weight: EXPERT_WEIGHTS.structure },
     { key: 'volatility', label: 'Volatility Fit', value: Math.round(sideVolatility), weight: EXPERT_WEIGHTS.volatility },
     { key: 'regime', label: 'Market Regime', value: Math.round(sideRegime), weight: EXPERT_WEIGHTS.regime },
     { key: 'rr', label: 'R:R Quality', value: Math.round(sideRr), weight: EXPERT_WEIGHTS.rr },

@@ -232,12 +232,12 @@ describe('Phase 3 — FundaCheck (India swing only)', () => {
 describe('Phase 4 — registry wiring + ensemble integration', () => {
   it('MODELS bus in this process matches the AI_ENABLE_V2_MODELS flag', () => {
     // vitest runs without the flag set → the exact production bus
-    expect(MODELS.length).toBe(11);
+    expect(MODELS.length).toBe(12); // v20.7.4: +StructurePro
     expect(MODELS.some(m => m.id === 'sentiment')).toBe(false);
     // flag-on coverage is enforced by the spawn test below
   });
 
-  it('AI_ENABLE_V2_MODELS=true spawns a 14-model bus with all 3 v2 seats', async () => {
+  it('AI_ENABLE_V2_MODELS=true spawns a 15-model bus with all 3 v2 seats', async () => {
     const { execFileSync } = await import('node:child_process');
     let out = '';
     try {
@@ -250,7 +250,7 @@ describe('Phase 4 — registry wiring + ensemble integration', () => {
     }
     const parsed = JSON.parse(out.trim().split('\n').pop());
     expect(parsed.v2).toBe(true);
-    expect(parsed.n).toBe(14);
+    expect(parsed.n).toBe(15); // v20.7.4: +StructurePro (12 base + 3 v2 seats)
     for (const id of V2_MODEL_IDS) expect(parsed.ids).toContain(id);
     // weights per the plan: 0.7 / 0.8 / 0.5
     expect(parsed.ids).toContain('sentiment');

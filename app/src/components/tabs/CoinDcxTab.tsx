@@ -54,6 +54,12 @@ import { PerpIntelPanel } from '../aitrading/PerpIntelPanel';
 // v10.10: DIRECT CoinDCX ultra-fast live prices (2s RT — spot INR +
 // USDT perps + USDC global equity perps) overlaid on every card.
 import { useCxLivePrices } from '../aitrading/useCxLivePrices';
+// v20.7.5 DEEP ANALYSIS ACCURACY UPGRADE — 15s self-recheck of the open
+// modal + freshness chips + the FULL indicator transparency grid.
+import { useDeepAutoRecheck, DeepFreshnessChip, DeepTransitionLog, DeepIndicatorGrid, type DeepModalState } from '../aitrading/deepAnalysisExtras';
+// v20.7.5 THE 15s SIGNAL RECHECK PANEL — every STRONG/ACTION signal's
+// live re-validation state (loop ki hi cadence par poll hota hai).
+import { SignalRecheckPanel } from '../aitrading/SignalRecheckPanel';
 import {
   SectionLabel, RegimeChips, BreadthStrip, FilterChips, RefreshCountdown, BoardSummary, DeskStatsStrip,
   FreshnessBadge, boardStaleClass,
@@ -218,7 +224,7 @@ export default memo(function CoinDcxTab() {
   // v6.13: SIMPLE (trade-flow only) / PRO (poora desk) — persist hota hai
   const [viewMode, setViewMode] = useDeskViewMode();
   const simple = viewMode === 'simple';
-  const [deep, setDeep] = useState<{ loading: boolean; signal?: AISignal; indicators?: Record<string, unknown>; narrative?: import('../aitrading/types').NarrativeView | null; ltf?: import('../aitrading/types').LtfSnapshot | null; edge?: import('../aitrading/types').EdgeStats | null; error?: string } | null>(null);
+  const [deep, setDeep] = useState<DeepModalState | null>(null);
 
   const board: SignalBoard | null = desk === 'FUTURES' ? futures : desk === 'GLOBAL' ? globalFut : crypto;
   const models = board?.models || crypto?.models || futures?.models || globalFut?.models || [];
@@ -368,11 +374,20 @@ export default memo(function CoinDcxTab() {
   const onDeep = useCallback(async (signal: AISignal) => {
     const id = ++deepReq.current;
     setDeep({ loading: true });
+    // v20.7.5: user click → fresh=1 (server 30s deep cache BYPASSED — the
+    // ensemble runs NOW; the open modal then self-rechecks every 15s).
     const r = await fetchDeep(signal.symbol, signal.market);
     if (deepReq.current !== id) return; // stale — dropped
-    if (r.ok && r.signal) setDeep({ loading: false, signal: r.signal, indicators: r.indicators, narrative: r.narrative, ltf: r.ltf, edge: r.edge });
+    if (r.ok && r.signal) setDeep({ loading: false, signal: r.signal, indicators: r.indicators, narrative: r.narrative, ltf: r.ltf, edge: r.edge, recheckedAt: r.recheckedAt ?? Date.now() });
     else setDeep({ loading: false, error: r.error || 'deep analysis unavailable' });
   }, [fetchDeep]);
+
+  // v20.7.5: the OPEN deep modal re-checks ITSELF every 15s (the user's
+  // every-15-sec ask applied to the analysis they are reading) — grade /
+  // side / confidence drift becomes a VISIBLE transition log instead of
+  // silent stale numbers.
+  const deepMarket = (deep?.signal?.market || (desk === 'FUTURES' ? 'FUTURES' : desk === 'GLOBAL' ? 'GLOBALFUTURES' : 'CRYPTO')) as 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES';
+  const deepAuto = useDeepAutoRecheck(deep, setDeep, fetchDeep, deepReq, deepMarket);
 
   // v6.12: Escape closes the deep modal (keyboard a11y)
   // v6.13.1: body scroll lock when deep modal is open
@@ -614,6 +629,11 @@ export default memo(function CoinDcxTab() {
         </div>
       </div>
 
+      {/* ============ 01r · 15s SIGNAL RECHECK (v20.7.5) ============ */}
+      <div id="cx-recheck" className="mt-4">
+        <SignalRecheckPanel />
+      </div>
+
       {/* ============ 01b · MORNING BRIEF (PRO) ============ */}
       {!simple && (
         <div id="cx-brief">
@@ -747,8 +767,16 @@ export default memo(function CoinDcxTab() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Deep analysis"
           onClick={() => { deepReq.current++; setDeep(null); }}>
           <div className="quantum-panel rounded-2xl p-5 max-w-2xl w-full max-h-[85vh] overflow-y-auto animate-scale-in" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-black text-amber-300 tracking-wide">🔬 DEEP ENSEMBLE ANALYSIS</h3>
+            <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm font-black text-amber-300 tracking-wide">🔬 DEEP ENSEMBLE ANALYSIS</h3>
+                {/* v20.7.5: freshness chips — data ki age ab visible hai + the
+                    open analysis self-rechecks every 15s (superintel fix for
+                    "galat/purana info" reads). */}
+                {!deep.loading && deep.signal && (
+                  <DeepFreshnessChip recheckedAt={deep.recheckedAt} nextInS={deepAuto.nextInS} rechecks={deepAuto.rechecks} />
+                )}
+              </div>
               <button onClick={() => { deepReq.current++; setDeep(null); }} className="quantum-btn-ghost px-2.5 py-1 rounded-lg text-xs font-black" aria-label="Close">✕</button>
             </div>
             {deep.loading && (
@@ -781,6 +809,9 @@ export default memo(function CoinDcxTab() {
                   <CandleChart symbol={deep.signal.symbol} market={deep.signal.market} ltp={deep.signal.ltp} plan={deep.signal.plan} defaultTf="15m" />
                 </div>
                 <EdgeBlock edge={deep.edge} />
+                {/* v20.7.5: the 15s self-recheck's VISIBLE transition log —
+                    grade/side/conf drift ab dikhta hai, silently stale nahi hota. */}
+                <DeepTransitionLog log={deepAuto.log} />
                 {deep.narrative && (
                   <div className="mt-3 bg-cyan-500/[0.05] border border-cyan-500/15 rounded-xl p-3" aria-label="regime narrative">
                     <div className="text-[10px] font-black text-cyan-300 tracking-wider mb-1.5">📖 EXPLAIN TICKER — {deep.narrative.title}</div>
@@ -792,27 +823,12 @@ export default memo(function CoinDcxTab() {
                     <div className="text-[10px] text-amber-300/90 mt-1.5 font-bold">⚠️ {deep.narrative.watch}</div>
                   </div>
                 )}
-                {deep.indicators && (
-                  <div className="mt-3 bg-black/25 rounded-xl p-3">
-                    <div className="text-[10px] font-black text-slate-500 tracking-wider mb-2">LIVE INDICATOR SNAPSHOT</div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px] font-mono">
-                      {['rsi', 'adx', 'atr', 'vwap'].map(k => {
-                        const v = (deep.indicators as Record<string, unknown>)[k];
-                        // v20.1 FIX (deep audit): the v18.5 IndiaIntradayTab
-                        // fix never got ported here — object indicators printed
-                        // the .adx subfield for EVERY key and non-numeric
-                        // strings rendered as NaN. Each key reads its own
-                        // field now (identical to the India desk's block).
-                        const val = v == null ? '—'
-                          : typeof v === 'number' ? v.toFixed(2)
-                          : typeof v === 'object'
-                            ? String((v as Record<string, unknown>)[k] ?? (v as Record<string, unknown>).value ?? (v as Record<string, unknown>).adx ?? '—')
-                            : String(v);
-                        return <div key={k} className="flex justify-between bg-black/30 rounded px-2 py-1"><span className="text-slate-500 uppercase">{k}</span><span className="text-slate-200">{val}</span></div>;
-                      })}
-                    </div>
-                  </div>
-                )}
+                {/* v20.7.5: FULL indicator transparency grid — classic stack
+                    + the v20.7.4 confluence stack (Fib GP · VP POC/VAH/VAL ·
+                    patterns · S/D zones · price action · EMA100/200). The
+                    old 4-field block (rsi/adx/atr/vwap) was "deep analysis"
+                    in name only. */}
+                <DeepIndicatorGrid ind={deep.indicators} />
               </>
             )}
           </div>
