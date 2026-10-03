@@ -342,6 +342,17 @@ async function pollOnce() {
       const b = _binanceLast.get(base);
       if (b && b.price > 0 && price > 0) _anchorRatio.set(base, price / b.price);
       const chg = parseFloat(t.change_24_hour) || 0;
+      // v20.7.8 [M2]: honest wire label. The old ternary stamped EVERY
+      // non-WS row 'coindcx-live' — a degraded leg (stale REST cache,
+      // 3-min-deep-stale, or a Binance×fx SYNTHETIC row) rode the venue-
+      // live ⚡ badge while being an approximation. coindcxOrders' trada-
+      // bility gate reads lastTickerSource() (batch-level) and is NOT
+      // affected; this is the SSE provenance field only.
+      const feedLabel =
+        t.feed === 'coindcx-spot-ws' ? 'coindcx-spot-ws'
+        : (tsrc === 'coindcx-rest-stale' || tsrc === 'coindcx-rest-deep-stale') ? tsrc
+        : t.__synthetic ? 'binance-fx-synth'
+        : 'coindcx-live';
       setTick(`IN_${base}`, {
         price,
         change: chg,
@@ -351,7 +362,7 @@ async function pollOnce() {
         time: batchAt,
         // 24h-ago price (crypto "today" = rolling 24h window)
         prevClose: (chg > -100) ? price / (1 + chg / 100) : undefined,
-      }, t.feed === 'coindcx-spot-ws' ? 'coindcx-spot-ws' : 'coindcx-live');
+      }, feedLabel);
     }
   } catch {
     // v11.3: REST dark AND the chain empty — the official spot-WS book

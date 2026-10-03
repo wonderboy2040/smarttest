@@ -27,6 +27,31 @@
  *  intraday stream's crypto watch symbols). */
 export function liveSourceBadge(src?: string | null): { label: string; cls: string; title: string } {
   const s = String(src || '');
+  // v20.7.8 [M2]: DEGRADED CoinDCX legs FIRST — these start with 'coindcx'
+  // and must never ride the green venue-live pill. A stale REST cache row
+  // is still venue data, but NOT realtime; the 3-min deep-stale leg and
+  // the Binance×fx synthetic rows are approximations.
+  if (s === 'coindcx-rest-stale') {
+    return {
+      label: 'CoinDCX·stale',
+      cls: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+      title: 'CoinDCX REST cache serving stale rows (upstream outage) — venue data, but not realtime; levels par dhyan rakho',
+    };
+  }
+  if (s === 'coindcx-rest-deep-stale') {
+    return {
+      label: 'CoinDCX·3m-old',
+      cls: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+      title: 'CoinDCX deep-stale fallback — up to 3 minutes old official data served to keep the board alive (not realtime)',
+    };
+  }
+  if (s === 'binance-fx-synth') {
+    return {
+      label: 'Binance·fx-synth',
+      cls: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+      title: 'Binance/Bybit USDT price projected to INR at the live fx rate — synthetic approximation, no India premium, venue-confirm nahi hua',
+    };
+  }
   if (s.startsWith('coindcx')) {
     return {
       label: 'CoinDCX·RT',

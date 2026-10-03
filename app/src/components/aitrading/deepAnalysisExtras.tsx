@@ -81,17 +81,26 @@ export function useDeepAutoRecheck(
     const symbol = sig.symbol;
     let cancelled = false;
     let elapsed = 0;
+    // v20.7.8 [M-7]: compare against the LAST RECHECKED snapshot, not the
+    // effect-setup closure. `const prev = sig` measured every recheck
+    // against the ORIGINAL open-time signal: the same ≥8pt confidence
+    // transition re-logged every 15s, and gradual drift (80→76→72) never
+    // logged at all. Now the baseline advances with every applied recheck.
+    let last = sig;
     // the recheck pass (fires immediately when the countdown hits 0)
     const run = async () => {
       const id = reqRef.current;
       const r = await fetchDeep(symbol, market, { fresh: false });
       if (cancelled || reqRef.current !== id || !r.ok || !r.signal) return;
-      const prev = sig;
+      const prev = last;
       const now = r.signal;
       // transitions the user should SEE (the "wrong info" complaint was
       // often the analysis silently drifting while the modal sat open)
       if (prev.side !== now.side) {
-        appendLog(`SIDE FLIP: ${prev.side} → ${now.side} ${now.grade} ${now.confidence ?? '?'}%`, now.side === prev.side ? 'info' : 'bad');
+        // v20.7.8 [M-7]: the old `now.side === prev.side ? 'info' : 'bad'`
+        // ternary was dead code inside this very branch — unreachable.
+        // A flip kills the open thesis: always 'bad'.
+        appendLog(`SIDE FLIP: ${prev.side} → ${now.side} ${now.grade} ${now.confidence ?? '?'}%`, 'bad');
       } else {
         const pr = GRADE_RANK[prev.grade] ?? 0, nr = GRADE_RANK[now.grade] ?? 0;
         if (nr < pr) appendLog(`GRADE ↓ ${prev.grade} ${prev.confidence ?? '?'}% → ${now.grade} ${now.confidence ?? '?'}%`, 'bad');
@@ -100,11 +109,17 @@ export function useDeepAutoRecheck(
           appendLog(`conf ${prev.confidence ?? '?'}% → ${now.confidence ?? '?'}%`, (now.confidence ?? 0) < (prev.confidence ?? 0) ? 'info' : 'good');
         }
       }
+      last = now; // v20.7.8 [M-7]: advance the comparison baseline
       setRechecks(n => n + 1);
       setDeep({ loading: false, signal: now, indicators: r.indicators, narrative: r.narrative, ltf: r.ltf, edge: r.edge, recheckedAt: r.recheckedAt ?? Date.now() });
     };
     // 1s ticker: countdown chip + fires the pass at each 15s boundary
     const timer = setInterval(() => {
+      // v20.7.8 [M-7]: hidden tab = no rechecks (the one polling pattern
+      // this codebase otherwise enforces everywhere — useAITrading,
+      // AgentPanel, EngineHealthStrip). The countdown resumes on return;
+      // the DATA-age chip honestly shows the staleness until then.
+      if (document.hidden) return;
       elapsed += 1;
       const rem = DEEP_RECHECK_SEC - (elapsed % DEEP_RECHECK_SEC);
       setNextInS(rem);

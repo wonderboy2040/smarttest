@@ -277,7 +277,26 @@ export async function runApprovedExecution(opts = {}) {
   return _approvedExec(opts);
 }
 
+// v20.7.8 [H2]: re-entrancy guard for the 90s auto-executor. The old loop
+// only checked the journal for an open auto position — but the fill only
+// lands in the journal AFTER executeSignal returns. A gauntlet run slower
+// than 90s (upstream brownout: TV scans 12s×2, candle fetches 8s×3, then
+// exchange APIs) let the NEXT tick re-pass the check and place a SECOND
+// live order. Same _ticking discipline agentTick/proTraderTick already use.
+let _autoBusy = false;
+
+// v20.7.8 [M3]: the registrar arms ~12 live loops (watchers, agents, auto-
+// executor, insta-push, recheck, monitors). A second registration (test
+// harness, hot-reload, future second app) silently doubles EVERY loop —
+// two auto-executors is double order placement. Guard it.
+let _registered = false;
+
 export function registerAITradingRoutes(app, deps) {
+  if (_registered) {
+    console.warn('[ai] registerAITradingRoutes called twice — live loops NOT re-armed (v20.7.8 guard)');
+    return;
+  }
+  _registered = true;
   const { KEYS, OPENAI_COMPAT, TG, jsonError } = deps || {};
   // v6.5: AI Council keys — secrets (typed in the app) WIN over env.
   // Built fresh on every call so a key saved mid-flight engages on the
@@ -300,6 +319,17 @@ export function registerAITradingRoutes(app, deps) {
   });
 
   // v6.5: telegram — secrets WIN over env; one resolver, one sender.
+  // v20.7.8 [L7]: escape client-derived fields in parse_mode:'HTML'
+  // Telegram bodies. An unescaped `<`/`&` in a symbol or close-reason made
+  // the Telegram API reject the WHOLE message (400 can't parse entities)
+  // — the confirmation push silently never landed. Same helper shape as
+  // index.js's escapeHtml (kept local: importing index.js here is a cycle).
+  const _tgEsc = (v) => String(v ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
   const sendTelegram = (text) => sendTelegramMessage(text, { token: TG?.token || '', chatId: TG?.chatId || '' });
 
   const normMarket = (raw) => {
@@ -1038,7 +1068,7 @@ export function registerAITradingRoutes(app, deps) {
       if (!out.ok) return res.status(400).json(out);
       // confirmation push (best-effort) — the baseline is now frozen
       const vStamp = out.trade?.verify;
-      sendTelegram(`📝 <b>MANUAL TRADE recorded</b>\n<b>${out.trade.symbol}</b> ${out.trade.side === 'BUY' ? 'LONG' : 'SHORT'} @ ${out.trade.entryPrice} · qty ${out.trade.qty}${out.trade.assetKind === 'OPTION' ? ` (${out.trade.optType} ${out.trade.strike} exp ${out.trade.expiry})` : ''}\n${out.trade.origin?.aiScore != null ? `Entry AI score: ${out.trade.origin.aiScore} · conviction tracking ON` : 'Conviction tracking ON'}${vStamp ? `\n🛡 <b>SVA verdict @ open: ${vStamp.action} — ${vStamp.finalCall} (${vStamp.score}/100)</b>${vStamp.action === 'FLIP' || vStamp.action === 'STAND_ASIDE' ? '\n⚠️ Verifier ne is entry ko reject kiya tha — small size / quick SL rakho.' : ''}` : ''}\n<i>Flip ho gaya to EXIT NOW push aa jayega — WHY ke saath.</i>`).catch(() => {});
+      sendTelegram(`📝 <b>MANUAL TRADE recorded</b>\n<b>${_tgEsc(out.trade.symbol)}</b> ${out.trade.side === 'BUY' ? 'LONG' : 'SHORT'} @ ${out.trade.entryPrice} · qty ${out.trade.qty}${out.trade.assetKind === 'OPTION' ? ` (${_tgEsc(out.trade.optType)} ${_tgEsc(out.trade.strike)} exp ${_tgEsc(out.trade.expiry)})` : ''}\n${out.trade.origin?.aiScore != null ? `Entry AI score: ${out.trade.origin.aiScore} · conviction tracking ON` : 'Conviction tracking ON'}${vStamp ? `\n🛡 <b>SVA verdict @ open: ${_tgEsc(vStamp.action)} — ${_tgEsc(vStamp.finalCall)} (${vStamp.score}/100)</b>${vStamp.action === 'FLIP' || vStamp.action === 'STAND_ASIDE' ? '\n⚠️ Verifier ne is entry ko reject kiya tha — small size / quick SL rakho.' : ''}` : ''}\n<i>Flip ho gaya to EXIT NOW push aa jayega — WHY ke saath.</i>`).catch(() => {});
       return res.json(out);
     } catch (e) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -1174,7 +1204,7 @@ export function registerAITradingRoutes(app, deps) {
         ...(usdInr != null ? { usdInr } : {}),
       });
       if (!out.ok) return res.status(400).json(out);
-      sendTelegram(`✅ <b>MANUAL TRADE closed</b>\n<b>${out.trade.symbol}</b> ${out.trade.side === 'BUY' ? 'LONG' : 'SHORT'} @ ${out.trade.entryPrice} → ${out.trade.exitPrice}\nP&L: ${out.pnl.pnlPct >= 0 ? '+' : ''}${out.pnl.pnlPct}% (${out.pnl.currency === 'USDT' ? '$' + out.pnl.pnlUSDT : '₹' + out.pnl.pnlINR}) · reason: ${out.trade.closeReason}`).catch(() => {});
+      sendTelegram(`✅ <b>MANUAL TRADE closed</b>\n<b>${_tgEsc(out.trade.symbol)}</b> ${out.trade.side === 'BUY' ? 'LONG' : 'SHORT'} @ ${out.trade.entryPrice} → ${out.trade.exitPrice}\nP&L: ${out.pnl.pnlPct >= 0 ? '+' : ''}${out.pnl.pnlPct}% (${out.pnl.currency === 'USDT' ? '$' + out.pnl.pnlUSDT : '₹' + out.pnl.pnlINR}) · reason: ${_tgEsc(out.trade.closeReason)}`).catch(() => {});
       return res.json(out);
     } catch (e) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
@@ -2148,6 +2178,8 @@ export function registerAITradingRoutes(app, deps) {
   // Auto-executor — only when the user explicitly enabled it in LIVE
   // mode. executeSignal re-runs every gate; caps/kill switch apply.
   const auto = setInterval(async () => {
+    if (_autoBusy) return; // v20.7.8 [H2]: a >90s gauntlet run must not stack a second live order
+    _autoBusy = true;
     try {
       const cfg = loadConfig();
       if (!cfg.allowAuto || cfg.killSwitch || cfg.mode !== 'live') return;
@@ -2168,6 +2200,7 @@ export function registerAITradingRoutes(app, deps) {
         console.log(`[ai] auto-executed ${strong.symbol} ${strong.side}`);
       }
     } catch { /* non-fatal */ }
+    finally { _autoBusy = false; } // v20.7.8 [H2]: always release, even on throw
   }, 90_000);
   if (auto.unref) auto.unref();
 

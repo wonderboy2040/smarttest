@@ -262,14 +262,23 @@ function ConfigEditor({ config, busy, onSave, state, venue }: {
           <input value={trailArm} onChange={e => setTrailArm(e.target.value)} className="quantum-input px-1.5 py-1 rounded-lg text-[10px] font-mono w-14" inputMode="decimal" aria-label="trail arm in R" />
           <span className="text-slate-600">R</span>
         </label>
-        <button onClick={() => save({ trailArmR: Number(trailArm) })} disabled={busy || !config.trailEnabled}
+        {/* v20.7.8 [H-1]: the two trail SET buttons bypassed the v18.9 NaN
+            guard — an EMPTY box posted trailArmR: 0 (breakeven lock fires
+            at 0R — SL pinned to entry on every LIVE position) and garbage
+            posted NaN → null → silently dropped while the toast said
+            "Saved ✓". Same guard shape as the numeric fields below. */}
+        <button onClick={() => save({ trailArmR: Number(trailArm) })}
+          disabled={busy || !config.trailEnabled || trailArm.trim() === '' || !Number.isFinite(Number(trailArm)) || !(Number(trailArm) > 0)}
+          title={trailArm.trim() === '' || !Number.isFinite(Number(trailArm)) || !(Number(trailArm) > 0) ? '0 se bada number chahiye' : undefined}
           className="quantum-btn-ghost px-2 py-1 rounded-lg text-[9px] font-black disabled:opacity-40">SET</button>
         <label className="flex items-center gap-1 text-[9px] font-black text-slate-500 tracking-wider">
           TRAIL OFFSET
           <input value={trailOff} onChange={e => setTrailOff(e.target.value)} className="quantum-input px-1.5 py-1 rounded-lg text-[10px] font-mono w-14" inputMode="decimal" aria-label="trail offset in R" />
           <span className="text-slate-600">R</span>
         </label>
-        <button onClick={() => save({ trailOffsetR: Number(trailOff) })} disabled={busy || !config.trailEnabled}
+        <button onClick={() => save({ trailOffsetR: Number(trailOff) })}
+          disabled={busy || !config.trailEnabled || trailOff.trim() === '' || !Number.isFinite(Number(trailOff)) || !(Number(trailOff) > 0)}
+          title={trailOff.trim() === '' || !Number.isFinite(Number(trailOff)) || !(Number(trailOff) > 0) ? '0 se bada number chahiye' : undefined}
           className="quantum-btn-ghost px-2 py-1 rounded-lg text-[9px] font-black disabled:opacity-40">SET</button>
         <span className="text-[9px] text-slate-600">profit ≥ {config.trailArmR ?? 1}R → SL = breakeven → peak − {config.trailOffsetR ?? 1}R</span>
       </div>
@@ -277,15 +286,24 @@ function ConfigEditor({ config, busy, onSave, state, venue }: {
       {/* Numeric limits */}
       <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
         {[
-          { label: 'Min conf %', val: minConf, set: setMinConf, key: 'minConfidence', hint: '50-95', venueOK: true },
-          { label: 'Max order ₹ (crypto)', val: maxOrder, set: setMaxOrder, key: 'maxOrderINR', hint: '≥100', venueOK: venue !== 'INDIA' },
-          { label: 'India Max ₹', val: indiaMaxOrder, set: setIndiaMaxOrder, key: 'indiaMaxOrderINR', hint: '≥100', venueOK: venue !== 'COINDCX' },
+          { label: 'Min conf %', val: minConf, set: setMinConf, key: 'minConfidence', hint: '50-95', venueOK: true, positive: true },
+          { label: 'Max order ₹ (crypto)', val: maxOrder, set: setMaxOrder, key: 'maxOrderINR', hint: '≥100', venueOK: venue !== 'INDIA', positive: true },
+          { label: 'India Max ₹', val: indiaMaxOrder, set: setIndiaMaxOrder, key: 'indiaMaxOrderINR', hint: '≥100', venueOK: venue !== 'COINDCX', positive: true },
           { label: 'Daily trades', val: dailyTrades, set: setDailyTrades, key: 'dailyMaxTrades', hint: '1-50', venueOK: true },
           { label: 'Daily loss ₹', val: dailyLoss, set: setDailyLoss, key: 'dailyMaxLossINR', hint: '≥50', venueOK: true },
-          { label: 'Max stop %', val: maxStop, set: setMaxStop, key: 'maxRiskPct', hint: '1-20', venueOK: true },
-          { label: 'Max leverage × (crypto)', val: maxLev, set: setMaxLev, key: 'cryptoLeverage', hint: '1-10', venueOK: venue !== 'INDIA' },
-          { label: 'Max open positions', val: maxOpen, set: setMaxOpen, key: 'maxOpenPositions', hint: '1-20', venueOK: true },
-        ].filter(f => f.venueOK).map(f => (
+          { label: 'Max stop %', val: maxStop, set: setMaxStop, key: 'maxRiskPct', hint: '1-20', venueOK: true, positive: true },
+          { label: 'Max leverage × (crypto)', val: maxLev, set: setMaxLev, key: 'cryptoLeverage', hint: '1-10', venueOK: venue !== 'INDIA', positive: true },
+          { label: 'Max open positions', val: maxOpen, set: setMaxOpen, key: 'maxOpenPositions', hint: '1-20', venueOK: true, positive: true },
+        ].filter(f => f.venueOK).map(f => {
+          /* v20.7.8 [H-2]: Number('') === 0 and isFinite(0) — a CLEARED box
+            sailed through the v18.9 guard and SET the field to 0
+            (minConfidence: 0, dailyMaxLossINR: 0, cryptoLeverage: 0 …
+            corrupting the server-side risk envelope that gates LIVE
+            orders). Empty must disable; 0 only passes where it is a
+            legit explicit intent (daily caps). */
+          const fNum = f.val.trim() === '' ? NaN : Number(f.val);
+          const fBad = !Number.isFinite(fNum) || (f.positive ? !(fNum > 0) : fNum < 0);
+          return (
           <div key={f.key}>
             <label className="text-[9px] text-slate-500 font-black tracking-wider block mb-1">{f.label.toUpperCase()}</label>
             <div className="flex gap-1">
@@ -293,13 +311,14 @@ function ConfigEditor({ config, busy, onSave, state, venue }: {
               {/* v18.9: NaN guard — a non-numeric box used to POST null, the
                   server silently dropped it, the toast still said "Saved ✓"
                   and the 60s resync quietly reverted the value. */}
-              <button onClick={() => save({ [f.key]: Number(f.val) })}
-                disabled={busy || !Number.isFinite(Number(f.val))}
-                title={!Number.isFinite(Number(f.val)) ? 'sirf number valid hai' : undefined}
+              <button onClick={() => save({ [f.key]: fNum })}
+                disabled={busy || fBad}
+                title={fBad ? 'sirf number valid hai' : undefined}
                 className="quantum-btn-ghost px-2 rounded-lg text-[10px] font-black disabled:opacity-40">SET</button>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
       <p className="text-[10px] text-slate-500 leading-relaxed">
         Gates enforced SERVER-SIDE on every order: STRONG grade (confidence + agreement), stop-distance ≤ {config.maxRiskPct ?? 5}%

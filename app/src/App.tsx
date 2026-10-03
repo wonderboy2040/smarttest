@@ -29,18 +29,29 @@ const DESK_ORDER: Desk[] = ['india', 'crypto'];
 
 // Lazy desks with auto-recovery after deploys (stale hashed chunks
 // in the SW cache -> one forced reload instead of a broken screen).
+// v20.7.8 [H-3]: clear the one-shot marker on SUCCESS. The old flow only
+// removed it on a SECOND failure — so the first stale-chunk deploy self-
+// healed, but a second deploy later in the same session threw straight
+// to the ErrorBoundary ("Desk crash / Reload karo") — the exact broken
+// screen this helper exists to prevent. Now every successful import
+// re-arms recovery for the next deploy.
 function lazyWithRetry(importFn: () => Promise<any>, name: string) {
+  const key = `chunk_reload_${name}`;
   return lazy(() =>
-    importFn().catch((err: unknown) => {
-      const key = `chunk_reload_${name}`;
-      if (!sessionStorage.getItem(key)) {
-        sessionStorage.setItem(key, '1');
-        window.location.reload();
-        return new Promise<never>(() => {});
-      }
-      sessionStorage.removeItem(key);
-      throw err;
-    })
+    importFn()
+      .then((mod: any) => {
+        sessionStorage.removeItem(key);
+        return mod;
+      })
+      .catch((err: unknown) => {
+        if (!sessionStorage.getItem(key)) {
+          sessionStorage.setItem(key, '1');
+          window.location.reload();
+          return new Promise<never>(() => {});
+        }
+        sessionStorage.removeItem(key);
+        throw err;
+      })
   );
 }
 

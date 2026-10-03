@@ -76,14 +76,23 @@ export async function ensureAuthenticated(): Promise<boolean> {
       try {
         const res = await apiFetch(`/api/auth/check`);
         if (res.ok) {
-          const data = await res.json();
-          if (data.authenticated) return true;
+          // v20.7.8 [M-3]: a 200 with an unparseable/HTML body (proxy, edge
+          // cache, captive portal) used to fall into the catch and read as
+          // "token invalid" — the user was booted to the PIN gate while
+          // every other endpoint would have succeeded. An OK response we
+          // can't parse must PRESERVE the session; real expiry still lands
+          // here via the 401 → session-expired path in apiFetch.
+          const data = await res.json().catch(() => null);
+          if (data?.authenticated) return true;
+          if (data == null) return true;
         }
         // Token invalid — clear it.
         setSessionToken(null);
         return false;
       } catch {
-        return false;
+        // Network failure is NOT "token invalid" either — keep the token,
+        // let the next apiFetch decide (it will surface its own errors).
+        return true;
       } finally {
         _authCheckPromise = null;
       }

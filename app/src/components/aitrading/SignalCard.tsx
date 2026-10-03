@@ -680,6 +680,18 @@ function SimpleTradeTicket({ signal, busy, gatePaper, onExecute, onExecuteIndia,
   };
   useEffect(() => () => { if (resultTimer.current) clearTimeout(resultTimer.current); }, []);
 
+  // v20.7.8 [M-5]: malformed plan guard — CryptoOrderPreview already bails on
+  // !(plan.entry > 0), the ticket didn't. entry 0/null → QTY Infinity,
+  // slDistPct NaN → maxSane NaN → `l > NaN` always false → EVERY leverage
+  // chip stayed enabled with the max-sane warning dead. Placed AFTER the
+  // hooks (early-return above them would break the Rules of Hooks when a
+  // live refresh swaps a good plan for a malformed one).
+  if (!(plan.entry > 0)) return (
+    <div className="mt-2 text-[10px] font-mono font-bold text-amber-400/90 bg-amber-500/5 border border-amber-500/20 rounded-lg px-2 py-1.5">
+      ⚠️ Plan math unavailable (entry price missing) — ticket disabled for safety
+    </div>
+  );
+
   const marginNum = Number(marginRaw);
   const typedValid = marginRaw.trim() !== '' && Number.isFinite(marginNum);
   // honest twin: server clamps crypto/india orders to the per-order cap

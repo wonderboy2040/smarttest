@@ -1,5 +1,52 @@
 # Changelog
 
+## v20.7.8 — FULL-SITE DEEP AUDIT: auto-executor re-entrancy + shutdown orphans + honest feed labels + risk-config SET gates (2026-10-03)
+
+Latest-pull deep pro-level FULL-SITE recheck (origin/main `6c38e7f` merge — v20.7.7 fixes user ne GitHub pe push kar diye the, byte-identical). Review scope: poora server (`index.js` 3195 lines, `routes.js`, supervisor, 4 streams, data layer, secrets) + poora frontend (`api.ts`, hooks, SignalCard/OrderConsole/ProPanels/deep-modal) + signal pipeline verification (ensemble/superIntel/signalRecheck — regime-tilt `?.[modelId]` display-artifact false alarm tha, node runtime proof ke saath clean nikla). **2927 tests green · tsc clean · vite build OK.**
+
+### FIX 1 — [H2] AUTO-EXECUTOR RE-ENTRANCY GUARD (`routes.js` — duplicate LIVE order risk)
+
+90s auto-executor loop journal-check karta tha "one auto position at a time" — par fill journal me tabhi land hoti hai jab `executeSignal` RETURN karta hai. Upstream brownout me ek gauntlet run >90s lamba ho sakti thi (TV scans 12s×2 + candle fetches 8s×3 + exchange APIs) → next tick dobara check pass → **SECOND live order**. Ab `_autoBusy` flag (agentTick/proTraderTick ka hi `_ticking` discipline) + `finally` release.
+
+### FIX 2 — [H1] GRACEFUL SHUTDOWN ORPHANS THE TELEGRAM BOT CHILD (`index.js` + `supervisor.js`)
+
+`process.exit()` forked children KO KILL NAHI KARTA — Linux/VPS/Docker (docker stop, systemctl, Render SIGTERM) + TG polling mode me har shutdown ek live orphan chhodta tha jo Telegram long-poll pakde baittha tha; restart ke baad DO pollers `getUpdates` pe 409 storm + duplicate command processing. Ab: (a) `_gracefulShutdown` bot-child ko SIGTERM deta hai + restart-timer clear; (b) bot ka `exit` handler `_shuttingDown` me restart schedule NAHI karta; (c) supervisor POSIX child ab `detached` (apna process group) spawn hota hai aur `forceKill` group-kill (`process.kill(-pid, 'SIGKILL')`) karta hai — freeze-path SIGKILL me bhi telegram-bot orphan nahi bachta (Windows `taskkill /T` pehle se theek).
+
+### FIX 3 — [M2] DEGRADED FEED LABELS AB HONEST HAIN (`cryptoStream.js` + `LiveSourceBadge.tsx`)
+
+Upstream chain degrade hone par (stale REST cache / 3-min deep-stale / Binance×fx SYNTHETIC rows) SSE tick `coindcx-live` label le raha tha — projected/approximated price green "CoinDCX·RT ⚡" badge pe ride karta tha. Ab wire par honest labels (`coindcx-rest-stale` / `coindcx-rest-deep-stale` / `binance-fx-synth`) + badge me AMBER pills (green kabhi nahi). `coindcxOrders` ka tradability gate batch-level `lastTickerSource()` padhta hai — unaffected.
+
+### FIX 4 — [H-1/H-2] RISK-CONFIG SET BUTTONS 0/NaN POST NAHI KARTE (`OrderConsole.tsx`)
+
+v18.9 NaN guard sirf 8 numeric fields pe tha; trailing-stop ke dono SET buttons raw `Number()` bhejte the — khaali box `trailArmR: 0` (breakeven lock 0R pe — har LIVE position ka SL entry pe pin!) aur garbage NaN → null → silent drop, toast phir bhi "Saved ✓". Aur numeric fields me `Number('') === 0` + `isFinite(0) === true` — CLEARED box hamesha 0 SET karta tha (`minConfidence: 0`, `dailyMaxLossINR: 0`, `cryptoLeverage: 0`…). Ab: empty → disabled, positive-check jahan 0 nonsense hai (daily caps me explicit 0 allowed).
+
+### FIX 5 — [H-3] LAZY-CHUNK DEPLOY RECOVERY HAR SESSION ME EK BAAR SE ZYADA (`App.tsx`)
+
+`lazyWithRetry` ka one-shot marker SUCCESS pe clear nahi hota tha (sirf second-failure branch me) — pehla stale-chunk deploy self-heal, par same session me DOOSRA deploy seedha ErrorBoundary ("Desk crash / Reload karo") pe. Ab har successful import marker clear karta hai.
+
+### FIX 6 — [M3] REGISTRAR IDEMPOTENCY + [M1] SECRETS TTL CACHE (`routes.js` + `secrets.js`)
+
+- `registerAITradingRoutes` do-call pe ~12 live loops DOUBLE arm ho jaate (do auto-executor = double orders bina kisi upstream failure ke). Ab `_registered` guard.
+- `getSecrets()` har `/api/ai/*` request/agent-tick/15s-recheck par sync `readFileSync` kar raha tha (hot path event-loop blocking). Ab 3s TTL cache — `setSecret` turant invalidate karta hai; out-of-process edits 3s me pick up.
+
+### FIX 7 — DATA-LAYER CORRECTNESS (`data.js`)
+
+- **[L4]** `TV_SAFE = slice(0,23)` me `Recommend.All` tha hi nahi — safe-retry path par `pf(d[23])` → recommend HAMESHA null. Ab 24-col safe set, d[23] = Recommend.All.
+- **[L5]** `fetchCryptoSnapshot` ka flat `× 84` USDINR fallback — v20.2 consolidation ke baad bhi bacha hua last site. Ab shared disk-backed `usdInrFallback()` (last-known-good pehle).
+
+### FIX 8 — FRONTEND RACE/ROBUSTNESS SWEEP
+
+- **[M-1]** ProPanels ke teen prop-driven loaders (Swing/Whale/Orderbook) me stale-response race — BTC (slow) → ETH (fast) → BTC late aake ETH ke upar overwrite. Ab seq-guard (useAITrading ka `posSeqRef` pattern).
+- **[M-5]** `SimpleTradeTicket` me entry=0/null guard nahi tha — QTY Infinity, `maxSane` NaN → SAB leverage chips enabled, max-sane warning dead. Ab post-hooks guard (Rules-of-Hooks safe) + honest "ticket disabled" note.
+- **[M-3]** `ensureAuthenticated` — 200 + unparseable body (proxy/edge) valid session ko PIN-gate pe phenk deta tha. Ab unparseable-OK session preserve karta hai; network failure bhi "invalid" nahi.
+- **[M-7]** Deep-modal 15s auto-recheck — comparison baseline effect-setup closure me tha (same ≥8pt transition har 15s re-log; gradual drift kabhi nahi), SIDE-FLIP tone ternary dead-code tha, hidden tab me bhi recheck chalti thi. Ab last-rechecked baseline + hidden-gate + clean tones.
+
+### FIX 9 — ERROR-PATH HYGIENE (`index.js` / `routes.js` / `positionsStream.js`)
+
+- **[L6]** `jsonError` headersSent guard — partial response ke baad ERR_HTTP_HEADERS_SENT throw + hanging socket ke bajaye clean log+end.
+- **[L7]** Manual-trade Telegram pushes me client-derived symbol/reason HTML-escape — `<`/`&` wali value poori message ko Telegram 400 pe reject kar deti thi (confirmation push silently kabhi nahi aayi).
+- **[L9]** `positionsStream` first SSE write try/catch — connect-time destroyed-socket race cleanup-registration se pehle escape nahi karti.
+
 ## v20.7.7 — ORDER-FLOW SAFETY HARDENING: price read-back verify + qty blind-click gates (2026-10-03)
 
 Latest-pull deep pro-level recheck (origin/main `cbc425d`). Focus: v20.7.6 ke order-form driver ke **baad ke latent safety holes** jo sirf "entry ho gayi" aur "entry Sahi size/price pe hui" me farb karte hain. **2895+ tests green · tsc clean · vite build OK.**

@@ -163,7 +163,11 @@ export function positionsStreamHandler(req, res) {
     'X-Accel-Buffering': 'no',
   });
   if (res.flushHeaders) res.flushHeaders();
-  res.write('retry: 3000\n\n');
+  // v20.7.8 [L9]: guard the first raw write — index.js's identical SSE site
+  // wraps this exact line ("a synchronous throw here would skip the cleanup
+  // handlers"); a destroyed-socket race at connect must not escape the
+  // handler before on('close') registration below.
+  try { res.write('retry: 3000\n\n'); } catch { return; }
 
   // 2026 perf audit (H1) pattern: backpressure guard — a stalled client
   // (phone sleep / zero-window TCP) must not buffer SSE writes forever.

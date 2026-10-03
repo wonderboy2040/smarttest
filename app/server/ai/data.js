@@ -20,6 +20,11 @@
 import { computeIndicatorsFromCandles } from './lib/indicators.js';
 import { fetchCoinDcxTickers } from '../cryptoStream.js';
 import { TV_SCAN_HEADERS } from '../lib/tvHeaders.js';
+// v20.7.8 [L5]: the SHARED disk-backed USDINR store — the leftover flat
+// ×84 in fetchCryptoSnapshot priced exotic fallback symbols ~6-7% off at
+// USDINR ≈ 89 (the exact class the v20.2 consolidation killed everywhere
+// else). Last-known-good rate first; 84 only on a never-seen cold boot.
+import { usdInrFallback as _usdInrFallback } from './lib/usdinr.js';
 // v18.9: ONE market-clock definition — isNseOpen now shares the
 // intraday/time.js NSE calendar (weekends + fixed + NSE_HOLIDAYS env),
 // so the LIVE gauntlet and the scanner agree on "market band hai".
@@ -61,7 +66,7 @@ const TV_FULL = [
   'price_52_week_high', 'price_52_week_low',
   'Recommend.All',
 ];
-const TV_SAFE = TV_FULL.slice(0, 23); // drop BB/Stoch/52w — the v4-proven set
+const TV_SAFE = [...TV_FULL.slice(0, 23), 'Recommend.All']; // v20.7.8 [L4]: 24-col safe set — Recommend.All KEPT at d[23]; the old slice(0,23) read pf(d[23]) on a 23-col response → recommend was ALWAYS null on the safe-retry path
 
 export async function fetchTVIndiaBatch(symbols) {
   const tickers = [], map = {};
@@ -337,7 +342,7 @@ export async function fetchCryptoSnapshot(base) {
   return {
     symbol: base,
     pair: `${base}INR`,
-    ltp: inrPrice ?? (tvRow?.usdPrice ? tvRow.usdPrice * 84 : null),
+    ltp: inrPrice ?? (tvRow?.usdPrice ? tvRow.usdPrice * _usdInrFallback() : null),
     changePct: tvRow?.changePct ?? (ticker ? parseFloat(ticker.change_24_hour) || null : null),
     priceSource: inrPrice != null ? 'coindcx' : (tvRow ? 'tv-usd-approx' : null),
     indicators: tvRow ? {

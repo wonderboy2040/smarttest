@@ -13,7 +13,7 @@
 //   • CorrelationPanel   — cross-asset 60d matrix + BTC↔NIFTY risk link
 //   • SectorMapPanel     — sector sentiment + macro context chain + F-Score
 // ============================================================
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { fetchMorningBrief, fetchSwingBoard, fetchWhales, fetchLedger, fetchOrderbook, fetchTrust, fetchPerf, fetchCorrelations, fetchSectors } from './useAITrading';
 import type { MarketKind, MorningBrief, SwingBoard, WhaleRadar, LedgerView, OrderbookView, TrustView, PerfView, CorrView, SectorView } from './types';
 
@@ -168,10 +168,17 @@ export const MorningBriefPanel = memo(function MorningBriefPanel() {
 export const SwingDeskPanel = memo(function SwingDeskPanel({ market }: { market: MarketKind }) {
   const [board, setBoard] = useState<SwingBoard | null>(null);
   const [loading, setLoading] = useState(false);
+  // v20.7.8 [M-1]: stale-response guard — a slow OLD-market response used
+  // to overwrite the NEW market's board (BTC slow → ETH fast → BTC lands
+  // last and wins). Same seq discipline as useAITrading's posSeqRef.
+  const seqRef = useRef(0);
 
   const load = useCallback(async () => {
+    const seq = ++seqRef.current;
     setLoading(true);
-    setBoard(await fetchSwingBoard(market));
+    const v = await fetchSwingBoard(market);
+    if (seq !== seqRef.current) return; // a newer market switch owns the panel
+    setBoard(v);
     setLoading(false);
   }, [market]);
 
@@ -217,10 +224,14 @@ export const SwingDeskPanel = memo(function SwingDeskPanel({ market }: { market:
 export const WhaleRadarPanel = memo(function WhaleRadarPanel({ market }: { market: MarketKind }) {
   const [radar, setRadar] = useState<WhaleRadar | null>(null);
   const [loading, setLoading] = useState(false);
+  const seqRef = useRef(0); // v20.7.8 [M-1]: stale-response guard (see SwingDeskPanel)
 
   const load = useCallback(async () => {
+    const seq = ++seqRef.current;
     setLoading(true);
-    setRadar(await fetchWhales(market));
+    const v = await fetchWhales(market);
+    if (seq !== seqRef.current) return;
+    setRadar(v);
     setLoading(false);
   }, [market]);
 
@@ -324,10 +335,14 @@ export const OrderbookPanel = memo(function OrderbookPanel() {
   const [symbol, setSymbol] = useState('BTC');
   const [view, setView] = useState<OrderbookView | null>(null);
   const [loading, setLoading] = useState(false);
+  const seqRef = useRef(0); // v20.7.8 [M-1]: symbol-switch race — BTC (slow) then ETH (fast) used to leave BTC's late book rendered under the highlighted ETH chip
 
   const load = useCallback(async (sym: string) => {
+    const seq = ++seqRef.current;
     setLoading(true);
-    setView(await fetchOrderbook(sym));
+    const v = await fetchOrderbook(sym);
+    if (seq !== seqRef.current) return;
+    setView(v);
     setLoading(false);
   }, []);
 

@@ -295,7 +295,12 @@ describe('v18.9 frontend — source contracts (money-display fixes)', () => {
 
   it('OrderConsole: SET is disabled for non-numeric input (no fake "Saved")', () => {
     const src = read('src/components/aitrading/OrderConsole.tsx');
-    expect(src).toMatch(/disabled=\{busy \|\| !Number\.isFinite\(Number\(f\.val\)\)\}/);
+    // v20.7.8: the guard moved to fNum/fBad (empty-string hole + positivity
+    // gates) — the OLD raw regex no longer matches. Lock the NEW contract:
+    // empty → NaN, finite + positive checks, and the button binds fBad.
+    expect(src).toMatch(/const fNum = f\.val\.trim\(\) === '' \? NaN : Number\(f\.val\)/);
+    expect(src).toMatch(/const fBad = !Number\.isFinite\(fNum\) \|\| \(f\.positive \? !\(fNum > 0\) : fNum < 0\)/);
+    expect(src).toMatch(/disabled=\{busy \|\| fBad\}/);
   });
 
   // v20.0: assetPnl source-contract case removed — the whole

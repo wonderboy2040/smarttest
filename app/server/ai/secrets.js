@@ -20,6 +20,33 @@ import { durablePut } from '../mcp/durable.js';
 
 const SECRETS_FILE = 'ai-secrets.json';
 
+// v20.7.8 [M1]: 3s TTL cache. getSecrets() sits on the hottest server
+// path — routes.js effectiveKeys() builds depsForSignals() on EVERY
+// /api/ai/* request, agent tick, 15s recheck loop and insta-push sink,
+// and each call was a synchronous readFileSync of the secrets file
+// (1-3ms on cloud disks, serially blocking the event loop). Secrets
+// change only through setSecret() (which invalidates this cache) or
+// out-of-process edits (picked up within 3s — the "a key saved mid-
+// flight engages on the next board run" contract is ≥30s, so this is
+// invisible). Cached object is NEVER handed out by reference.
+const SECRETS_TTL_MS = 3000;
+let _secretsCache = { at: 0, val: null };
+
+export function getSecrets() {
+  const now = Date.now();
+  if (_secretsCache.val && (now - _secretsCache.at) < SECRETS_TTL_MS) {
+    return { ..._secretsCache.val };
+  }
+  const store = loadJSON(SECRETS_FILE, { secrets: {} }) || {};
+  const out = {};
+  for (const k of Object.keys(KEYS)) {
+    const v = store?.secrets?.[k];
+    if (typeof v === 'string' && v.length > 0) out[k] = v;
+  }
+  _secretsCache = { at: now, val: out };
+  return { ...out };
+}
+
 // ---- known keys + validators --------------------
 // Each validator: (value) => sanitized string | null (clear).
 // Throws a 400-shaped error on invalid input.
@@ -64,16 +91,6 @@ const KEYS = {
   },
 };
 
-export function getSecrets() {
-  const store = loadJSON(SECRETS_FILE, { secrets: {} }) || {};
-  const out = {};
-  for (const k of Object.keys(KEYS)) {
-    const v = store?.secrets?.[k];
-    if (typeof v === 'string' && v.length > 0) out[k] = v;
-  }
-  return out;
-}
-
 /** Set (or clear, when value == null) one secret. Validates strictly,
  *  persists to disk + pushes the encrypted durable backup. */
 export function setSecret(key, value) {
@@ -90,6 +107,7 @@ export function setSecret(key, value) {
   else store.secrets[key] = clean;
   store.updatedAt = Date.now();
   saveJSON(SECRETS_FILE, store);
+  _secretsCache = { at: 0, val: null }; // v20.7.8 [M1]: a saved key is live on the NEXT call
   try { durablePut(SECRETS_FILE, store); } catch { /* best-effort */ }
   return true;
 }
@@ -230,6 +248,7 @@ export async function telegramFileBase64(filePath, env = {}) {
 // ---------------- test hooks ----------------
 export function __resetSecretsForTests() {
   saveJSON(SECRETS_FILE, { secrets: {}, updatedAt: 0 });
+  _secretsCache = { at: 0, val: null }; // v20.7.8 [M1]: never serve a stale cached secret to the next test
 }
 export function __setSecretForTests(key, value) {
   setSecret(key, value);

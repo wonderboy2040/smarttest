@@ -643,6 +643,15 @@ const OPENAI_COMPAT = {
 };
 
 function jsonError(res, status, message, internalErr) {
+  // v20.7.8 [L6]: a handler that already sent headers (partial res.json
+  // on a circular board object, mid-stream SSE write) used to throw
+  // ERR_HTTP_HEADERS_SENT here — the terminal middleware then no-op'd
+  // and the socket hung until the client timed out. Log and bail.
+  if (res.headersSent) {
+    console.warn(`[wealth-ai] jsonError after headersSent (${status} ${message}) — response already streaming`);
+    try { res.end(); } catch { /* socket gone */ }
+    return;
+  }
   const correlationId = crypto.randomUUID();
   if (internalErr) {
     console.error(`[corr=${correlationId}] ${status} ${message}`, internalErr?.message || internalErr);
@@ -2900,6 +2909,19 @@ let _httpServer = null; // v10.13: captured at listen() for graceful drain
 function _gracefulShutdown(signal) {
   if (_shuttingDown) return;
   _shuttingDown = true;
+  // v20.7.8 [H1]: kill the forked Telegram bot child BEFORE exiting.
+  // process.exit() does NOT kill forked children — on Linux/VPS/Docker
+  // (docker stop, systemctl, Render SIGTERM) with TG polling mode, every
+  // shutdown left a live orphan holding the Telegram long-poll; after the
+  // restart TWO pollers fought over getUpdates (409 storms, duplicate
+  // command processing). The bot has its own SIGTERM handler.
+  try {
+    clearTimeout(_botRestartTimer);
+    if (_botProcess && _botProcess.exitCode === null && !_botProcess.killed) {
+      _botProcess.kill('SIGTERM');
+      console.log('[wealth-ai] shutdown: SIGTERM sent to Telegram bot child');
+    }
+  } catch { /* best-effort — never block shutdown on the child */ }
   // v19.1: record the INTENTIONAL stop in the exit journal so the next
   // boot says "CLEAN SHUTDOWN" instead of guessing "hard kill".
   selfHealNoteShutdown(signal === 'SIGINT' ? 'ctrl-c' : 'sigterm');
@@ -3025,6 +3047,13 @@ function startBot() {
       console.error('[wealth-ai] Bot process error:', err.message);
     });
     _botProcess.on('exit', (code) => {
+      // v20.7.8 [H1]: never auto-restart the bot out of a deliberate
+      // shutdown — the old handler scheduled a fresh fork AFTER the parent
+      // decided to die (and after _gracefulShutdown cleared the timer).
+      if (_shuttingDown) {
+        console.log(`[wealth-ai] Bot exited code=${code} during shutdown — no restart.`);
+        return;
+      }
       // Reset backoff if the bot stayed up for a while (stable run).
       if (Date.now() - _botStartedAt > 10 * 60 * 1000) _botRestartDelay = 5000;
       const delay = Math.min(_botRestartDelay, 5 * 60 * 1000);

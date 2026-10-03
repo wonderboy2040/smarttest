@@ -255,6 +255,15 @@ export function createSupervisor(opts = {}) {
         // /T = tree kill: telegram-bot / ml children bhi (agar hon)
         deps.spawnFn('taskkill', ['/F', '/T', '/PID', String(child.pid)], { stdio: 'ignore' });
       } else {
+        // v20.7.8 [M5]: POSIX tree-kill. The child is spawned detached
+        // (= own process group leader), so a negative-PID signal kills
+        // the WHOLE tree — the forked telegram-bot survives a plain
+        // child.kill('SIGKILL') (SIGKILL can't be caught, so the child's
+        // own shutdown handler never runs). Direct kill follows as
+        // belt-and-braces (also keeps the fake-child kill log honest).
+        if (child.pid) {
+          try { process.kill(-child.pid, 'SIGKILL'); } catch { /* not a leader / already gone */ }
+        }
         child.kill('SIGKILL');
       }
     } catch { /* already dead — exit event will fire */ }
@@ -270,6 +279,10 @@ export function createSupervisor(opts = {}) {
         cwd: deps.appRoot,
         env: { ...env, SMARTAI_SUPERVISED: '1' },
         stdio: ['ignore', 'pipe', 'pipe'],
+        // v20.7.8 [M5]: own process group on POSIX — lets forceKill()
+        // tree-kill via negative-PID signal. (Windows: taskkill /T owns
+        // the tree; detached there changes console semantics, so off.)
+        detached: deps.platformFn() !== 'win32',
       });
     } catch (err) {
       journal({ ev: 'watchdog-crash', reason: 'spawn-fail', detail: String(err && err.message || err).slice(0, 120) });
