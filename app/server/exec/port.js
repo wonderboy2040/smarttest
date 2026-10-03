@@ -237,8 +237,16 @@ export class BrowserCdpPort {
   }
   async health() {
     try {
-      // a CDP browser tab health probe — light touch (don't navigate)
-      return { ok: true, mode: 'browser', latencyMs: 0, reasons: [] };
+      // v20.7.7 FIX: pehle ye HAMESHA ok:true tha — browser band ho tab
+      // bhi! Ab real probe: browserAgent ka status (CDP connected + tab
+      // discovered) dekh ke honest health do (positionManager iske
+      // bina browser-down pe entry attempt karta rehta tha).
+      const st = this._ba.browserStatus ? this._ba.browserStatus() : null;
+      const connected = !!st?.connected;
+      return {
+        ok: connected, mode: 'browser', latencyMs: 0,
+        reasons: connected ? [] : [String(st?.lastError || 'automation browser not connected — Start-AutoBrowser.bat chalao')],
+      };
     } catch (e) { return { ok: false, mode: 'browser', latencyMs: 0, reasons: [String(e?.message || e).slice(0, 80)] }; }
   }
   async getEquity() {
@@ -249,17 +257,33 @@ export class BrowserCdpPort {
   }
   async getPositions() {
     try {
-      const rows = await this._ba.cxReadPositions().catch(() => []);
-      return (Array.isArray(rows) ? rows : []).map(p => ({
-        id: String(p.id || p.pair || ''),
-        pair: String(p.pair || ''),
-        side: String(p.side || '').toUpperCase(),
-        qty: Number(p.qty || 0),
-        avgPrice: r2(p.avgPrice),
-        leverage: Number(p.leverage || 1),
-        liqPrice: r2(p.liqPrice),
-        sl: r2(p.sl), tp: r2(p.tp), markPrice: r2(p.markPrice),
-      }));
+      // v20.7.7 FIX #2: cxReadPositions() OBJECT ({ok, positions:[…]}) return
+      // karta hai — purana code seedha Array.isArray(res) check karta tha →
+      // HAMESHA [] (positions table kabhi dikhi hi nahi). Ab .positions
+      // extract hota hai.
+      const res = await this._ba.cxReadPositions().catch(() => null);
+      const rows = Array.isArray(res) ? res : (Array.isArray(res?.positions) ? res.positions : []);
+      // v20.7.7 FIX #1: rows {cells, text, nums} hote hain — p.id/p.pair
+      // KABHI exist nahi karte the → id '' → close-by-id hamesha fail.
+      // Ab pehli visible cell (exchange layout me pair hota hai) se id/pair
+      // derive hota hai; nums se qty/price fallback.
+      return (Array.isArray(rows) ? rows : []).map((p, i) => {
+        const cells = Array.isArray(p?.cells) ? p.cells : [];
+        const pairGuess = String(p?.pair || cells[0] || '').trim();
+        const nums = Array.isArray(p?.nums) ? p.nums : [];
+        const sideGuess = /long|buy/i.test(String(p?.text || '')) ? 'LONG'
+          : (/short|sell/i.test(String(p?.text || '')) ? 'SHORT' : String(p?.side || '').toUpperCase());
+        return {
+          id: String(p?.id || pairGuess || `browser-${i}`),
+          pair: pairGuess,
+          side: sideGuess,
+          qty: Number(p?.qty || nums[1] || 0),
+          avgPrice: r2(p?.avgPrice ?? nums[0]),
+          leverage: Number(p?.leverage || 1),
+          liqPrice: r2(p?.liqPrice),
+          sl: r2(p?.sl), tp: r2(p?.tp), markPrice: r2(p?.markPrice),
+        };
+      }).filter((p) => p.pair);
     } catch (e) { return []; }
   }
   async open({ pair, side, qty, leverage, type = 'limit', price, sl, tp, clientId }) {
@@ -269,10 +293,14 @@ export class BrowserCdpPort {
       // kar raha tha (TypeError → har browser-mode open ka fail). Phase 6
       // hardening (leverage read-back, UI SL/TP bracket) abhi bhi pending
       // hai — live 5-10x ke liye API port hi recommended.
+      // v20.7.7 FIX: qty bhi pass karo — market orders (price=null) me
+      // total/price math impossible thi, ab in-page driver direct qty
+      // use karta hai (cxPlaceOrderScript ka QTY_DIRECT path).
       const page = await this._ba.cxEnsureTradePage(this._ba.cxPairUrl ? this._ba.cxPairUrl(pair, 'futures') : undefined);
       const pick = await this._ba.cxSelectPair(page, pair);
       if (!pick?.ok) return { ok: false, error: `select-pair: ${pick?.error || 'failed'}` };
-      const r = await this._ba.cxPlaceOrder(page, { side, price, totalINR: qty * price, leverage });
+      const total = Number(price) > 0 ? qty * price : 0;
+      const r = await this._ba.cxPlaceOrder(page, { side, price, totalINR: total, leverage, qty });
       return { ok: !!r?.ok, orderId: clientId || `browser-${Date.now()}`, raw: r };
     } catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
@@ -283,12 +311,24 @@ export class BrowserCdpPort {
     return { ok: false, error: 'browser setProtection not yet implemented (Phase 6 pending)' };
   }
   async reduce({ positionId, qty }) {
-    try { const r = await this._ba.cxClosePosition({ pair: positionId, partialQty: qty }); return { ok: !!r, raw: r }; }
-    catch (e) { return { ok: false, error: String(e?.message || e) }; }
+    // v20.7.7 FIX: pehle cxClosePosition({ pair: positionId, partialQty: qty })
+    // call hota tha — REAL signature (pair, side) hai, object nahi (TypeError)
+    // aur `!!r` truthy-object check hamesha ok:true de deta tha (failed close
+    // bhi "closed" journal hota tha!). Browser agent me PARTIAL exit DOM
+    // support nahi — honest full close + note (partial requester ko raw me
+    // dikhega). r?.ok check ab asli verdict deta hai.
+    try {
+      const r = await this._ba.cxClosePosition(positionId);
+      return { ok: !!r?.ok, raw: r, note: Number(qty) > 0 ? 'browser partial-exit unsupported — FULL close hua (partial DOM Phase 6 pending)' : undefined };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
   async close({ positionId }) {
-    try { const r = await this._ba.cxClosePosition({ pair: positionId }); return { ok: !!r, raw: r }; }
-    catch (e) { return { ok: false, error: String(e?.message || e) }; }
+    // v20.7.7 FIX: same signature/verdict bug as reduce — positional args
+    // + r?.ok (truthy-object ka ok:true jhootha tha).
+    try {
+      const r = await this._ba.cxClosePosition(positionId);
+      return { ok: !!r?.ok, raw: r };
+    } catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
   async cancelOpenOrders({ pair }) { return { ok: true, note: 'browser cancelOpenOrders not yet wired' }; }
 }

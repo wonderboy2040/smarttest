@@ -276,9 +276,22 @@ const DOM_HELPERS = `
     .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)[0] || null;
   const bySelOrText = (sels, re) => { for (const s of sels) { const el = $(s); if (el && vis(el)) return el; } return re ? byText('button', re) : null; };
   const setVal = (el, value) => {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
-    setter.call(el, String(value));
+    if (!el) return false;
+    // v20.7.7 HARDENING: kai modern exchange panels (CoinDCX futures
+    // included, kabhi-kabhi) input ko contenteditable DIV / custom
+    // element bana dete hain — wahan HTMLInputElement.prototype ka
+    // value setter exist hi nahi karta (TypeError → poora order flow
+    // gir jata tha). Non-input elements ke liye textContent fallback.
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype
+      : el instanceof HTMLInputElement ? HTMLInputElement.prototype : null;
+    try {
+      if (proto) {
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+        setter.call(el, String(value));
+      } else {
+        el.textContent = String(value);
+      }
+    } catch { el.textContent = String(value); }
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
   };
@@ -341,7 +354,11 @@ const DOM_HELPERS = `
     let node = btn.parentElement;
     for (let i = 0; i < 8 && node; i++, node = node.parentElement) {
       const inputs = $$('input', node).filter(isOrderNumInput);
-      if (inputs.length >= 2 && inputs.length <= 6) return kind === 'price' ? inputs[0] : inputs[1];
+      // v20.7.7 FIX: qty ke liye LAST input, inputs[1] nahi — 3-field
+      // stop-limit forms [price, trigger, amount] me inputs[1] TRIGGER
+      // nikalta tha (galat field me qty likh dete the). CoinDCX futures
+      // layout me amount hamesha aakhri numeric input hota hai.
+      if (inputs.length >= 2 && inputs.length <= 6) return kind === 'price' ? inputs[0] : inputs[inputs.length - 1];
       if (inputs.length > 6) return null; // form-region se bahar — poora page pakad liya, positional unsafe
     }
     return null;
@@ -486,7 +503,23 @@ function cxSelectPairScript(pair) {
 // MARKET fallback (failed entry se better), side-strict regex, qty math
 // guard, aur fail hone par inputs ka DOM dump error me (agla break log
 // se hi diagnosable).
-function cxPlaceOrderScript({ side, price, totalINR, leverage, useMargin }) {
+// v20.7.7 HARDENING (deep pro-level recheck):
+//   (d) PRICE READ-BACK VERIFY — setVal ke baad React re-render value
+//       normalize/revert kar sakta hai (tick-size round, min-notional
+//       reset). Ab 400ms baad read-back: mismatch → ek retry (clamped
+//       precision) → phir bhi mismatch → THROW. Galat limit price pe
+//       order KABHI nahi.
+//   (e) QTY SAFETY GATE — qty compute fail (bad math) + qty input
+//       mila → pehle 'skip' karke BLIND buy click ho jata tha (form ka
+//       default qty = uncontrollable size). Ab THROW — order hi nahi.
+//   (f) PRE-CLICK QTY RE-VERIFY — leverage slider etc. ke re-render me
+//       amount field khali ho sakti hai; buy click se theek pehle fresh
+//       re-find + re-set (khaali → re-set, phir bhi khaali → THROW).
+//   (g) DIRECT QTY (opts.qty) — market orders me price null hota hai,
+//       total/price math impossible. Ab caller qty seedha de sakta hai.
+//   (h) qty ROUND-DOWN (floor) — nearest-round se margin overshoot
+//       kabhi nahi ("insufficient margin" reject se bachta hai).
+function cxPlaceOrderScript({ side, price, totalINR, leverage, useMargin, qty }) {
   return `
     ${DOM_HELPERS}
     const steps = [];
@@ -500,6 +533,8 @@ function cxPlaceOrderScript({ side, price, totalINR, leverage, useMargin }) {
       const PRICE_OK = Number(${Number(price)}) > 0;
       const PRICE = String(${Number(price)});
       const TOTAL = Number(${Number(totalINR)});
+      // v20.7.7 (g): direct qty — market order / price-null path
+      const QTY_DIRECT = Number(${Number(qty) > 0 ? Number(qty) : 0});
       // v20.7.6: order-type tabs (Limit/Market) futures desk pe plain
       // div/span bhi hote hain (role/button nahi) — candidates try karo
       // aur HAR click ke baad VERIFY karo ki price input aaya. Verify-gate
@@ -515,8 +550,25 @@ function cxPlaceOrderScript({ side, price, totalINR, leverage, useMargin }) {
           if (priceInput) { steps.push('limit-order'); break; }
         }
       }
+      let priceSet = false;
       if (priceInput) {
-        setVal(priceInput, PRICE); steps.push('price=' + PRICE);
+        setVal(priceInput, PRICE); await sleep(400);
+        // v20.7.7 (d): READ-BACK VERIFY — React normalize/revert pakdo.
+        const readBack = () => String((priceInput && (priceInput.value != null ? priceInput.value : priceInput.textContent)) || '').replace(/[^0-9.]/g, '');
+        const close = (a, b) => { const x = Number(a), y = Number(b); return Number.isFinite(x) && Number.isFinite(y) && y > 0 && Math.abs(x - y) / y < 0.002; };
+        if (close(readBack(), PRICE)) { priceSet = true; steps.push('price=' + PRICE + ':verified'); }
+        else {
+          // retry #1 — precision clamp (6 sig decimals) ke saath
+          const clamped = String(Math.round(Number(PRICE) * 1e6) / 1e6);
+          setVal(priceInput, clamped); await sleep(500);
+          if (close(readBack(), PRICE)) { priceSet = true; steps.push('price=' + PRICE + ':verified(2nd)'); }
+          else {
+            // v20.7.7 (d): galat/purana limit price pe order KABHI nahi —
+            // form ka stale default (live price) chale jaata jo entry
+            // plan se alag ho sakta hai. Honest fail > wrong-price fill.
+            throw new Error('price-verify-fail: set ' + PRICE + ' par form me ' + (readBack() || '(empty)') + ' — React reset/precision reject');
+          }
+        }
       } else {
         // v20.7.6 MARKET FALLBACK: limit UI nahi mila/mount nahi hua —
         // market order se entry lena FAILED entry se better hai (journal
@@ -526,14 +578,27 @@ function cxPlaceOrderScript({ side, price, totalINR, leverage, useMargin }) {
         else steps.push('fallback:market:skip');
       }
       const qtyInput = findOrderField('qty');
-      // SAFETY GATE: na price na qty — form hi nahi mila. BLIND buy
+      // SAFETY GATE 1: na price na qty — form hi nahi mila. BLIND buy
       // click KABHI nahi (default qty galat size ka order ban sakta hai).
       if (!priceInput && !qtyInput) throw new Error('order form inputs nahi mile (price/qty dono absent) — panel load ya UI change check karo');
+      let qtySet = false;
       if (qtyInput) {
-        const q = TOTAL / Number(PRICE);
-        if (Number.isFinite(q) && q > 0) { setVal(qtyInput, String(Math.round(q * 1e6) / 1e6)); steps.push('qty-set'); }
-        else steps.push('qty:skip(bad-math)');
+        // v20.7.7 (g)+(h): total/price math, warna direct qty; floor round.
+        // Step name me source dikhta hai (journaling: direct vs derived).
+        let q = NaN; let viaDirect = false;
+        if (TOTAL > 0 && Number(PRICE) > 0) q = TOTAL / Number(PRICE);
+        else if (QTY_DIRECT > 0) { q = QTY_DIRECT; viaDirect = true; }
+        if (Number.isFinite(q) && q > 0) {
+          setVal(qtyInput, String(Math.floor(q * 1e6) / 1e6));
+          steps.push(viaDirect ? 'qty-set:direct' : 'qty-set');
+          qtySet = true;
+        }
       } else steps.push('qty:missing');
+      // v20.7.7 (e): SAFETY GATE 2 — qty input mila par set NAHI hua
+      // (bad math, price-null market fallback bina direct qty ke) —
+      // pehle blind buy click hota tha form ke default qty pe
+      // (uncontrollable size!). Ab honest fail.
+      if (qtyInput && !qtySet) throw new Error('qty compute fail (total=' + TOTAL + ' price=' + PRICE + ' directQty=' + QTY_DIRECT + ') — blind default-qty order block');
       ${Number(leverage) > 1 ? `
       const levControl = $$('[class*="lever"], [class*="Lever"], input[type="range"], [role="slider"]').filter(vis)[0] || null;
       if (levControl) {
@@ -548,6 +613,22 @@ function cxPlaceOrderScript({ side, price, totalINR, leverage, useMargin }) {
           } else { steps.push('leverage:manual'); }
         } catch { steps.push('leverage:skip'); }
       } else steps.push('leverage:skip');` : ''}
+      // v20.7.7 (f): PRE-CLICK QTY RE-VERIFY — leverage/re-render me
+      // amount khali ho sakti hai. Fresh re-find; khaali → ek re-set;
+      // phir bhi khaali → order nahi (zero-qty reject se better fail).
+      if (qtySet) {
+        await sleep(250);
+        const qNow = findOrderField('qty');
+        if (qNow) {
+          const cur = String(qNow.value != null ? qNow.value : qNow.textContent || '').replace(/[^0-9.]/g, '');
+          if (!Number(cur) || Number(cur) <= 0) {
+            const reQ = (TOTAL > 0 && Number(PRICE) > 0) ? TOTAL / Number(PRICE) : QTY_DIRECT;
+            if (Number.isFinite(reQ) && reQ > 0) { setVal(qNow, String(Math.floor(reQ * 1e6) / 1e6)); await sleep(250); steps.push('qty-reset(after-re-render)'); }
+            const reChk = String(qNow.value != null ? qNow.value : qNow.textContent || '').replace(/[^0-9.]/g, '');
+            if (!Number(reChk) || Number(reChk) <= 0) throw new Error('qty re-verify fail — re-render ne amount khaali kar diya, blind order block');
+          }
+        }
+      }
       // v20.7.6 FIX (CRITICAL): purana regex 'want|long|short' tha — SELL
       // order bhi "Long" se shuru hone wale button pe match ho sakta tha
       // (wrong-side click). Ab side-strict: LONG→buy|long, SHORT→sell|short.

@@ -388,6 +388,10 @@ async function _placeBrowserCrypto(sig, cfg, fxPre = null) {
   const useMargin = !isFut && Number(cfg.cryptoLeverage) > 1; // futures page: leverage native, no margin-tab toggle
   const order = await cxPlaceOrder(page, {
     side: sig.side, price: sig.plan.entry, totalINR: total, leverage: cfg.cryptoLeverage, useMargin,
+    // v20.7.7: direct qty belt-and-suspenders — market-fallback fire hone
+    // par in-page total/price math ke saath-saath exact qty bhi available
+    // rehta hai (form default-qty ka koi chance hi nahi).
+    qty: total / Math.max(1e-8, Number(sig.plan.entry) || 1),
   });
   return { ok: order?.ok, stage: 'place-order', detail: order, steps: [pick, order], fx, total, product: isFut ? 'futures' : 'spot' };
 }
@@ -884,7 +888,9 @@ export async function proTraderTestRun(deps = {}) {
     scores: { ai: best.superIntel?.aiScore, conf: best.confidence, verified: best.verify?.score, verifyAction: best.verify?.action, finalCall: best.verify?.finalCall },
     browserFlow: best.market === 'INDIA'
       ? [`dhan.co me "${best.symbol}" search`, `LIMIT price ${best.plan.entry}`, `qty = floor(${cfg.stakeINR}/${best.plan.entry})`, `product ${cfg.indiaProduct}`, `${best.side === 'LONG' ? 'BUY' : 'SELL'} click + confirm`]
-      : [`coindcx.com me ${best.symbol}INR search`, useMarginText(cfg), `LIMIT price ${best.plan.entry}`, `total ${cfg.stakeINR} INR`, `${best.side === 'LONG' ? 'BUY' : 'SELL'} click + confirm`],
+      : best.market === 'FUTURES'
+        ? [`coindcx.com/futures/B-${best.symbol}_USDT page`, `LIMIT price ${best.plan.entry} (read-back verify)`, `amount = ${cfg.stakeINR}₹ / fx / price`, `qty verify + ${best.side === 'LONG' ? 'BUY' : 'SELL'} click`]
+        : [`coindcx.com me ${best.symbol}INR search`, useMarginText(cfg), `LIMIT price ${best.plan.entry}`, `total ${cfg.stakeINR} INR`, `${best.side === 'LONG' ? 'BUY' : 'SELL'} click + confirm`],
     liveWouldClick: cfg.mode === 'live' && cfg.enabled,
   } : null;
   return { ok: true, dryRun: true, plan, evaluated: evaluated.slice(0, 10) };

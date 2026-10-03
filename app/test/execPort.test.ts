@@ -152,12 +152,25 @@ describe('v20.7 ApiFuturesPort — contract (with stubbed futures.js)', () => {
 });
 
 describe('v20.7 BrowserCdpPort — contract (Phase 6 hardening pending)', () => {
-  it('health() returns ok (light touch — no navigation)', async () => {
-    const ba = { cxEnsureTradePage: vi.fn(), cxSelectPair: vi.fn(), cxPlaceOrder: vi.fn(), cxClosePosition: vi.fn(), cxReadPositions: vi.fn(async () => []) };
+  it('health(): browser CONNECTED → ok:true (real browserStatus probe)', async () => {
+    const ba = { cxEnsureTradePage: vi.fn(), cxSelectPair: vi.fn(), cxPlaceOrder: vi.fn(), cxClosePosition: vi.fn(), cxReadPositions: vi.fn(async () => []), browserStatus: vi.fn(() => ({ connected: true, tabs: {} })) };
     const port = new BrowserCdpPort({ browserAgent: ba });
     const h = await port.health();
     expect(h.ok).toBe(true);
     expect(h.mode).toBe('browser');
+  });
+  it('v20.7.7 health(): browser DOWN → ok:false + honest reason (pehle HAMESHA ok:true tha!)', async () => {
+    const ba = { cxEnsureTradePage: vi.fn(), cxSelectPair: vi.fn(), cxPlaceOrder: vi.fn(), cxClosePosition: vi.fn(), cxReadPositions: vi.fn(async () => []), browserStatus: vi.fn(() => ({ connected: false, lastError: 'connect fail @127.0.0.1:9222' })) };
+    const port = new BrowserCdpPort({ browserAgent: ba });
+    const h = await port.health();
+    expect(h.ok).toBe(false);
+    expect(h.reasons?.[0]).toMatch(/connect fail/);
+  });
+  it('v20.7.7 health(): browserStatus absent → ok:false (honest degrade, jhotha ok:true nahi)', async () => {
+    const ba = { cxEnsureTradePage: vi.fn(), cxSelectPair: vi.fn(), cxPlaceOrder: vi.fn(), cxClosePosition: vi.fn(), cxReadPositions: vi.fn(async () => []) };
+    const port = new BrowserCdpPort({ browserAgent: ba });
+    const h = await port.health();
+    expect(h.ok).toBe(false);
   });
   it('setProtection() returns ok:false (Phase 6 pending — flatten-on-fail will trigger)', async () => {
     const ba = {};
@@ -165,5 +178,64 @@ describe('v20.7 BrowserCdpPort — contract (Phase 6 hardening pending)', () => 
     const r = await port.setProtection({ positionId: 'p1', sl: 95, tp: 110 });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/Phase 6 pending/i);
+  });
+  it('v20.7.7 close(): positional-arg signature + r?.ok verdict (object-arg TypeError + jhootha !!r fix)', async () => {
+    const ba = {
+      cxClosePosition: vi.fn(async (pair, side) => ({ ok: true, closed: String(pair).toUpperCase(), steps: ['row-found', 'exit-click'] })),
+      browserStatus: vi.fn(() => ({ connected: true })),
+    };
+    const port = new BrowserCdpPort({ browserAgent: ba });
+    const r = await port.close({ positionId: 'B-DOT_USDT' });
+    expect(r.ok).toBe(true);
+    expect(ba.cxClosePosition).toHaveBeenCalledWith('B-DOT_USDT'); // positional, NOT {pair: ...}
+  });
+  it('v20.7.7 close(): failed close ab ok:false (pehle truthy-object se hamesha ok:true tha — failed close bhi "closed" journal hota tha)', async () => {
+    const ba = {
+      cxClosePosition: vi.fn(async () => ({ ok: false, error: 'position row nahi mila' })),
+      browserStatus: vi.fn(() => ({ connected: true })),
+    };
+    const port = new BrowserCdpPort({ browserAgent: ba });
+    const r = await port.close({ positionId: 'B-DOT_USDT' });
+    expect(r.ok).toBe(false);
+  });
+  it('v20.7.7 reduce(): full close + honest note (browser partial-exit unsupported)', async () => {
+    const ba = {
+      cxClosePosition: vi.fn(async () => ({ ok: true })),
+      browserStatus: vi.fn(() => ({ connected: true })),
+    };
+    const port = new BrowserCdpPort({ browserAgent: ba });
+    const r = await port.reduce({ positionId: 'B-DOT_USDT', qty: 5 });
+    expect(r.ok).toBe(true);
+    expect(String(r.note)).toMatch(/FULL close/);
+  });
+  it('v20.7.7 getPositions(): {cells,text,nums} rows se id/pair derive (pehle id hamesha "" tha → close-by-id fail)', async () => {
+    const ba = {
+      cxReadPositions: vi.fn(async () => ({ ok: true, positions: [
+        { cells: ['B-DOT_USDT', 'LONG', '31.74', '3.15'], text: 'B-DOT_USDT LONG 31.74 3.15', nums: [31.74, 3.15] },
+      ] })),
+      browserStatus: vi.fn(() => ({ connected: true })),
+    };
+    const port = new BrowserCdpPort({ browserAgent: ba });
+    const rows = await port.getPositions();
+    expect(rows.length).toBe(1);
+    expect(rows[0].pair).toBe('B-DOT_USDT');
+    expect(rows[0].id).toBe('B-DOT_USDT');
+    expect(rows[0].side).toBe('LONG');
+  });
+  it('v20.7.7 open(): qty pass-through — market order (price null) me direct qty driver tak jaati hai', async () => {
+    const ba = {
+      cxEnsureTradePage: vi.fn(async () => ({})),
+      cxSelectPair: vi.fn(async () => ({ ok: true })),
+      cxPairUrl: (pair, product) => `https://coindcx.com/futures/${pair}`,
+      cxPlaceOrder: vi.fn(async (_page, opts) => ({ ok: true, steps: ['fallback:market-order', 'qty-set:direct'] })),
+      browserStatus: vi.fn(() => ({ connected: true })),
+    };
+    const port = new BrowserCdpPort({ browserAgent: ba });
+    const r = await port.open({ pair: 'B-DOT_USDT', side: 'LONG', qty: 31, leverage: 3, type: 'market', price: null, clientId: 'mk1' });
+    expect(r.ok).toBe(true);
+    const call = ba.cxPlaceOrder.mock.calls[0][1];
+    expect(call.qty).toBe(31);       // direct qty
+    expect(call.totalINR).toBe(0);   // price null → no bogus NaN/Infinity total
+    expect(call.price).toBeNull();
   });
 });

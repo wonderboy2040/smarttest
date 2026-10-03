@@ -135,11 +135,13 @@ describe('v20.7.6 order-form driver — CoinDCX futures label-only inputs (DOT L
     expect(r.ok).toBe(true);
     const steps = r.steps as string[];
     expect(steps).toContain('limit-order');
-    expect(steps).toContain('price=3.15');
+    // v20.7.7: price step ab ':verified' suffix ke saath (read-back check)
+    expect(steps).toContain('price=3.15:verified');
     expect(steps).toContain('qty-set');
     expect(steps).toContain('clicked:buy');
     expect((document.getElementById('px') as HTMLInputElement).value).toBe('3.15');
-    expect((document.getElementById('amt') as HTMLInputElement).value).toBe(String(Math.round((100 / 3.15) * 1e6) / 1e6));
+    // v20.7.7: qty ab FLOOR round hota hai (margin overshoot kabhi nahi)
+    expect((document.getElementById('amt') as HTMLInputElement).value).toBe(String(Math.floor((100 / 3.15) * 1e6) / 1e6));
   }, 15000);
 
   it('MARKET FALLBACK: limit UI absent → market order entry, ENTRY FAIL nahi', async () => {
@@ -226,6 +228,113 @@ describe('v20.7.6 order-form driver — CoinDCX futures label-only inputs (DOT L
     `);
     expect(r.px).toBeNull();
     expect(r.amt).toBe('amt');
+  });
+
+  // ---------------- v20.7.7 HARDENING ----------------
+
+  it('v20.7.7 PRICE-VERIFY: React set ke baad value RESET kar de → retry ke baad bhi galat → order KABHI nahi', async () => {
+    futuresForm({ priceField: false });
+    document.getElementById('tabLimit')!.addEventListener('click', () => {
+      document.getElementById('px')!.removeAttribute('hidden');
+    });
+    // hostile React sim: har set ke baad form value ko apne purane default
+    // (live price 3.1524) pe revert kar deta hai — 3.0 vs 3.1524 = 5%
+    // mismatch, 0.2% verify-tolerance se bahut upar (real revert pakda
+    // jayega; tick-size rounding ~0.003% kabhi false-alarm nahi)
+    document.getElementById('px')!.addEventListener('input', () => {
+      const el = document.getElementById('px') as HTMLInputElement;
+      const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      native.call(el, '3.1524');
+    });
+    let buyClicked = false;
+    document.getElementById('btnBuy')!.addEventListener('click', () => { buyClicked = true; });
+    const r = await run(S.cxPlaceOrderScript({ side: 'LONG', price: 3.0, totalINR: 100, leverage: 1, useMargin: false }));
+    expect(r.ok).toBe(false);
+    expect(String(r.error)).toMatch(/price-verify-fail/);
+    expect(String(r.error)).toContain('3.1524'); // hostile value error me surface hoti hai
+    expect(buyClicked).toBe(false); // galat limit price pe click KABHI nahi
+  }, 15000);
+
+  it('v20.7.7 QTY-SAFETY-GATE: qty input mila par math fail (total=0, price=0, directQty=0) → blind buy KABHI nahi', async () => {
+    futuresForm({ limit: false, priceField: false });
+    let buyClicked = false;
+    document.getElementById('btnBuy')!.addEventListener('click', () => { buyClicked = true; });
+    // price: 0 → PRICE_OK false → market fallback; totalINR 0 → math NaN
+    const r = await run(S.cxPlaceOrderScript({ side: 'LONG', price: 0, totalINR: 0, leverage: 1, useMargin: false }));
+    expect(r.ok).toBe(false);
+    expect(String(r.error)).toMatch(/qty compute fail/);
+    expect(String(r.error)).toMatch(/blind default-qty order block/);
+    expect(buyClicked).toBe(false); // form ke default qty pe order KABHI nahi
+  }, 15000);
+
+  it('v20.7.7 DIRECT-QTY: market fallback + price null + qty diya gaya → qty-set:direct + buy click', async () => {
+    futuresForm({ limit: false, priceField: false });
+    let buyClicked = false;
+    document.getElementById('btnBuy')!.addEventListener('click', () => { buyClicked = true; });
+    const r = await run(S.cxPlaceOrderScript({ side: 'LONG', price: 0, totalINR: 0, leverage: 1, useMargin: false, qty: 31 }));
+    expect(r.ok).toBe(true);
+    const steps = r.steps as string[];
+    expect(steps).toContain('qty-set:direct');
+    expect(steps).toContain('clicked:buy');
+    expect((document.getElementById('amt') as HTMLInputElement).value).toBe('31');
+    expect(buyClicked).toBe(true);
+  }, 15000);
+
+  it('v20.7.7 PRE-CLICK RE-VERIFY: re-render ne qty khaali ki → re-set hota hai, order chalta hai', async () => {
+    futuresForm();
+    // hostile sim: qty set hone ke ~100ms baad ek async re-render amount
+    // khaali kar deta hai (leverage slider re-render pattern) — pre-click
+    // re-verify (250ms baad) isse pakad ke re-set karta hai
+    const amt = document.getElementById('amt') as HTMLInputElement;
+    let clears = 0;
+    amt.addEventListener('input', () => {
+      if (amt.value && clears < 1) {
+        clears++;
+        setTimeout(() => {
+          const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+          native.call(amt, ''); // re-render wipe
+          amt.dispatchEvent(new Event('input', { bubbles: true }));
+        }, 100);
+      }
+    });
+    const r = await run(S.cxPlaceOrderScript({ side: 'LONG', price: 3.15, totalINR: 100, leverage: 1, useMargin: false }));
+    expect(r.ok).toBe(true);
+    const steps = r.steps as string[];
+    expect(steps).toContain('qty-set');
+    expect(steps).toContain('qty-reset(after-re-render)');
+    expect(steps).toContain('clicked:buy');
+    expect(Number((document.getElementById('amt') as HTMLInputElement).value)).toBeGreaterThan(0);
+  }, 15000);
+
+  it('v20.7.7 POSITIONAL: 3-field stop-limit form [price, trigger, amount] → qty = AMOUNT (last), trigger kabhi nahi', async () => {
+    document.body.innerHTML = `
+      <div class="order-form">
+        <input id="f_price" type="text" inputmode="decimal">
+        <input id="f_trigger" type="text" inputmode="decimal">
+        <input id="f_amount" type="text" inputmode="decimal">
+        <button id="b">Buy / Long</button>
+      </div>`;
+    const r = await run(`
+      ${S.DOM_HELPERS}
+      return JSON.stringify({ px: findOrderField('price')?.id || null, amt: findOrderField('qty')?.id || null });
+    `);
+    expect(r.px).toBe('f_price');
+    expect(r.amt).toBe('f_amount'); // inputs[1] (trigger) NAHI — v20.7.7 last-input fix
+  });
+
+  it('v20.7.7 setVal HARDENING: contenteditable input par bhi crash nahi (textContent fallback)', async () => {
+    document.body.innerHTML = `
+      <div class="order-form">
+        <div class="field"><label>Price (USDT)</label><div id="pxDiv" contenteditable="true" inputmode="decimal"></div></div>
+        <div class="field"><label>Amount (DOT)</label><input id="amt" type="text" placeholder="0.00"></div>
+        <button id="btnBuy">Buy / Long</button>
+      </div>`;
+    const r = await run(`
+      ${S.DOM_HELPERS}
+      setVal(document.getElementById('pxDiv'), '3.15');
+      return JSON.stringify({ txt: document.getElementById('pxDiv').textContent });
+    `);
+    expect(r.txt).toBe('3.15');
   });
 });
 

@@ -1,5 +1,43 @@
 # Changelog
 
+## v20.7.7 — ORDER-FLOW SAFETY HARDENING: price read-back verify + qty blind-click gates (2026-10-03)
+
+Latest-pull deep pro-level recheck (origin/main `cbc425d`). Focus: v20.7.6 ke order-form driver ke **baad ke latent safety holes** jo sirf "entry ho gayi" aur "entry Sahi size/price pe hui" me farb karte hain. **2895+ tests green · tsc clean · vite build OK.**
+
+### FIX 1 — PRICE READ-BACK VERIFY (`browserAgent.js` — the "silent wrong-price order" hole)
+
+v20.7.6 me price input milne ke baad `setVal` karke seedha aage badh jaate the — par React controlled inputs set ke **baad** value normalize/revert kar sakte hain (tick-size round, min-notional reset, async validation). Form ka stale default (live price) exit plan se alag limit price ban sakta tha. Ab:
+
+- `setVal(price)` ke 400ms baad **read-back**: form me jo hai wahi compare (0.2% tolerance — tick-rounding pass, real revert fail).
+- Mismatch → **ek retry** precision-clamped value ke saath (500ms baad phir read-back).
+- Phir bhi mismatch → **`price-verify-fail` THROW** — galat limit price pe buy click KABHI nahi (error me set-vs-form dono values surface hoti hain).
+
+### FIX 2 — QTY BLIND-CLICK GATES (`qty compute fail` + pre-click re-verify)
+
+- **SAFETY GATE 2**: qty input mila par qty compute nahi hui (total=0 / price=0 / market-fallback bina direct qty) — pehle `qty:skip(bad-math)` log karke **blind buy click** ho jata tha form ke DEFAULT qty pe (uncontrollable size!). Ab honest `qty compute fail — blind default-qty order block` THROW.
+- **PRE-CLICK RE-VERIFY**: leverage slider / React re-render amount field khaali kar sakta hai. Buy click se theek pehle fresh re-find + khali mile to re-set; phir bhi khali → THROW (zero-qty reject se better honest fail).
+- **qty FLOOR round** (nearest nahi) — margin overshoot kabhi nahi, "insufficient margin" exchange reject se bacha.
+
+### FIX 3 — MARKET DIRECT-QTY path (price-null orders ab possible)
+
+Market orders me `price = null` hota hai → `total/price` math impossible thi → pehle ye path guaranteed fail tha. Ab `cxPlaceOrderScript({ qty })` **direct qty** leta hai (`qty-set:direct` step; journaling me source dikhta hai). `BrowserCdpPort.open()` aur `proTraderAuto._placeBrowserCrypto()` dono qty pass karte hain — market fallback fire hone par bhi exact size guarantee.
+
+### FIX 4 — `server/exec/port.js` BrowserCdpPort: 4 signature/verdict bugs
+
+- **`close()`/`reduce()`** — `cxClosePosition({ pair, partialQty })` object-form call ho raha tha jabki REAL signature **positional `(pair, side)`** hai (TypeError → catch → ok:false jhootha "error"); aur `ok: !!r` **truthy-OBJECT** check tha — failed close bhi `ok:true`! Ab positional args + `r?.ok` asli verdict. reduce() me honest note: browser partial-exit unsupported (full close hota hai).
+- **`getPositions()`** — DOUBLE bug: (a) `cxReadPositions()` OBJECT `{ok, positions:[…]}` return karta hai par code `Array.isArray(res)` check karta tha → **hamesha []** (positions table kabhi nahi dikhi); (b) rows `{cells, text, nums}` me `p.id`/`p.pair` exist hi nahi karte → id `''` → close-by-id hamesha fail. Ab `.positions` extract + pehli visible cell se pair derive + text se LONG/SHORT + nums se qty/price.
+- **`health()`** — browser band ho tab bhi HAMESHA `ok:true` tha (positionManager browser-down pe entry attempt karta rehta tha). Ab real `browserStatus()` probe + honest reason.
+
+### FIX 5 — `findOrderField` positional pass: 3-field stop-limit forms
+
+`[price, trigger, amount]` layout me qty ke liye `inputs[1]` TRIGGER nikalta tha (galat field me qty likh dete the). Ab qty = **LAST** input (CoinDCX layout me amount hamesha aakhri numeric input). + `setVal` hardening: contenteditable/custom input elements pe `textContent` fallback (pehle TypeError girata tha).
+
+### ALONG THE WAY
+
+- `SelfImprovementPanel.tsx` — user push me mangled file wapas aa gayi thi (sab identifiers `n` ho chuke the, kahin import nahi hoti) → **deleted again**, v20.6.3 lock test green restored.
+- Tests: `browserOrderForm.test.ts` 15 → **21 tests** (price-verify hostile-React sim, qty safety gate, direct-qty, pre-click re-verify, 3-field positional, contenteditable setVal); `execPort.test.ts` 2 → **10 tests** (honest health ×3, close signature ×2, reduce note, getPositions derive, qty pass-through).
+- Version 20.7.6 → 20.7.7 (version.ts + package.json + APP_TITLE).
+
 ## v20.7.6 — PLACE-ORDER "PRICE INPUT" FIX: FUTURES ORDER-FORM DRIVER v2 (2026-10-03)
 
 User-reported live error: `18:53:05 [error] ENTRY FAILED DOT LONG — place-order: wait timeout: price input`. Full site deep-recheck on the latest GitHub pull (origin/main `e90c777`). **2888 tests / 164 files 100% green · tsc clean · vite build OK.**
