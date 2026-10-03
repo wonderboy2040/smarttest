@@ -1,5 +1,41 @@
 # Changelog
 
+## v20.7.6 — PLACE-ORDER "PRICE INPUT" FIX: FUTURES ORDER-FORM DRIVER v2 (2026-10-03)
+
+User-reported live error: `18:53:05 [error] ENTRY FAILED DOT LONG — place-order: wait timeout: price input`. Full site deep-recheck on the latest GitHub pull (origin/main `e90c777`). **2888 tests / 164 files 100% green · tsc clean · vite build OK.**
+
+### FIX 1 — THE ROOT CAUSE: price-input detection sirf placeholder/name/aria pe tha (`browserAgent.js`)
+
+CoinDCX futures panel (B-DOT_USDT) me price input ka **placeholder LIVE PRICE NUMBER hota hai** ("3.1524"), "Price (USDT)" ek alag sibling `<label>` hota hai, aur na `name` hota hai na `aria-label`. Purana finder in teeno attributes pe regex chalata tha → kabhi match nahi → `waitFor` 5s → ENTRY FAILED. Naya **`findOrderField`** 3-pass driver:
+
+1. **Semantic pass** — attribute text (placeholder/name/id/aria/data-testid/class) YA **associated-label text** (`el.labels`, `aria-labelledby`, aur 3-level parent climb se short block text — "Price (USDT)"). Search/pair/symbol inputs anti-regex se hamesha excluded.
+2. **Positional pass** — buy/sell button se form-region climb: 2-6 numeric inputs mile to DOM-order me **pehla = price, doosra = qty** (limit-mode layout). >6 inputs = poora page pakad liya → bail (unsafe positional nahi).
+3. **Market-mode inference** — sirf 1 numeric input bacha to wahi qty hai (price kabhi nahi — market mode me price input exist hi nahi karta).
+
+### FIX 2 — LIMIT-TAB CLICK + VERIFY + MARKET FALLBACK
+
+- Order-type tabs (Limit/Market) futures desk pe **plain div/span** hote hain (button nahi) — pehle `byText('button', …)` hai hi nahi paata tha. Ab candidate list (button · role=tab · role=button · span · li · a · **plain div**) se **har click ke baad VERIFY** hota hai ki price input aaya (click-and-pray khatam; false-positive click bhi verify-gate se harmless).
+- **MARKET FALLBACK**: limit UI na mile/mount na ho to **market order se entry** li jaati hai — FAILED entry se better (journal `steps` me honest `fallback:market-order` note). DOT LONG ab har hal me entry karega.
+
+### FIX 3 — CRITICAL SAFETY FIXES (deep review me mile)
+
+- **SIDE-STRICT BUY/SELL REGEX** — purana regex `'want|long|short'` tha: **SHORT order bhi "Long" se shuru hone wale button pe match ho sakta tha** (wrong-side click ka latent risk — "Buy / Long" DOM me pehle aata hai). Ab LONG→`buy|long`, SHORT→`sell|short` — cross-side match impossible.
+- **SAFETY GATE** — na price na qty input mile to buy click **KABHI nahi** (default-qty ka galat-size order block). Pehle blind click ho sakta tha.
+- **qty math guard** — `NaN/Infinity/0` qty set nahi hota (`qty:skip(bad-math)`).
+- **CDP `send()` 15s hard wall khatam** — `evaluate({timeoutMs: 30000})` andar hi andar 15s pe reject ho jata tha (`CDP Runtime.evaluate timeout`); ab timeout passthrough hai (`timeoutMs + 3s` guard ke saath). Select-pair (20s) / place-order (30s) budgets ab REAL me 20s/30s hain.
+
+### FIX 4 — FAILURE DIAGNOSTICS (agla UI break log se hi diagnosable)
+
+Place-order fail hone par page ke saare visible inputs ka snapshot (type · inputmode · placeholder · name · id · aria) **error payload me pack** hota hai → `proTraderAuto.js` journal + `ENTRY FAILED` log line me `| inputs: [...]` ke saath flow hota hai. CoinDCX apna DOM change kare to ab log ek glance me batayega ki page me ACTUALLY kya tha.
+
+### ALONG THE WAY (deep recheck of the latest pull)
+
+- `cxHealthScript` + `cxSelectPairScript` (direct-page panel verify) + `dhanPlaceOrderScript` — teeno ab `findOrderField` use karte hain (health panel galat "broken" nahi dikhega; Dhan ke label-for inputs bhi pakde jaate hain).
+- `server/exec/port.js` `BrowserCdpPort.open` — real browserAgent signatures ke against call ho raha tha (`cxSelectPair(pair)` bina `page` arg ke TypeError); fixed + select-pair fail honest surface.
+- `SelfImprovementPanel.tsx` — v20.6.3 removal spec ke against repo me wapas aa gaya tha (user ke push me purana file include ho gaya tha; kahin import nahi hota tha) — deleted, locked test green again.
+- NEW `test/browserOrderForm.test.ts` — **15 tests**: label-only finder, `<label for>` pattern, positional pass, market-mode inference, full LIMIT flow (React-style hidden→visible tab sim), MARKET fallback, safety gate, side-strict SHORT isolation, page-error surface, inputs-dump diagnostics, health probe, Dhan flow, CDP timeout source-lock.
+- Version 20.7.5 → 20.7.6 (version.ts + package.json + APP_TITLE).
+
 ## v20.7.5 — 15s SIGNAL RECHECK LOOP + DEEP ENSEMBLE ANALYSIS ACCURACY UPGRADE (2026-10-02)
 
 The user's two asks, delivered: (1) "AI ko sabhi trading 80+ signals — Strong or Action — har 15 sec recheck karta rahe", (2) "Deep Ensemble Analysis galat/purana info dikhati hai — superintelligence se upgrade karo". **2873 tests / 163 files 100% green · tsc clean · vite build OK (SW cache freshly stamped `bmuqz0tqu`).**

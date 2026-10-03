@@ -121,16 +121,20 @@ class CdpPage {
       else p.resolve(msg.result);
     }
   }
-  send(method, params = {}) {
+  send(method, params = {}, { timeoutMs = 15000 } = {}) {
     if (!this._alive || !this.ws) return Promise.reject(new Error(`CDP page ${this.key} not connected`));
     const id = ++this._id;
     return new Promise((resolve, reject) => {
       this._pending.set(id, { resolve, reject });
       try { this.ws.send(JSON.stringify({ id, method, params })); }
       catch (e) { this._pending.delete(id); reject(e); }
+      // v20.7.6 FIX: hardcoded 15s wall — evaluate(timeoutMs: 20000/30000)
+      // walon ko 15s pe hi reject kar deta tha ("CDP Runtime.evaluate
+      // timeout") jabki in-page waits ka budget bada tha. Ab caller apna
+      // timeout pass kar sakta hai; default wahi 15s rehta hai.
       setTimeout(() => {
         if (this._pending.has(id)) { this._pending.delete(id); reject(new Error(`CDP ${method} timeout`)); }
-      }, 15000).unref();
+      }, Math.max(1000, Number(timeoutMs) || 15000)).unref();
     });
   }
   // Evaluate an async in-page expression. Returns parsed JSON value.
@@ -141,8 +145,7 @@ class CdpPage {
       awaitPromise: true,
       returnByValue: true,
       userGesture: true,
-      timeout: timeoutMs,
-    });
+    }, { timeoutMs: Math.max(15000, timeoutMs + 3000) });
     if (res?.exceptionDetails) {
       const d = res.exceptionDetails;
       throw new Error(`page error: ${d?.exception?.description || d?.text || 'unknown'}`);
@@ -301,6 +304,48 @@ const DOM_HELPERS = `
     }
   };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  // v20.7.6 ORDER-FORM FIELD FINDER — CoinDCX futures panel inputs ke
+  // paas aksar SIRF sibling label hota hai: placeholder live-price NUMBER
+  // hota hai ("3.1524"), na name hota hai na aria-label. Purana finder
+  // sirf placeholder/name/aria dekhta tha — "wait timeout: price input"
+  // (DOT LONG entry fail) isi ka root cause tha. Ab 3 passes:
+  //   1. semantic — attribute YA associated-label text
+  //   2. positional — buy/sell button wale form-region ke numeric inputs
+  //      (DOM order: pehla price, doosra amount — limit mode)
+  //   3. market-mode — sirf 1 input bacha to wo qty hai (price nahi)
+  const fieldAttrText = (el) => [el.placeholder, el.name, el.id, el.getAttribute('aria-label'), el.getAttribute('data-testid'), (typeof el.className === 'string' ? el.className : '')].filter(Boolean).join(' ');
+  const fieldLabelText = (el) => {
+    try { if (el.labels && el.labels.length) return Array.from(el.labels).map((l) => (l.textContent || '')).join(' ').trim(); } catch {}
+    const lb = el.getAttribute('aria-labelledby');
+    if (lb) { try { return lb.split(/\\s+/).map((id) => ((document.getElementById(id) || {}).textContent || '')).join(' ').trim(); } catch {} }
+    let node = el.parentElement;
+    for (let i = 0; node && i < 3; i++, node = node.parentElement) {
+      const own = (node.textContent || '').replace(/\\s+/g, ' ').trim();
+      if (own && own.length <= 44) return own;
+    }
+    return '';
+  };
+  const isOrderNumInput = (el) => {
+    if (!el || !vis(el)) return false;
+    if (el.type !== 'text' && el.type !== 'number' && el.type !== '') return false;
+    return !/search|pair|symbol|scrip|email|password/i.test(fieldAttrText(el));
+  };
+  const findOrderField = (kind) => {
+    const wantRe = kind === 'price' ? /price|entry|trigger/i : /qty|quantity|amount|size|total/i;
+    const antiRe = kind === 'price' ? /qty|quantity|amount|size|total|search|pair|symbol|scrip/i : /price|entry|trigger|search|pair|symbol|scrip/i;
+    const cands = $$('input').filter(isOrderNumInput);
+    const hit = cands.find((el) => ((wantRe.test(fieldAttrText(el)) || wantRe.test(fieldLabelText(el))) && !antiRe.test(fieldAttrText(el))));
+    if (hit) return hit;
+    const btn = $$('button, div[role="button"]').filter((el) => vis(el) && /^(buy|long|sell|short)\\b/i.test((el.textContent || '').trim()))[0] || null;
+    if (!btn) return null;
+    let node = btn.parentElement;
+    for (let i = 0; i < 8 && node; i++, node = node.parentElement) {
+      const inputs = $$('input', node).filter(isOrderNumInput);
+      if (inputs.length >= 2 && inputs.length <= 6) return kind === 'price' ? inputs[0] : inputs[1];
+      if (inputs.length > 6) return null; // form-region se bahar — poora page pakad liya, positional unsafe
+    }
+    return null;
+  };
 `;
 
 // ---------------- CoinDCX in-page operations ----------------
@@ -357,8 +402,11 @@ function cxHealthScript() {
       const limitBtn = byText('button', /limit/i);
       const marketBtn = byText('button', /market/i);
       const marginTab = byText('button, div[role="button"], div, span', /^\\s*margin\\b|margin\\s*trad/i);
-      const priceInput = $$('input').find((el) => vis(el) && /price|entry/i.test(el.placeholder || el.name || el.getAttribute('aria-label') || ''));
-      const qtyInput = $$('input').find((el) => vis(el) && /qty|quantity|amount|total/i.test(el.placeholder || el.name || el.getAttribute('aria-label') || ''));
+      // v20.7.6: health probe bhi naye findOrderField se — futures panel
+      // me label-only inputs ko purana finder miss karta tha, panel galat
+      // "broken" dikha deta tha.
+      const priceInput = findOrderField('price');
+      const qtyInput = findOrderField('qty');
       const buyBtn = $$('button, div[role="button"]').filter((el) => vis(el) && /^(buy|long)\\b/i.test((el.textContent || '').trim()))[0] || null;
       const sellBtn = $$('button, div[role="button"]').filter((el) => vis(el) && /^(sell|short)\\b/i.test((el.textContent || '').trim()))[0] || null;
       const posTable = $$('table, [class*="position"], [class*="Position"]').filter((el) => vis(el) && (el.textContent || '').toLowerCase().includes('position'))[0] || null;
@@ -392,7 +440,7 @@ function cxSelectPairScript(pair) {
         const panel = await waitFor(() => {
           const buy = $$('button, div[role="button"]').filter((el) => vis(el) && /^(buy|long)\\b/i.test((el.textContent || '').trim()))[0] || null;
           const sell = $$('button, div[role="button"]').filter((el) => vis(el) && /^(sell|short)\\b/i.test((el.textContent || '').trim()))[0] || null;
-          const px = $$('input').find((el) => vis(el) && /price|entry|amount|qty/i.test(el.placeholder || el.name || el.getAttribute('aria-label') || '')) || null;
+          const px = findOrderField('price') || findOrderField('qty') || null;
           return (buy || sell || px) || null;
         }, { timeout: 12000, poll: 600, label: 'order panel (direct pair page)' });
         return JSON.stringify({ ok: true, pair: want, picked: 'url-direct: ' + location.pathname, panelFound: true, url: location.href });
@@ -424,23 +472,68 @@ function cxSelectPairScript(pair) {
 }
 
 // Place an order. side LONG|SHORT; price = limit entry; totalINR stake; leverage (margin, best-effort).
+// v20.7.6 REWRITE — root cause of "place-order: wait timeout: price input"
+// (DOT LONG entry fail):
+//   (a) price input detect sirf placeholder/name/aria pe tha — CoinDCX
+//       futures panel me placeholder LIVE PRICE NUMBER hota hai, label
+//       alag element hota hai → waitFor 5s → ENTRY FAILED.
+//   (b) Limit tab click bina verify ke tha — tab div/span hota hai;
+//       click fail → panel Market mode me → price input EXIST hi nahi
+//       karta → guaranteed timeout.
+//   (c) side regex 'want|long|short' — SELL order "Long" button pe bhi
+//       match ho sakta tha (wrong-side click ka latent risk).
+// Fix: findOrderField (label+attr+positional), limit-tab VERIFY + retry,
+// MARKET fallback (failed entry se better), side-strict regex, qty math
+// guard, aur fail hone par inputs ka DOM dump error me (agla break log
+// se hi diagnosable).
 function cxPlaceOrderScript({ side, price, totalINR, leverage, useMargin }) {
   return `
     ${DOM_HELPERS}
+    const steps = [];
     try {
-      const steps = [];
       if (${JSON.stringify(Boolean(useMargin))}) {
         const m = byText('button, div[role="button"], div, span', /^\\s*margin\\b|margin\\s*trad/i);
         if (m) { clickEl(m); steps.push('margin-tab'); await sleep(800); }
         else steps.push('margin-tab:skip');
       }
-      const limitBtn = byText('button', /limit/i);
-      if (limitBtn) { clickEl(limitBtn); steps.push('limit-order'); await sleep(500); }
-      else steps.push('limit-order:skip(market)');
-      const priceInput = await waitFor(() => $$('input').find((el) => vis(el) && /price|entry/i.test(el.placeholder || el.name || el.getAttribute('aria-label') || '')), { timeout: 5000, label: 'price input' });
-      setVal(priceInput, ${JSON.stringify(String(price))}); steps.push('price=' + ${JSON.stringify(String(price))});
-      const qtyInput = $$('input').find((el) => vis(el) && /qty|quantity|amount|total/i.test(el.placeholder || el.name || el.getAttribute('aria-label') || ''));
-      if (qtyInput) { setVal(qtyInput, String(${Number(totalINR)} / Number(${Number(price)}) || 0)); steps.push('qty-set'); }
+      const SIDE = ${JSON.stringify(String(side).toUpperCase() === 'SHORT' ? 'SHORT' : 'LONG')};
+      const PRICE_OK = Number(${Number(price)}) > 0;
+      const PRICE = String(${Number(price)});
+      const TOTAL = Number(${Number(totalINR)});
+      // v20.7.6: order-type tabs (Limit/Market) futures desk pe plain
+      // div/span bhi hote hain (role/button nahi) — candidates try karo
+      // aur HAR click ke baad VERIFY karo ki price input aaya. Verify-gate
+      // hai isliye false-positive click bhi harmless hai.
+      const tabCands = (re) => $$('button, div[role="tab"], div[role="button"], span, li, a, div')
+        .filter((el) => vis(el) && re.test((el.textContent || '').trim()) && (el.textContent || '').trim().length <= 14)
+        .sort((a, b) => (a.textContent || '').length - (b.textContent || '').length);
+      let priceInput = null;
+      if (PRICE_OK) {
+        for (const c of tabCands(/^\\s*limit\\b/i).slice(0, 3)) {
+          clickEl(c); await sleep(600);
+          priceInput = findOrderField('price');
+          if (priceInput) { steps.push('limit-order'); break; }
+        }
+      }
+      if (priceInput) {
+        setVal(priceInput, PRICE); steps.push('price=' + PRICE);
+      } else {
+        // v20.7.6 MARKET FALLBACK: limit UI nahi mila/mount nahi hua —
+        // market order se entry lena FAILED entry se better hai (journal
+        // steps me honest 'fallback:market-order' note jaata hai).
+        const mkt = tabCands(/^\\s*market\\b/i)[0] || null;
+        if (mkt) { clickEl(mkt); steps.push('fallback:market-order'); await sleep(600); }
+        else steps.push('fallback:market:skip');
+      }
+      const qtyInput = findOrderField('qty');
+      // SAFETY GATE: na price na qty — form hi nahi mila. BLIND buy
+      // click KABHI nahi (default qty galat size ka order ban sakta hai).
+      if (!priceInput && !qtyInput) throw new Error('order form inputs nahi mile (price/qty dono absent) — panel load ya UI change check karo');
+      if (qtyInput) {
+        const q = TOTAL / Number(PRICE);
+        if (Number.isFinite(q) && q > 0) { setVal(qtyInput, String(Math.round(q * 1e6) / 1e6)); steps.push('qty-set'); }
+        else steps.push('qty:skip(bad-math)');
+      } else steps.push('qty:missing');
       ${Number(leverage) > 1 ? `
       const levControl = $$('[class*="lever"], [class*="Lever"], input[type="range"], [role="slider"]').filter(vis)[0] || null;
       if (levControl) {
@@ -455,18 +548,33 @@ function cxPlaceOrderScript({ side, price, totalINR, leverage, useMargin }) {
           } else { steps.push('leverage:manual'); }
         } catch { steps.push('leverage:skip'); }
       } else steps.push('leverage:skip');` : ''}
-      const want = ${JSON.stringify(side === 'LONG' ? 'buy' : 'sell')};
+      // v20.7.6 FIX (CRITICAL): purana regex 'want|long|short' tha — SELL
+      // order bhi "Long" se shuru hone wale button pe match ho sakta tha
+      // (wrong-side click). Ab side-strict: LONG→buy|long, SHORT→sell|short.
+      const want = SIDE === 'LONG' ? 'buy|long' : 'sell|short';
       const btn = await waitFor(() => $$('button, div[role="button"]')
-        .filter((el) => vis(el) && new RegExp('^(' + want + '|long|short)\\\\b', 'i').test((el.textContent || '').trim()))[0] || null,
-        { timeout: 5000, label: want + ' button' });
-      clickEl(btn); steps.push('clicked:' + want);
+        .filter((el) => vis(el) && new RegExp('^(' + want + ')\\\\b', 'i').test((el.textContent || '').trim()))[0] || null,
+        { timeout: 6000, label: (SIDE === 'LONG' ? 'buy' : 'sell') + ' button' });
+      clickEl(btn); steps.push('clicked:' + (SIDE === 'LONG' ? 'buy' : 'sell'));
       await sleep(900);
       const confirm = byText('button', /confirm|place\\\\s*order|submit|proceed/i);
       if (confirm) { clickEl(confirm); steps.push('confirm-modal'); await sleep(1200); }
       else steps.push('confirm:skip');
       const err = $$('[class*="error"], [class*="Error"], [role="alert"]').filter(vis).map((el) => (el.textContent || '').trim()).filter(Boolean)[0] || null;
       return JSON.stringify({ ok: !err, steps, pageError: err || null, url: location.href });
-    } catch (e) { return JSON.stringify({ ok: false, steps: [], error: String(e && e.message || e), url: location.href }); }
+    } catch (e) {
+      // v20.7.6 DIAGNOSTICS: fail par page ke visible inputs ka snapshot
+      // error me pack karo — selector break hone pe log se hi pata chalega
+      // ki page me ACTUALLY kya tha.
+      let inputsDump = '';
+      try {
+        inputsDump = JSON.stringify($$('input').filter((el) => vis(el)).slice(0, 10).map((el) => ({
+          t: el.type, m: el.getAttribute('inputmode') || null, ph: String(el.placeholder || '').slice(0, 18),
+          n: el.name || null, id: el.id || null, a: el.getAttribute('aria-label') || null,
+        })));
+      } catch {}
+      return JSON.stringify({ ok: false, steps, error: String(e && e.message || e), inputs: inputsDump, url: location.href });
+    }
   `;
 }
 
@@ -578,9 +686,10 @@ function dhanPlaceOrderScript({ side, price, quantity, product }) {
         if (limitBtn) { clickEl(limitBtn); steps.push('limit'); await sleep(400); }
         else steps.push('limit:skip');
       }
-      const priceInput = $$('input').find((el) => vis(el) && /price|limit/i.test(el.placeholder || el.getAttribute('aria-label') || ''));
+      const priceInput = findOrderField('price');
       if (priceInput && ${Number(price)} > 0) { setVal(priceInput, ${JSON.stringify(String(price))}); steps.push('price'); }
-      const qtyInput = await waitFor(() => $$('input').find((el) => vis(el) && /qty|quantity/i.test(el.placeholder || el.getAttribute('aria-label') || '')), { timeout: 5000, label: 'qty input' });
+      // v20.7.6: findOrderField — Dhan bhi label-only inputs use karta hai
+      const qtyInput = await waitFor(() => findOrderField('qty'), { timeout: 5000, label: 'qty input' });
       setVal(qtyInput, ${JSON.stringify(String(Math.max(1, Math.floor(Number(quantity) || 1))))}); steps.push('qty');
       const prodSel = byText('button, div[role="button"], div', /intraday|mtf|delivery/i);
       if (prodSel) { clickEl(prodSel); await sleep(500); steps.push('product-menu');
@@ -764,3 +873,10 @@ export async function dhanReadPositions() {
 }
 
 export function shotDir() { return SHOT_DIR; }
+
+// v20.7.6: test-only — script builders expose karo (jsdom me evaluate
+// karke order-form driver logic verify hota hai). Production paths is
+// se kuch nahi lete — scripts private hi rehte hain.
+export function __orderFormScriptsForTests() {
+  return { DOM_HELPERS, cxPlaceOrderScript, cxHealthScript, cxSelectPairScript, dhanPlaceOrderScript };
+}

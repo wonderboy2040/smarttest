@@ -264,14 +264,16 @@ export class BrowserCdpPort {
   }
   async open({ pair, side, qty, leverage, type = 'limit', price, sl, tp, clientId }) {
     try {
-      // cxPlaceOrder expects: pair, side, price (limit entry), totalINR, leverage
-      // qty × price ≈ totalINR (futures USDT pair — convert to INR via live USDINR)
-      // For Phase 6 hardening, the leverage DOM-slider + read-back verify
-      // must complete; until then this is best-effort + UNSAFE for live.
-      await this._ba.cxEnsureTradePage();
-      await this._ba.cxSelectPair(pair);
-      const r = await this._ba.cxPlaceOrder({ pair, side, price, totalINR: qty * price, leverage });
-      return { ok: !!r, orderId: clientId || `browser-${Date.now()}`, raw: r };
+      // v20.7.6 FIX: browserAgent ke REAL signatures use karo — pehle ye
+      // cxSelectPair(pair) / cxPlaceOrder({...}) bina `page` arg ke call
+      // kar raha tha (TypeError → har browser-mode open ka fail). Phase 6
+      // hardening (leverage read-back, UI SL/TP bracket) abhi bhi pending
+      // hai — live 5-10x ke liye API port hi recommended.
+      const page = await this._ba.cxEnsureTradePage(this._ba.cxPairUrl ? this._ba.cxPairUrl(pair, 'futures') : undefined);
+      const pick = await this._ba.cxSelectPair(page, pair);
+      if (!pick?.ok) return { ok: false, error: `select-pair: ${pick?.error || 'failed'}` };
+      const r = await this._ba.cxPlaceOrder(page, { side, price, totalINR: qty * price, leverage });
+      return { ok: !!r?.ok, orderId: clientId || `browser-${Date.now()}`, raw: r };
     } catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
   async setProtection({ positionId, sl, tp }) {

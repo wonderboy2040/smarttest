@@ -482,7 +482,12 @@ async function _tryEntry(deps, cfg, sig) {
       for (const s of r.steps || []) if (s?.shot) trade.browser.shots.push(s.shot);
       if (s_shot(r)) trade.browser.shots.push(s_shot(r));
       if (!r.ok) {
-        trade.status = 'FAILED'; trade.error = `${r.stage}: ${r.detail?.error || r.detail?.pageError || 'unknown'}`;
+        // v20.7.6: place-order fail par page ke visible inputs ka dump
+        // (browserAgent diagnostics) bhi error me pack hota hai — agla
+        // UI break LOG se hi diagnosable ("price input" wale errors ka
+        // root-cause loop khatam).
+        const diag = r.detail?.inputs ? ` | inputs: ${String(r.detail.inputs).slice(0, 220)}` : '';
+        trade.status = 'FAILED'; trade.error = `${r.stage}: ${r.detail?.error || r.detail?.pageError || 'unknown'}${diag}`;
         _saveTrade(trade);
         _log('error', `ENTRY FAILED ${sig.symbol} ${sig.side} — ${trade.error}`);
         return { ok: false, error: trade.error, trade };
