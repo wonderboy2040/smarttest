@@ -438,9 +438,12 @@ export function registerAITradingRoutes(app, deps) {
       // SSE watcher so their LIVE LTP flows to the board cards (⚡ badge,
       // Groww·live source pill). CRYPTO live prices already ride the main
       // /api/stream (tab passes ?crypto=…), so only INDIA needs this.
+      // v20.7.9: slice(0,14) → slice(0,15) — the board serves up to 15
+      // signals (limit clamp `Math.min(15, …)`); the 15th card silently
+      // missed its live-LTP registration.
       try {
         if (market === 'INDIA' && Array.isArray(board?.signals)) {
-          const syms = board.signals.slice(0, 14).map(s => s?.symbol).filter(Boolean);
+          const syms = board.signals.slice(0, 15).map(s => s?.symbol).filter(Boolean);
           if (syms.length) intradaySetScanSymbols(syms, 'INDIA');
         }
       } catch { /* never let live-LTP wiring break the board response */ }

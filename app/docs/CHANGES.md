@@ -1,5 +1,37 @@
 # Changelog
 
+## v20.7.9 — DEEP-PIN LIVE RE-VERIFICATION + 3s ULTRAFAST INDIA PRICES (2026-10-03)
+
+User reports: (1) "India Intraday TAB & Crypto CoinDCX TAB — Live Market Realtime ultrafast prices fetch ho raha hai kya, advance pro level pe check karo"; (2) "Superintelligence Signal Board ke trade signal me DEEP ENSEMBLE ANALYSIS click par data/score/details ALAG kyun dikhte hain?" **Root cause mila aur fix hua — is release me dono tabs deep-verified.**
+
+### FIX 1 — DEEP ENSEMBLE ANALYSIS vs SIGNAL BOARD MISMATCH (the main complaint)
+
+**Root cause**: 🔬 click par modal clicked signal ko THROW AWAY kar deta tha aur sirf fresh-recomputed ensemble render karta tha. Board card ~90s purana snapshot hai (60s board cache + 30s client poll), fresh re-run legitimately alag numbers deta hai — side tak flip ho sakti hai. Correct engine behaviour, par user ko "deep analysis galat data dikha rahi hai" jaisa lagta tha.
+
+**Fix — PIN architecture**: click kiya hua signal ab modal me PIN hota hai:
+- Modal ka PRIMARY card = wahi EXACT board signal (score/side/grade/plan/votes) jise click kiya — loading ke DURING bhi turant render hota hai (blank 🧠 screen khatam)
+- Neeche **BOARD CARD vs LIVE RE-VERIFICATION** comparison block — dono columns saath: side · grade · confidence · AI score · entry/SL/T1/T2, ages ke saath. Verdict chip: ✅ STILL VALID / ⚠️ DRIFTED / ⛔ SIDE FLIPPED
+- 15s auto-recheck ab sirf LIVE column update karta hai (pinned kabhi nahi badalta — functional setDeep)
+- Live re-run FAIL ho to pinned card + honest "live re-verification unavailable" strip — click context kabhi lost nahi
+- `deepPinVerdict()` pure engine (22-test regression lock): FLIPPED = side ulat; DRIFTED = grade change / |Δconf|≥8 / |ΔAI score|≥8 / entry ≥1.5% move; CONFIRMED = sab tolerance me
+- Expert/Top-picks stubs (confidence-less) pin-less rehte hain — wahan fresh-run-only UX unchanged
+
+### FIX 2 — INDIA TAB 3s ULTRAFAST PUSH PRICES (advance-pro upgrade)
+
+Server ka TEZ 3s India push stream (`/api/stream?in=…` — Groww NSE 3s poll, refcounted, NSE-window gated, Yahoo index fallback) exist karta tha par India tab subscribe hi nahi karta tha — board cards sirf 5s watcher SSE pe the. Ab tab ONE `/api/stream` connection kholta hai apne board symbols ke liye: **3s push tick wins → 5s watcher fallback** (paper/tracked symbols watcher ke paas hi rehte hain). Hidden-park, zombie-kill, never-stop watchdog — sab hook se free.
+
+### FIX 3 — INDIA DEEP MODAL ME FROZEN SNAPSHOT PRICE
+
+Deep modal ka SignalCard `liveLtp`/`liveSrc` pay nahi raha tha — modal me hamesha scan-time ka frozen price dikhta tha. Ab live overlay + source pill (CoinDCX modal me pehle se tha, India me missing tha). Modal ka CandleChart bhi live LTP overlay use karta hai.
+
+### FIX 4 — [W7] 15th BOARD CARD KA LIVE LTP MISS
+
+`routes.js` board ke sirf top-14 symbols watcher me register karta tha jabki board 15 tak serve karta hai — 15th card ka ⚡ live price silently missing. Ab slice(0,15).
+
+### Verification
+- tsc 0 errors · **2949 tests** (165 files, +22 naye v2079DeepPinLive) · vite build OK
+- CoinDCX tab realtime chain re-verified end-to-end: 2s CoinDCX REST anchor + official spot WS + Binance WS accelerator + cxRtStream futures — sab wired, zombie-kill/backoff-cap/watchdog self-heal layers intact
+
 ## v20.7.8 — FULL-SITE DEEP AUDIT: auto-executor re-entrancy + shutdown orphans + honest feed labels + risk-config SET gates (2026-10-03)
 
 Latest-pull deep pro-level FULL-SITE recheck (origin/main `6c38e7f` merge — v20.7.7 fixes user ne GitHub pe push kar diye the, byte-identical). Review scope: poora server (`index.js` 3195 lines, `routes.js`, supervisor, 4 streams, data layer, secrets) + poora frontend (`api.ts`, hooks, SignalCard/OrderConsole/ProPanels/deep-modal) + signal pipeline verification (ensemble/superIntel/signalRecheck — regime-tilt `?.[modelId]` display-artifact false alarm tha, node runtime proof ke saath clean nikla). **2927 tests green · tsc clean · vite build OK.**

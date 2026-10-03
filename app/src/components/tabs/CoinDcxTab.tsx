@@ -56,7 +56,7 @@ import { PerpIntelPanel } from '../aitrading/PerpIntelPanel';
 import { useCxLivePrices } from '../aitrading/useCxLivePrices';
 // v20.7.5 DEEP ANALYSIS ACCURACY UPGRADE — 15s self-recheck of the open
 // modal + freshness chips + the FULL indicator transparency grid.
-import { useDeepAutoRecheck, DeepFreshnessChip, DeepTransitionLog, DeepIndicatorGrid, type DeepModalState } from '../aitrading/deepAnalysisExtras';
+import { useDeepAutoRecheck, DeepFreshnessChip, DeepTransitionLog, DeepIndicatorGrid, DeepPinnedCompare, isPinnableSignal, type DeepModalState } from '../aitrading/deepAnalysisExtras';
 // v20.7.5 THE 15s SIGNAL RECHECK PANEL — every STRONG/ACTION signal's
 // live re-validation state (loop ki hi cadence par poll hota hai).
 import { SignalRecheckPanel } from '../aitrading/SignalRecheckPanel';
@@ -373,13 +373,20 @@ export default memo(function CoinDcxTab() {
   const deepReq = useRef(0);
   const onDeep = useCallback(async (signal: AISignal) => {
     const id = ++deepReq.current;
-    setDeep({ loading: true });
+    // v20.7.9 THE BOARD-vs-DEEP MISMATCH FIX: PIN the clicked signal.
+    // The old flow threw it away and rendered only the fresh re-run —
+    // which legitimately drifts (board scan is up to ~90s old) and read
+    // as "deep analysis ka data signal board se alag hai". The modal now
+    // shows the EXACT card the user clicked + a LIVE RE-VERIFICATION
+    // comparison. Expert/Top-picks stubs (no confidence) stay pin-less.
+    const pin = isPinnableSignal(signal) ? signal : null;
+    setDeep({ loading: true, pinned: pin, pinnedAt: pin ? Date.now() : null });
     // v20.7.5: user click → fresh=1 (server 30s deep cache BYPASSED — the
     // ensemble runs NOW; the open modal then self-rechecks every 15s).
     const r = await fetchDeep(signal.symbol, signal.market);
     if (deepReq.current !== id) return; // stale — dropped
-    if (r.ok && r.signal) setDeep({ loading: false, signal: r.signal, indicators: r.indicators, narrative: r.narrative, ltf: r.ltf, edge: r.edge, recheckedAt: r.recheckedAt ?? Date.now() });
-    else setDeep({ loading: false, error: r.error || 'deep analysis unavailable' });
+    if (r.ok && r.signal) setDeep(prev => ({ ...prev, loading: false, signal: r.signal, indicators: r.indicators, narrative: r.narrative, ltf: r.ltf, edge: r.edge, recheckedAt: r.recheckedAt ?? Date.now() }));
+    else setDeep(prev => ({ ...prev, loading: false, error: r.error || 'deep analysis unavailable' }));
   }, [fetchDeep]);
 
   // v20.7.5: the OPEN deep modal re-checks ITSELF every 15s (the user's
@@ -780,33 +787,75 @@ export default memo(function CoinDcxTab() {
               <button onClick={() => { deepReq.current++; setDeep(null); }} className="quantum-btn-ghost px-2.5 py-1 rounded-lg text-xs font-black" aria-label="Close">✕</button>
             </div>
             {deep.loading && (
-              <div className="py-12 text-center">
-                <div className="text-4xl mb-3 animate-float">🧠</div>
-                <div className="text-xs text-slate-400">Running a fresh 10-model ensemble on {deep.signal?.symbol ?? 'the symbol'}…</div>
+              <div className="py-8 text-center">
+                {/* v20.7.9: the PINNED card renders IMMEDIATELY while the
+                    live re-verification runs — the user sees the exact
+                    signal they clicked, never a blank "the symbol" screen. */}
+                {deep.pinned ? (
+                  <>
+                    <SignalCard signal={deep.pinned}
+                      liveLtp={liveFor(deep.pinned.market, deep.pinned.symbol)?.price ?? null}
+                      liveSrc={liveFor(deep.pinned.market, deep.pinned.symbol)?.src ?? null}
+                      canLive={canLive} busy={busy}
+                      orderBudgetINR={state?.config?.maxOrderINR} riskCapPct={board?.riskCap ?? state?.config?.maxRiskPct ?? 5}
+                      maxLeverage={state?.config?.cryptoLeverage ?? 1} />
+                    <div className="mt-3 flex items-center justify-center gap-2 text-[10px] font-black text-cyan-300">
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                      LIVE RE-VERIFICATION chal raha hai — fresh 10-model ensemble {deep.pinned.symbol} par abhi compute ho raha hai…
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-4xl mb-3 animate-float">🧠</div>
+                    <div className="text-xs text-slate-400">Running a fresh 10-model ensemble on {deep.signal?.symbol ?? 'the symbol'}…</div>
+                  </>
+                )}
               </div>
             )}
-            {!deep.loading && deep.error && (
+            {!deep.loading && deep.error && !deep.pinned && (
               <div className="py-8 text-center text-xs text-red-400 font-bold">⛔ {deep.error}</div>
+            )}
+            {/* v20.7.9: a failed live re-run with a PINNED card still shows
+                the original signal (the click context survives) + the honest
+                error strip below it. */}
+            {!deep.loading && deep.error && deep.pinned && (
+              <>
+                <SignalCard signal={deep.pinned}
+                  liveLtp={liveFor(deep.pinned.market, deep.pinned.symbol)?.price ?? null}
+                  liveSrc={liveFor(deep.pinned.market, deep.pinned.symbol)?.src ?? null}
+                  canLive={canLive} busy={busy}
+                  orderBudgetINR={state?.config?.maxOrderINR} riskCapPct={board?.riskCap ?? state?.config?.maxRiskPct ?? 5}
+                  maxLeverage={state?.config?.cryptoLeverage ?? 1} />
+                <div className="mt-2 py-2 text-center text-[10px] text-amber-400 font-bold">⚠ Live re-verification abhi unavailable ({deep.error}) — upar wahi BOARD CARD hai jise aapne click kiya tha</div>
+              </>
             )}
             {!deep.loading && deep.signal && (
               <>
-                <SignalCard signal={deep.signal}
-                  liveLtp={liveFor(deep.signal.market, deep.signal.symbol)?.price ?? null}
-                  liveSrc={liveFor(deep.signal.market, deep.signal.symbol)?.src ?? null}
-                  onExecute={deep.signal.market === 'CRYPTO' ? onExecute : undefined}
-                  onExecuteFutures={deep.signal.market === 'FUTURES' ? onExecuteFutures : undefined}
-                  onExecuteGlobal={deep.signal.market === 'GLOBALFUTURES' ? onExecuteGlobal : undefined}
+                {/* v20.7.9: the PRIMARY card is the PINNED signal (the one
+                    clicked on the board); pin-less dives (Expert/Top picks)
+                    render the live signal as before. The live re-run lives in
+                    the DeepPinnedCompare block right below — never a silent
+                    swap. */}
+                <SignalCard signal={deep.pinned ?? deep.signal}
+                  liveLtp={liveFor((deep.pinned ?? deep.signal).market, (deep.pinned ?? deep.signal).symbol)?.price ?? null}
+                  liveSrc={liveFor((deep.pinned ?? deep.signal).market, (deep.pinned ?? deep.signal).symbol)?.src ?? null}
+                  onExecute={(deep.pinned ?? deep.signal).market === 'CRYPTO' ? onExecute : undefined}
+                  onExecuteFutures={(deep.pinned ?? deep.signal).market === 'FUTURES' ? onExecuteFutures : undefined}
+                  onExecuteGlobal={(deep.pinned ?? deep.signal).market === 'GLOBALFUTURES' ? onExecuteGlobal : undefined}
                   onDeep={onDeep}
                   canLive={canLive} busy={busy}
                   orderBudgetINR={state?.config?.maxOrderINR} riskCapPct={board?.riskCap ?? state?.config?.maxRiskPct ?? 5}
                   maxLeverage={state?.config?.cryptoLeverage ?? 1} />
-                <MtfBlock ltf={deep.ltf} quality={deep.signal.quality} />
+                {deep.pinned && deep.signal && (
+                  <DeepPinnedCompare pinned={deep.pinned} pinnedAt={deep.pinnedAt} live={deep.signal} recheckedAt={deep.recheckedAt} />
+                )}
+                <MtfBlock ltf={deep.ltf} quality={(deep.pinned ?? deep.signal).quality} />
                 {/* v20.2: deep modal ka apna price chart — plan levels ke
                     saath candles. CRYPTO desk INR-scale me convert hota hai
                     (server ltp-ratio conversion — fallback Binance USDT
                     candles bhi desk ke currency me dikhte hain). */}
                 <div className="mt-3">
-                  <CandleChart symbol={deep.signal.symbol} market={deep.signal.market} ltp={deep.signal.ltp} plan={deep.signal.plan} defaultTf="15m" />
+                  <CandleChart symbol={deep.signal.symbol} market={deep.signal.market} ltp={liveFor(deep.signal.market, deep.signal.symbol)?.price ?? deep.signal.ltp} plan={deep.signal.plan} defaultTf="15m" />
                 </div>
                 <EdgeBlock edge={deep.edge} />
                 {/* v20.7.5: the 15s self-recheck's VISIBLE transition log —

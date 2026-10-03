@@ -7,5 +7,5 @@
 // (scripts/build_v203_full.sh) greps this file so the shipped app can
 // never disagree with the shipped VERSION.txt again.
 // ============================================================
-export const APP_VERSION = '20.7.8';
-export const APP_TITLE = `SmartAI Pro v${APP_VERSION} — TWO-DESK TERMINAL (India Intraday + CoinDCX) — full-site deep audit hardening (auto-executor re-entrancy + bot-child shutdown + honest feed badges + risk-config SET gates) + futures order-form driver v3 + 15s signal recheck`;
+export const APP_VERSION = '20.7.9';
+export const APP_TITLE = `SmartAI Pro v${APP_VERSION} — TWO-DESK TERMINAL (India Intraday + CoinDCX) — DEEP-PIN live re-verification (board card + fresh ensemble side-by-side, no more mismatched analysis) + 3s ultrafast India push prices + deep-modal live LTP overlays`;

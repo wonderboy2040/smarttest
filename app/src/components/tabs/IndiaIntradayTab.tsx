@@ -24,7 +24,7 @@ import { SignalCard } from '../aitrading/SignalCard';
 import { MtfBlock, EdgeBlock } from '../aitrading/DeepQualityBlock';
 // v20.7.5 DEEP ANALYSIS ACCURACY UPGRADE — 15s self-recheck of the open
 // modal + freshness chips + the FULL indicator transparency grid.
-import { useDeepAutoRecheck, DeepFreshnessChip, DeepTransitionLog, DeepIndicatorGrid, type DeepModalState } from '../aitrading/deepAnalysisExtras';
+import { useDeepAutoRecheck, DeepFreshnessChip, DeepTransitionLog, DeepIndicatorGrid, DeepPinnedCompare, isPinnableSignal, type DeepModalState } from '../aitrading/deepAnalysisExtras';
 // v20.7.5 THE 15s SIGNAL RECHECK PANEL — STRONG/ACTION signals ka live
 // re-validation state (server loop same cadence par chalta hai).
 import { SignalRecheckPanel } from '../aitrading/SignalRecheckPanel';
@@ -70,6 +70,14 @@ import type { LiveQuote } from '../intraday/types';
 //   • IndiaAgentPanel — the NSE auto-trade agent console (/api/india/agent)
 import { ProTraderAgentPanel } from '../intraday/ProTraderAgentPanel';
 import { IndiaAgentPanel } from '../aitrading/IndiaAgentPanel';
+// v20.7.9 ULTRAFAST INDIA PRICES: the board cards used to ride ONLY the
+// 5s intraday-watcher SSE, while the server's FASTER 3s India push stream
+// (/api/stream?in=… — Groww NSE 3s poll, refcounted, NSE-window gated,
+// index fallback Yahoo) existed but nothing on this tab subscribed to it.
+// The tab now opens ONE /api/stream connection for its board symbols and
+// prefers the 3s push tick, falling back to the 5s watcher quote (which
+// still owns paper/tracked symbols the push stream doesn't carry).
+import { useCxLivePrices } from '../aitrading/useCxLivePrices';
 // v11.0 GLOBAL MARKET COUNCIL — 6-seat verdict surface + near-miss
 // journal (India desk: onchain seat structurally abstains, options-flow
 // seat rides the NSE chain read).
@@ -123,18 +131,29 @@ export default memo(function IndiaIntradayTab() {
   // (The server watcher broadcasts regardless; one more attached client
   // costs nothing.)
   const stream = useIntradayStream(true);
-  // Live-quote lookup for a board signal — null (snapshot fallback) when
-  // the watcher isn't covering that symbol yet.
-  // v18.6.4: 30s FRESHNESS GATE (useCxLivePrices ke mirror me) — India
-  // stream ungated tha, stale quote ko ⚡LIVE dikha ke FALSE
-  // "PLAN INVALIDATED" fire karta tha (SignalCard ka liveInvalidation
-  // strip fresh-price assumption par chalta hai).
+  // v20.7.9: the 3s ultrafast push feed for the BOARD's signal symbols
+  // (server inStream → /api/stream?in=…). Sorted-key hygiene, hidden-park,
+  // zombie-kill and the never-stop watchdog all come free from the hook.
+  // (Uses `india` — `board` is aliased further down, after this line.)
+  const indiaPushSyms = useMemo(() => (india?.signals || []).map(s => s.symbol), [india?.generatedAt, india?.signals]); // eslint-disable-line react-hooks/exhaustive-deps
+  const cxPush = useCxLivePrices(true, [], [], [], indiaPushSyms);
+  const pushFor = cxPush.forSignal;
+  // Live-quote lookup for a board signal — 3s PUSH tick first (fresher),
+  // then the 5s watcher quote, then null (snapshot fallback). The watcher
+  // leg keeps its 30s FRESHNESS GATE; the push leg's own gate lives inside
+  // useCxLivePrices.forSignal (30s + feed-alive logic).
   const liveFor = useCallback((symbol: string): LiveQuote | null => {
-    const q = stream.livePrices[String(symbol || '').toUpperCase()];
+    const sym = String(symbol || '').toUpperCase();
+    if (!sym) return null;
+    const push = pushFor('INDIA', sym);
+    if (push && push.price > 0) {
+      return { price: push.price, change: push.change, ts: push.time, src: push.src || 'groww-live' };
+    }
+    const q = stream.livePrices[sym];
     if (!q || !(q.price > 0)) return null;
     const at = q.ts || stream.lastQuoteAt;
     return (at > 0 && Date.now() - at <= 30_000) ? q : null;
-  }, [stream.livePrices, stream.lastQuoteAt]);
+  }, [pushFor, stream.livePrices, stream.lastQuoteAt]);
   // bump → Paper/TrackRecord/Journal panels refetch (after open/close).
   const [paperRefresh, setPaperRefresh] = useState(0);
   // v20.2 B8: TrackRecord/Journal self-poll — "Currently Tracking" LTP +
@@ -260,13 +279,19 @@ export default memo(function IndiaIntradayTab() {
   const deepReq = useRef(0);
   const onDeep = useCallback(async (signal: AISignal) => {
     const id = ++deepReq.current;
-    setDeep({ loading: true });
+    // v20.7.9 THE BOARD-vs-DEEP MISMATCH FIX: PIN the clicked signal —
+    // the modal renders the EXACT card the user clicked + a LIVE
+    // RE-VERIFICATION comparison, never a silently-swapped drifted
+    // re-run (the "deep analysis ka data alag kyun?" complaint).
+    // Top/Expert-picks stubs (no confidence) stay pin-less.
+    const pin = isPinnableSignal(signal) ? signal : null;
+    setDeep({ loading: true, pinned: pin, pinnedAt: pin ? Date.now() : null });
     // v20.7.5: user click → fresh=1 (server deep-cache bypass — ensemble
     // runs NOW; the open modal then self-rechecks every 15s).
     const r = await fetchDeep(signal.symbol, signal.market);
     if (deepReq.current !== id) return; // stale — dropped
-    if (r.ok && r.signal) setDeep({ loading: false, signal: r.signal, indicators: r.indicators, narrative: r.narrative, ltf: r.ltf, edge: r.edge, recheckedAt: r.recheckedAt ?? Date.now() });
-    else setDeep({ loading: false, error: r.error || 'deep analysis unavailable' });
+    if (r.ok && r.signal) setDeep(prev => ({ ...prev, loading: false, signal: r.signal, indicators: r.indicators, narrative: r.narrative, ltf: r.ltf, edge: r.edge, recheckedAt: r.recheckedAt ?? Date.now() }));
+    else setDeep(prev => ({ ...prev, loading: false, error: r.error || 'deep analysis unavailable' }));
   }, [fetchDeep]);
 
   // v20.7.5: the OPEN deep modal re-checks ITSELF every 15s — grade /
@@ -668,26 +693,66 @@ export default memo(function IndiaIntradayTab() {
               <button onClick={() => { deepReq.current++; setDeep(null); }} className="quantum-btn-ghost px-2.5 py-1 rounded-lg text-xs font-black" aria-label="Close">✕</button>
             </div>
             {deep.loading && (
-              <div className="py-12 text-center">
-                <div className="text-4xl mb-3 animate-float">🧠</div>
-                <div className="text-xs text-slate-400">Running a fresh 10-model ensemble on {deep.signal?.symbol ?? 'the symbol'}…</div>
+              <div className="py-8 text-center">
+                {/* v20.7.9: the PINNED card renders IMMEDIATELY while the
+                    live re-verification computes — plus its LIVE LTP overlay
+                    (the old modal showed a frozen snapshot price). */}
+                {deep.pinned ? (
+                  <>
+                    <SignalCard signal={deep.pinned} onExecuteIndia={onExecuteIndia} canLiveIndia={canLiveIndia} busy={busy}
+                      orderBudgetINR={state?.config?.maxOrderINR}
+                      indiaBudgetINR={state?.config?.indiaMaxOrderINR ?? 5000}
+                      liveLtp={liveFor(deep.pinned.symbol)?.price ?? null}
+                      liveSrc={liveFor(deep.pinned.symbol)?.src ?? null} />
+                    <div className="mt-3 flex items-center justify-center gap-2 text-[10px] font-black text-cyan-300">
+                      <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                      LIVE RE-VERIFICATION chal raha hai — fresh 10-model ensemble {deep.pinned.symbol} par abhi compute ho raha hai…
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-4xl mb-3 animate-float">🧠</div>
+                    <div className="text-xs text-slate-400">Running a fresh 10-model ensemble on {deep.signal?.symbol ?? 'the symbol'}…</div>
+                  </>
+                )}
               </div>
             )}
-            {!deep.loading && deep.error && (
+            {!deep.loading && deep.error && !deep.pinned && (
               <div className="py-8 text-center text-xs text-red-400 font-bold">⛔ {deep.error}</div>
+            )}
+            {/* v20.7.9: failed live re-run + pinned card → the original
+                signal still renders (click context survives) + honest strip. */}
+            {!deep.loading && deep.error && deep.pinned && (
+              <>
+                <SignalCard signal={deep.pinned} onExecuteIndia={onExecuteIndia} canLiveIndia={canLiveIndia} busy={busy}
+                  orderBudgetINR={state?.config?.maxOrderINR}
+                  indiaBudgetINR={state?.config?.indiaMaxOrderINR ?? 5000}
+                  liveLtp={liveFor(deep.pinned.symbol)?.price ?? null}
+                  liveSrc={liveFor(deep.pinned.symbol)?.src ?? null} />
+                <div className="mt-2 py-2 text-center text-[10px] text-amber-400 font-bold">⚠ Live re-verification abhi unavailable ({deep.error}) — upar wahi BOARD CARD hai jise aapne click kiya tha</div>
+              </>
             )}
             {!deep.loading && deep.signal && (
               <>
-                <SignalCard signal={deep.signal} onExecuteIndia={onExecuteIndia} onDeep={onDeep} canLiveIndia={canLiveIndia} busy={busy}
+                {/* v20.7.9: PRIMARY card = the PINNED board signal; the live
+                    re-run lives in DeepPinnedCompare below. The modal card
+                    now also gets the LIVE LTP + source pill (A2 fix — frozen
+                    snapshot price in the deep modal). */}
+                <SignalCard signal={deep.pinned ?? deep.signal} onExecuteIndia={onExecuteIndia} onDeep={onDeep} canLiveIndia={canLiveIndia} busy={busy}
                   orderBudgetINR={state?.config?.maxOrderINR} riskCapPct={board?.riskCap ?? state?.config?.maxRiskPct ?? 5}
                   indiaBudgetINR={state?.config?.indiaMaxOrderINR ?? 5000}
-                  onPaperTrade={onDeskPaper} paperOpenForSymbol={paperOpenSymbols.has(deep.signal.symbol)} />
-                <MtfBlock ltf={deep.ltf} quality={deep.signal.quality} />
+                  onPaperTrade={onDeskPaper} paperOpenForSymbol={paperOpenSymbols.has((deep.pinned ?? deep.signal).symbol)}
+                  liveLtp={liveFor((deep.pinned ?? deep.signal).symbol)?.price ?? null}
+                  liveSrc={liveFor((deep.pinned ?? deep.signal).symbol)?.src ?? null} />
+                {deep.pinned && deep.signal && (
+                  <DeepPinnedCompare pinned={deep.pinned} pinnedAt={deep.pinnedAt} live={deep.signal} recheckedAt={deep.recheckedAt} />
+                )}
+                <MtfBlock ltf={deep.ltf} quality={(deep.pinned ?? deep.signal).quality} />
                 {/* v20.2: deep modal ka apna price chart — plan levels ke
                     saath candles (SignalCard ka lazy toggle yahan default
                     open hai — deep analysis me chart FIRST-CLASS hai). */}
                 <div className="mt-3">
-                  <CandleChart symbol={deep.signal.symbol} market={deep.signal.market} ltp={deep.signal.ltp} plan={deep.signal.plan} defaultTf="15m" />
+                  <CandleChart symbol={deep.signal.symbol} market={deep.signal.market} ltp={liveFor(deep.signal.symbol)?.price ?? deep.signal.ltp} plan={deep.signal.plan} defaultTf="15m" />
                 </div>
                 <EdgeBlock edge={deep.edge} />
                 {/* v20.7.5: the 15s self-recheck's VISIBLE transition log. */}

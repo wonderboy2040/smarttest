@@ -1,5 +1,5 @@
 // ============================================================
-// src/components/aitrading/deepAnalysisExtras.tsx — v20.7.5
+// src/components/aitrading/deepAnalysisExtras.tsx — v20.7.9
 // ------------------------------------------------------------
 // THE DEEP ENSEMBLE ANALYSIS ACCURACY UPGRADE (the user's "deep
 // analysis galat / purana info dikhati hai" fix, superintelligence
@@ -30,6 +30,14 @@ export const DEEP_RECHECK_SEC = 15;
 export interface DeepModalState {
   loading: boolean;
   signal?: AISignal;
+  /** v20.7.9: the EXACT board signal the user clicked 🔬 on — pinned
+   *  so the deep modal renders the original card + a LIVE re-verification
+   *  comparison instead of silently swapping in a drifted re-run (the
+   *  "Signal Board ka data alag" complaint). */
+  pinned?: AISignal | null;
+  /** v20.7.9: when the pin happened (click time, epoch ms) — drives the
+   *  "BOARD CARD age" label in the compare block. */
+  pinnedAt?: number | null;
   indicators?: Record<string, unknown>;
   narrative?: DeepSignalResult['narrative'];
   ltf?: DeepSignalResult['ltf'];
@@ -45,6 +53,81 @@ const GRADE_RANK: Record<string, number> = { NEUTRAL: 0, WATCH: 1, ACTION: 2, ST
 const num = (v: unknown): number | null => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
 const fmt = (v: number | null | undefined, d = 2): string => (v == null ? '—' : v.toFixed(d));
 
+// ------------------------------------------------------------
+// v20.7.9: the PIN gate — only a REAL board signal (side + grade +
+// numeric confidence) is worth pinning. The Expert/Top-picks stubs
+// ({symbol, market} casts) render nothing useful as a card, so those
+// deep dives stay pin-less (fresh run only, exactly the old UX).
+// ------------------------------------------------------------
+export function isPinnableSignal(s: AISignal | null | undefined): boolean {
+  return !!(s && s.symbol && s.side && s.grade && typeof s.confidence === 'number' && Number.isFinite(s.confidence));
+}
+
+export interface DeepPinVerdict {
+  verdict: 'CONFIRMED' | 'DRIFTED' | 'FLIPPED';
+  sameSide: boolean;
+  side: string | null;
+  grade: string | null;
+  gradeDir: 'up' | 'down' | 'flat' | null;
+  confDrift: number | null;
+  aiScorePinned: number | null;
+  aiScoreLive: number | null;
+  aiScoreDrift: number | null;
+  planPinned: { entry: number | null; sl: number | null; t1: number | null; t2: number | null } | null;
+  planLive: { entry: number | null; sl: number | null; t1: number | null; t2: number | null } | null;
+  note: string;
+}
+
+/**
+ * v20.7.9 PURE verdict engine — ORIGINAL (pinned) vs LIVE re-run.
+ * Exported for the regression suite; the modal renders DeepPinnedCompare
+ * from this. Thresholds:
+ *   FLIPPED  — opposite side (the original thesis is dead)
+ *   DRIFTED  — same side but (grade changed OR |Δconf| ≥ 8 OR
+ *              |Δ AI score| ≥ 8 OR plan entry moved ≥ 1.5%)
+ *   CONFIRMED — same side, everything within tolerance
+ */
+export function deepPinVerdict(pinned: AISignal, live: AISignal): DeepPinVerdict {
+  const sideP = String(pinned.side || '').toUpperCase();
+  const sideL = String(live.side || '').toUpperCase();
+  const sameSide = !!sideP && !!sideL && sideP === sideL;
+  const confP = num(pinned.confidence);
+  const confL = num(live.confidence);
+  const confDrift = confP != null && confL != null ? confL - confP : null;
+  const aiP = num(pinned.superIntel?.aiScore);
+  const aiL = num(live.superIntel?.aiScore);
+  const aiDrift = aiP != null && aiL != null ? aiL - aiP : null;
+  const grP = GRADE_RANK[pinned.grade] ?? 0;
+  const grL = GRADE_RANK[live.grade] ?? 0;
+  const gradeDir = grL > grP ? 'up' : grL < grP ? 'down' : 'flat';
+  const planOf = (s: AISignal): DeepPinVerdict['planPinned'] => {
+    const p = s.plan;
+    if (!p) return null;
+    return { entry: num(p.entry), sl: num(p.stopLoss), t1: num(p.target1), t2: num(p.target2) };
+  };
+  const planP = planOf(pinned);
+  const planL = planOf(live);
+  let entryMovedPct: number | null = null;
+  if (planP?.entry != null && planL?.entry != null && planP.entry > 0) {
+    entryMovedPct = Math.abs((planL.entry - planP.entry) / planP.entry) * 100;
+  }
+  const drifted = gradeDir !== 'flat'
+    || (confDrift != null && Math.abs(confDrift) >= 8)
+    || (aiDrift != null && Math.abs(aiDrift) >= 8)
+    || (entryMovedPct != null && entryMovedPct >= 1.5);
+  const verdict: DeepPinVerdict['verdict'] = !sameSide ? 'FLIPPED' : drifted ? 'DRIFTED' : 'CONFIRMED';
+  const note = !sameSide
+    ? `LIVE re-run ne side ulat di (${sideP} → ${sideL}) — original thesis ab valid NAHI hai, entry mat karo.`
+    : verdict === 'DRIFTED'
+      ? 'Same side, par numbers hil gaye — entry/SL/targets LIVE column se lo, board card purana tha.'
+      : 'Same side, same levels — original signal abhi bhi VALID hai.';
+  return {
+    verdict, sameSide, side: sideL || null, grade: live.grade || null, gradeDir,
+    confDrift, aiScorePinned: aiP, aiScoreLive: aiL, aiScoreDrift: aiDrift,
+    planPinned: planP, planLive: planL, note,
+  };
+}
+
 /**
  * The 15s self-recheck of an OPEN deep modal.
  * - ticks a 1s countdown for the chip
@@ -56,7 +139,7 @@ const fmt = (v: number | null | undefined, d = 2): string => (v == null ? '—' 
  */
 export function useDeepAutoRecheck(
   deep: DeepModalState | null,
-  setDeep: (d: DeepModalState | null) => void,
+  setDeep: React.Dispatch<React.SetStateAction<DeepModalState | null>>,
   fetchDeep: (symbol: string, market: 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES', opts?: { fresh?: boolean }) => Promise<DeepSignalResult>,
   reqRef: React.MutableRefObject<number>,
   market: 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES',
@@ -111,7 +194,20 @@ export function useDeepAutoRecheck(
       }
       last = now; // v20.7.8 [M-7]: advance the comparison baseline
       setRechecks(n => n + 1);
-      setDeep({ loading: false, signal: now, indicators: r.indicators, narrative: r.narrative, ltf: r.ltf, edge: r.edge, recheckedAt: r.recheckedAt ?? Date.now() });
+      // v20.7.9: FUNCTIONAL update — the recheck must never drop the
+      // pinned signal (a plain replacement object here would un-pin the
+      // modal on the first 15s recheck and re-create the exact board-vs-
+      // deep mismatch this upgrade fixes).
+      setDeep(prev => prev ? {
+        ...prev,
+        loading: false,
+        signal: now,
+        indicators: r.indicators,
+        narrative: r.narrative,
+        ltf: r.ltf,
+        edge: r.edge,
+        recheckedAt: r.recheckedAt ?? Date.now(),
+      } : prev);
     };
     // 1s ticker: countdown chip + fires the pass at each 15s boundary
     const timer = setInterval(() => {
@@ -170,6 +266,97 @@ export function DeepTransitionLog({ log }: { log: DeepLogEntry[] }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+// ---------------- v20.7.9: the ORIGINAL-vs-LIVE comparison block ----------------
+
+const VERDICT_STYLE: Record<DeepPinVerdict['verdict'], { chip: string; label: string; icon: string }> = {
+  CONFIRMED: { chip: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40', label: 'STILL VALID', icon: '✅' },
+  DRIFTED: { chip: 'bg-amber-500/15 text-amber-300 border-amber-500/40', label: 'DRIFTED', icon: '⚠️' },
+  FLIPPED: { chip: 'bg-red-500/15 text-red-300 border-red-500/40', label: 'SIDE FLIPPED', icon: '⛔' },
+};
+
+function CompareRow({ k, pinnedV, liveV, tone }: { k: string; pinnedV: string; liveV: string; tone?: 'good' | 'bad' }) {
+  const cls = tone === 'good' ? 'text-emerald-300' : tone === 'bad' ? 'text-red-300' : 'text-slate-200';
+  return (
+    <div className="grid grid-cols-[86px_1fr_1fr] items-center gap-1.5 text-[10px] font-mono">
+      <span className="text-slate-500 uppercase truncate">{k}</span>
+      <span className="text-slate-400 text-right truncate">{pinnedV}</span>
+      <span className={`${cls} text-right truncate font-bold`}>{liveV}</span>
+    </div>
+  );
+}
+
+/**
+ * v20.7.9 — the answer to "board ka signal aur deep analysis ka data
+ * alag kyun?" rendered ON the modal. The ORIGINAL (pinned) column is
+ * the exact card the user clicked; the LIVE column is the fresh
+ * re-verification ensemble run (and every 15s auto-recheck refreshes
+ * ONLY the live column). One verdict chip on top: STILL VALID /
+ * DRIFTED / SIDE FLIPPED.
+ */
+export function DeepPinnedCompare({ pinned, pinnedAt, live, recheckedAt }: {
+  pinned: AISignal;
+  pinnedAt?: number | null;
+  live: AISignal;
+  recheckedAt?: number | null;
+}) {
+  const v = deepPinVerdict(pinned, live);
+  const st = VERDICT_STYLE[v.verdict];
+  const [, force] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => force(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const pinAgeS = pinnedAt ? Math.max(0, Math.round((Date.now() - pinnedAt) / 1000)) : null;
+  const liveAgeS = recheckedAt ? Math.max(0, Math.round((Date.now() - recheckedAt) / 1000)) : null;
+  const gradeArrow = v.gradeDir === 'up' ? ' ↑' : v.gradeDir === 'down' ? ' ↓' : '';
+  const confTxt = (p: number | null, l: number | null) => {
+    if (p == null && l == null) return ['—', '—'];
+    const drift = v.confDrift != null && Math.abs(v.confDrift) >= 8 ? ` (${v.confDrift > 0 ? '+' : ''}${Math.round(v.confDrift)})` : '';
+    return [p != null ? `${Math.round(p)}%` : '—', l != null ? `${Math.round(l)}%${drift}` : '—'];
+  };
+  const [confP, confL] = confTxt(pinned.confidence ?? null, live.confidence ?? null);
+  const aiTxt = (p: number | null, l: number | null) => {
+    if (p == null && l == null) return ['—', '—'];
+    const drift = v.aiScoreDrift != null && Math.abs(v.aiScoreDrift) >= 8 ? ` (${v.aiScoreDrift > 0 ? '+' : ''}${Math.round(v.aiScoreDrift)})` : '';
+    return [p != null ? String(Math.round(p)) : '—', l != null ? `${Math.round(l)}${drift}` : '—'];
+  };
+  const [aiP, aiL] = aiTxt(v.aiScorePinned, v.aiScoreLive);
+  const px = (n: number | null | undefined) => n != null ? n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
+  return (
+    <div className="mt-3 bg-black/25 border border-slate-700/40 rounded-xl p-3" aria-label="board vs live comparison" data-testid="deep-pinned-compare">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+        <div className="text-[10px] font-black text-slate-400 tracking-wider">
+          BOARD CARD vs LIVE RE-VERIFICATION <span className="text-slate-600">— dono ek saath, koi confusion nahi</span>
+        </div>
+        <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black border tracking-wider ${st.chip}`}>
+          {st.icon} {st.label}
+        </span>
+      </div>
+      <div className="grid grid-cols-[86px_1fr_1fr] gap-1.5 text-[9px] font-black text-slate-600 tracking-wider mb-1">
+        <span />
+        <span className="text-right">BOARD (jise click kiya{pinAgeS != null ? ` · ${pinAgeS}s ago` : ''})</span>
+        <span className="text-right">LIVE RE-RUN{liveAgeS != null ? ` · ${liveAgeS}s ago` : ''}</span>
+      </div>
+      <div className="space-y-1">
+        <CompareRow k="side" pinnedV={String(pinned.side || '—')} liveV={String(live.side || '—')} tone={v.sameSide ? 'good' : 'bad'} />
+        <CompareRow k="grade" pinnedV={String(pinned.grade || '—')} liveV={`${String(live.grade || '—')}${gradeArrow}`} tone={v.gradeDir === 'down' ? 'bad' : v.gradeDir === 'up' ? 'good' : undefined} />
+        <CompareRow k="confidence" pinnedV={confP} liveV={confL} tone={v.confDrift != null && v.confDrift <= -8 ? 'bad' : undefined} />
+        <CompareRow k="ai score" pinnedV={aiP} liveV={aiL} tone={v.aiScoreDrift != null && v.aiScoreDrift <= -8 ? 'bad' : undefined} />
+        <CompareRow k="entry" pinnedV={px(v.planPinned?.entry)} liveV={px(v.planLive?.entry)} />
+        <CompareRow k="stop-loss" pinnedV={px(v.planPinned?.sl)} liveV={px(v.planLive?.sl)} />
+        <CompareRow k="target 1" pinnedV={px(v.planPinned?.t1)} liveV={px(v.planLive?.t1)} />
+        <CompareRow k="target 2" pinnedV={px(v.planPinned?.t2)} liveV={px(v.planLive?.t2)} />
+      </div>
+      <div className={`text-[10px] mt-2 font-bold leading-relaxed ${v.verdict === 'FLIPPED' ? 'text-red-300' : v.verdict === 'DRIFTED' ? 'text-amber-300' : 'text-emerald-300'}`}>
+        {st.icon} {v.note}
+      </div>
+      <div className="text-[9px] text-slate-600 mt-1 leading-relaxed">
+        Board card scan-time ka snapshot hai; LIVE re-run abhi ka fresh 10-model ensemble (har 15s auto-refresh). Numbers hilna normal hai — isliye dono columns saath me dikhte hain.
+      </div>
     </div>
   );
 }
