@@ -2799,6 +2799,20 @@ app.get('/api/inflation', async (_req, res) => {
 // Static frontend (built by `vite build` → dist/)
 // ------------------------------------------------------------
 const distDir = path.resolve(__dirname, '..', 'dist');
+// v21.0.1 FIX (Vision AI button "show nahi ho raha"): watchdog ke BINA
+// direct `npm start` karne pe stale dist serve hota tha aur koi warning
+// nahi milti thi (UI banner sirf version-mismatch pe dikhta hai). Boot
+// par ek loud console warning — stamp vs package.json — taaki "naya
+// feature dikh nahi raha" wali class of bugs turant diagnose ho jaye.
+try {
+  const stampPath = path.join(distDir, '.build-version');
+  const stamp = fs.existsSync(stampPath) ? String(fs.readFileSync(stampPath, 'utf8')).trim() : null;
+  if (!stamp) {
+    console.warn('[wealth-ai] ⚠ dist/ MISSING — frontend build nahi hua. Watchdog (Start-SmartAI-Watchdog.bat) chalao ya khud `npm run build` karo. Tab tak self-heal page serve hoga.');
+  } else if (stamp !== SERVER_VERSION) {
+    console.warn(`[wealth-ai] ⚠ dist STALE — serving v${stamp} jabki server v${SERVER_VERSION} hai. Naye features (Vision AI etc.) dikhenge hi nahi! Watchdog dobara chalao (auto npm install + rebuild) ya khud \`npm run build\` karo.`);
+  }
+} catch { /* best-effort — serve continue */ }
 // v11.7 PERF #2 — REAL BROWSER CACHING FOR HASHED ASSETS.
 // express.static's default was `Cache-Control: public, max-age=0` — a
 // content-hashed build (index-C2rax6Rt.js etc.) re-downloaded ALL ~1.9MB

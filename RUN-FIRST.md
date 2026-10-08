@@ -4,7 +4,7 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
-## 🚀 v21.0.0 — LOCAL AI (OLLAMA) SETUP (naya, 16GB laptop)
+## 🚀 v21.0.1 — LOCAL AI (OLLAMA) SETUP (naya, 16GB laptop)
 
 Aapke paas **Ollama + deepseek-r1:14b + qwen3:8b** already hai — bas
 `app/.env` me ye lines daalo (ya .env.example se copy karo):
@@ -41,7 +41,7 @@ na ho to bhi sab kuch chalta hai — sirf Vision AI button 503 dega.
 
 ---
 
-## 🔔 v21.0.0 — TELEGRAM FIX (notifications nahi aa rahe the?)
+## 🔔 v21.0.1 — TELEGRAM FIX (notifications nahi aa rahe the?)
 
 4 root-causes fix hue:
 1. **telegram-bot/node_modules ab watchdog khud install karta hai**
@@ -82,6 +82,35 @@ rakho (webhook mode hosted deployments ke liye hai).
 
 Bas. Window khuli/minimized rakho — ye anti-freeze supervisor hai,
 site hang ho to khud restart karta hai.
+
+---
+
+## 👁 v21.0.1 — VISION AI BUTTON KAHAAN HAI? (button nahi dikh raha?)
+
+**Vision AI button chart ke header row me hai** — `📈 SYMBOL · CANDLES` label
+ke saath wahi row me (fuchsia/purple button). Ye dono jagah dikhta hai:
+
+- **Deep Ensemble Analysis** kholo (signal card pe 🔬 button) → andar
+  price chart ke upar header row me **👁 Vision AI** button
+- **AI Trading board** ke signal card me 📈 PRICE CHART toggle karo →
+  wahi header row me button
+
+**Button nahi dikh raha?** Matlab browser me PURANA build chal raha hai:
+
+1. Login screen pe dekho — **v21.0.1** likha hona chahiye (v20/v21.0.0 = purana)
+2. Server window me dekho — boot pe `⚠ dist STALE` warning aayegi
+3. Fix: Watchdog window **Ctrl+C** karke **`Start-SmartAI-Watchdog.bat`**
+   dobara chalao (auto npm install + rebuild, 2-5 min, internet chahiye) →
+   browser me **Ctrl+Shift+R** (hard refresh)
+4. v21.0.1 se **dist/ ab repo me tracked hai** — `git pull` karne pe fresh
+   frontend khud aa jata hai, rebuild ki zarurat sirf tab jab tumne khud
+   source code badla ho
+
+**Button click karne pe kya hota hai**: chart ka screenshot local Ollama
+vision model (`qwen2.5vl:7b` — `ollama pull qwen2.5vl:7b` se install) ko
+jata hai, 20-40s baad 👁 VISION VERDICT (agree/disagree + patterns + risk)
+chart ke neeche dikhta hai. Vision model installed nahi hai to honest
+error aata hai — fake verdict kabhi nahi.
 
 ---
 

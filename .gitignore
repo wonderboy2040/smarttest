@@ -26,10 +26,18 @@ app/server/data/*
 app/data/
 
 # Build artifacts
-dist/
-**/dist/
+# v21.0.1 FIX (Vision AI button "show nahi ho raha" ka root cause): dist/ pehle
+# gitignored tha — fresh clone/pull pe frontend KABHI nahi aata tha, aur user ka
+# purana (stale) dist serve hota rehta tha jab tak watchdog rebuild na kar deta.
+# Ab app/dist repo me TRACKED hai — git pull = fresh frontend guaranteed.
+# (build/ dir aj bhi ignored — sirf vite ka dist deliverable hai.)
+!app/dist/
+!app/dist/**
 build/
 **/build/
+
+# ml-service / deploy artifacts (agar kahin build hue)
+ml-service/dist/
 
 # Test data & scratch dirs
 .test-data*

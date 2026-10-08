@@ -15,7 +15,9 @@ server/data/logs/
 *.log
 
 # Build artifacts
-dist/
+# v21.0.1 FIX: dist/ ab repo me TRACKED hai (upar root .gitignore me reason) —
+# git pull pe fresh frontend guaranteed, watchdog rebuild ki zarurat nahi.
+!dist/
 build/
 
 # Test data & scratch dirs

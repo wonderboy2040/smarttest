@@ -1,6 +1,6 @@
 # SmartAI Pro v21 — Three-Desk AI Trading Terminal
 
-> **v21.0.0 — DEDUP + LOCAL AI + TELEGRAM SELF-HEAL**
+> **v21.0.1 — DEDUP + LOCAL AI + TELEGRAM SELF-HEAL + DIST-IN-REPO**
 > - **Duplicate-indicator fix**: BOS/CHoCH ab sirf SmartMoneyICT me (StructurePro = Fib/VP/S&D/EMA key-level seat); VWAP ab sirf Tape seat me (VolumeFlow = pure volume family); core-seat correlation guard (ledger-settled corr > 0.85 → weight ×0.5); aiScore self-echo band; TopPicks + board grid ek hi rank formula
 > - **Ollama superintelligence**: qwen3:8b scan seat + deepseek-r1:14b deep seat + qwen2.5vl:7b VISION seat (chart screenshot pe "Vision AI" button); native /api/chat (num_ctx + keep_alive + think-strip — 4k silent truncation fix); 16GB RAM guard
 > - **Telegram self-heal**: boot-time self-test (401/403/400 loud diagnosis), watchdog ab telegram-bot/node_modules khud install karta hai (crash-loop fix), intraday sender unified, 24h delivery-health counters

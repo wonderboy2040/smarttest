@@ -196,7 +196,7 @@ export default function App() {
             </div>
             <h1 className="text-3xl font-black gradient-text-cyan font-display text-glow mt-4">SmartAI Pro</h1>
             <div className="flex items-center justify-center gap-2 mt-2">
-              <span className="quantum-badge">v20 · TRADING TERMINAL</span>
+              <span className="quantum-badge">v{APP_VERSION.split('-')[0]} · TRADING TERMINAL</span>
             </div>
             <p className="text-slate-500 text-sm mt-3">India Intraday + CoinDCX desks · PIN enter karein</p>
           </div>
