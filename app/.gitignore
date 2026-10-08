@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment variables & secrets
+.env
+.env.local
+.env.*.local
+
+# Server runtime state & logs
+server/data/*
+!server/data/.gitkeep
+server/data/logs/
+*.log
+
+# Build artifacts
+dist/
+build/
+
+# Test data & scratch dirs
+.test-data*
+coverage/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python cache (ml-service)
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.bak
+
+# System generated
+.system_generated/
+
+# v20.7.3: ml-service runtime artifacts (parquet store + trained models)
+ml-service/store/
+*.parquet
+*.pkl
+
+# v20.7.3: telegram-bot runtime state
+telegram-bot/streak-data.json
