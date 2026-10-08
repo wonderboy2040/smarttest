@@ -1,5 +1,5 @@
 /* ============================================================
- * SmartAI Pro v20 — Service Worker (LEAN TWO-DESK SHELL)
+ * SmartAI Pro v21 — Service Worker (LEAN SHELL)
  * ------------------------------------------------------------
  * v20.0 REWRITE: the portfolio background-sync engine (15-min
  * price fetch, widget data, P&L badge, price notifications) is
