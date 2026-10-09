@@ -4,7 +4,7 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
-## 🚀 v21.0.1 — LOCAL AI (OLLAMA) SETUP (naya, 16GB laptop)
+## 🚀 v21.0.2 — LOCAL AI (OLLAMA) SETUP (naya, 16GB laptop)
 
 Aapke paas **Ollama + deepseek-r1:14b + qwen3:8b** already hai — bas
 `app/.env` me ye lines daalo (ya .env.example se copy karo):
@@ -41,7 +41,7 @@ na ho to bhi sab kuch chalta hai — sirf Vision AI button 503 dega.
 
 ---
 
-## 🔔 v21.0.1 — TELEGRAM FIX (notifications nahi aa rahe the?)
+## 🔔 v21.0.2 — TELEGRAM FIX (notifications nahi aa rahe the?)
 
 4 root-causes fix hue:
 1. **telegram-bot/node_modules ab watchdog khud install karta hai**

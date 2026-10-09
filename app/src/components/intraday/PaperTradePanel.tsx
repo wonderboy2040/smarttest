@@ -84,7 +84,15 @@ export async function openOptionPaperTrade(c: {
     if (!(c.stopLoss > 0 && c.stopLoss < c.entry && c.target > c.entry)) {
       return { ok: false, error: 'Card levels incomplete (entry/target/SL) — option paper trade nahi khul sakta.' };
     }
-    const t2 = +(c.entry + (c.target - c.entry) * 1.5).toFixed(2);
+    // v21.0.2 EXIT-PLAN MATCH FIX: card ka displayed plan tha —
+    // T1 = entry + 0.5×reward (book 50% · SL → breakeven), T2 = entry +
+    // 1.0×reward (runner). Pehle target1 = FULL target bheja jata tha,
+    // matlab engine 50% booking pura target pe karta tha (card ke half-
+    // reward claim se aadha reward late) aur T2 1.5R pe — dono card se
+    // mismatch. Ab engine wahi karta hai jo card dikhata hai.
+    const reward = c.target - c.entry;
+    const t1 = +(c.entry + reward * 0.5).toFixed(2);
+    const t2 = +(c.entry + reward * 1.0).toFixed(2);
     const res = await apiFetch(`/api/intraday-paper`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -93,7 +101,7 @@ export async function openOptionPaperTrade(c: {
         symbol: `${c.symbol}${Math.round(c.strike)}${c.type}`,
         direction: 'LONG',                    // premium BUY
         entry: c.entry, qty: 1,               // 1 lot
-        stopLoss: c.stopLoss, target1: c.target, target2: t2,
+        stopLoss: c.stopLoss, target1: t1, target2: t2,
         market: 'INDIA',
         assetKind: 'OPTION', underlying: c.symbol,
         strike: c.strike, optType: c.type, expiry: c.expiry,

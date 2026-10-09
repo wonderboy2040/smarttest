@@ -234,3 +234,47 @@ describe('v9.5 — evaluateExecutionGate side-vocabulary aliases', () => {
     expect(evaluateExecutionGate(mkSignal('LONG', { market: 'INDIA' }), { side: 'LONG', venue: 'FUTURES' }).ok).toBe(false);
   });
 });
+
+// v21.0.2 — EXPIRY-DAY 14:30 EARLY SQUARE-OFF
+// Card advertise karta hai "expiry-day 14:30" (optionsDesk exitPlan.timeExit);
+// pehle engine flat 15:10 chalata tha. Ab expiry wale OPTION trades aaj hi
+// expire ho rahe hon to 14:30 pe EOD_SQOFF fire hota hai (40 min theta burn bacha).
+describe('v21.0.2 — expiry-day 14:30 early square-off', () => {
+  // FAKE_NOW = 2026-09-11 (Friday) 10:00 IST — aaj hi expiry karte hain
+  const todayISO = new Date(NOW_MS + (5.5 * 3600_000)).toISOString().slice(0, 10);
+
+  it('expiry-day option squares off at 14:30 (870), not 15:10 (910)', () => {
+    const r = openPaperTrade({ ...OPTION_BODY, expiry: todayISO });
+    expect(r.ok).toBe(true);
+    // clock → 14:29 — abhi nahi band hona chahiye
+    vi.setSystemTime(new Date(NOW_MS + (14 * 60 + 29 - 600) * 60_000));
+    let events: any[] = [];
+    evaluatePaper({ NIFTY23400CE: { price: 90 } }, events);
+    expect((r.trade as any).status === 'OPEN' || (r.trade as any).status === 'PARTIAL').toBe(true);
+    expect(events.some(e => e.note?.includes('square-off'))).toBe(false);
+    // clock → 14:31 — expiry-day sqoff fire
+    vi.setSystemTime(new Date(NOW_MS + (14 * 60 + 31 - 600) * 60_000));
+    events = [];
+    evaluatePaper({ NIFTY23400CE: { price: 90 } }, events);
+    const ev = events.find(e => e.type === 'PAPER_CLOSE');
+    expect(ev).toBeTruthy();
+    expect(ev.note).toContain('expiry-day 14:30');
+  });
+
+  it('non-expiry-day option still squares off at 15:10 (next-week expiry)', () => {
+    const r = openPaperTrade({ ...OPTION_BODY }); // expiry = nextWeek
+    expect(r.ok).toBe(true);
+    // 14:31 pe nahi band hona chahiye
+    vi.setSystemTime(new Date(NOW_MS + (14 * 60 + 31 - 600) * 60_000));
+    let events: any[] = [];
+    evaluatePaper({ NIFTY23400CE: { price: 90 } }, events);
+    expect(events.some(e => e.note?.includes('square-off'))).toBe(false);
+    // 15:11 pe haan
+    vi.setSystemTime(new Date(NOW_MS + (15 * 60 + 11 - 600) * 60_000));
+    events = [];
+    evaluatePaper({ NIFTY23400CE: { price: 90 } }, events);
+    const ev = events.find(e => e.type === 'PAPER_CLOSE');
+    expect(ev).toBeTruthy();
+    expect(ev.note).toContain('15:10');
+  });
+});

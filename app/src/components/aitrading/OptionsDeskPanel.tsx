@@ -8,6 +8,7 @@
 import { memo, useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { fetchOptionsDesk, fetchIncomeSetups, fetchOptionSignals, fetchOptionsScan, fetchCouncilVerdict } from './useAITrading';
 import { openOptionPaperTrade } from '../intraday/PaperTradePanel';
+import { apiFetch } from '../../utils/api';
 import type { OptionsDesk, Strategy, GexProfile, IncomeView, OrderTicket, OptionSignalsView, OptionSignalCard, OptionsScanView, OptionsScanRow, CouncilStamp } from './types';
 
 const INDICES = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'SENSEX'];
@@ -251,6 +252,10 @@ function OptionSignalCardView({ c, onOpened }: { c: OptionSignalCard; onOpened?:
 function OptionSignalCardsStrip() {
   const [view, setView] = useState<OptionSignalsView | null>(null);
   const [err, setErr] = useState(false);
+  // v21.0.2 OPTIONS AUTO-ENTRY toggle state (server loop: optionsAutoEntry.js)
+  const [autoOn, setAutoOn] = useState(false);
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [autoNote, setAutoNote] = useState<string | null>(null);
   const seqRef = useRef(0);
   // v10.18 (deep-recheck #3): viewRef — the `else if (!view)` check below
   // captured the MOUNT-time view (always null), so every failed poll set
@@ -260,6 +265,19 @@ function OptionSignalCardsStrip() {
 
   useEffect(() => {
     let alive = true;
+    // v21.0.2: options auto-entry status fetch (enabled? + quota view)
+    (async () => {
+      try {
+        const r = await apiFetch('/api/ai/options-auto/status', { signal: AbortSignal.timeout(6000) });
+        const j = await r.json().catch(() => null);
+        if (alive && j?.ok) {
+          setAutoOn(!!j.enabled);
+          if (j.enabled) {
+            setAutoNote(`AUTO ON — quota ${j.entriesToday}/${j.cfg?.quotaPerDay} · cooldown ${j.cooldownRemainingMin}m${j.windowOpen ? '' : ' · NSE band hai (window khulte hi chalu)'}`);
+          } else setAutoNote(null);
+        }
+      } catch { /* status best-effort */ }
+    })();
     const run = async (force = false) => {
       const seq = ++seqRef.current;
       const v = await fetchOptionSignals(force);
@@ -278,6 +296,27 @@ function OptionSignalCardsStrip() {
     return () => { alive = false; clearInterval(iv); };
   }, []);
 
+  const toggleAuto = useCallback(async () => {
+    if (autoBusy) return;
+    setAutoBusy(true);
+    try {
+      const r = await apiFetch('/api/ai/options-auto/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !autoOn }),
+        signal: AbortSignal.timeout(8000),
+      });
+      const j = await r.json().catch(() => null);
+      if (j?.ok) {
+        setAutoOn(!!j.enabled);
+        setAutoNote(j.enabled
+          ? `AUTO ON — tradeable cards se paper entry (quota ${j.entriesToday}/${j.cfg?.quotaPerDay}, ${j.cfg?.cooldownMin}m cooldown) · exit watcher SL/T1/T2/14:30-expiry/15:10 khud sambhalta hai`
+          : 'AUTO OFF — manual paper buttons hi chalenge');
+      }
+    } catch { setAutoNote('toggle fail — server se status nahi mila'); }
+    finally { setAutoBusy(false); }
+  }, [autoOn, autoBusy]);
+
   const desks = view?.desks || [];
   // v9.6: server sends the merged TOP-4 by AI score; older servers
   // fall back to the per-desk cards.
@@ -294,7 +333,21 @@ function OptionSignalCardsStrip() {
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs font-black text-slate-200">🎯 F&amp;O SIGNAL CARDS</span>
         <span className="text-[9px] text-slate-500 font-mono">Nifty50 + Sensex · AI-scored TOP 4 (ATM/ITM/OTM candidates) · premium Entry/Target/SL · 30s re-rank</span>
+        {/* v21.0.2 OPTIONS AUTO-ENTRY toggle — NIFTY/SENSEX tradeable cards
+            se paper auto-entry (server loop optionsAutoEntry.js, default OFF). */}
+        <button onClick={toggleAuto} disabled={autoBusy}
+          title="Auto-Entry (paper): tradeable option cards (STRONG/ACTION ya AI 75+) se automatically 1-lot paper trade kholta hai — quota 3/day, 20m cooldown. Exit watcher khud sambhalta hai (SL / T1 50% book / T2 / BE-trail / expiry-day 14:30 / 15:10 square-off)."
+          className={`ml-auto px-2.5 py-1 rounded-lg text-[10px] font-black border transition-colors ${autoOn
+            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40 hover:bg-emerald-500/30'
+            : 'bg-slate-800/50 text-slate-400 border-slate-600/40 hover:text-slate-200'}`}>
+          {autoBusy ? '⏳…' : autoOn ? '🟢 AUTO-ENTRY ON' : '⚪ AUTO-ENTRY OFF'}
+        </button>
       </div>
+      {autoNote && (
+        <div className={`rounded-lg px-2.5 py-1.5 text-[10px] font-bold leading-relaxed ${autoOn ? 'bg-emerald-500/10 border border-emerald-500/25 text-emerald-200/90' : 'bg-slate-700/20 border border-slate-600/25 text-slate-400'}`}>
+          {autoNote}
+        </div>
+      )}
       {cards.length > 0 ? (
         <div className="grid md:grid-cols-2 gap-2.5">
           {cards.map(c => <OptionSignalCardView key={`${c.symbol}-${c.strike}-${c.type}-${c.expiry}`} c={c} />)}

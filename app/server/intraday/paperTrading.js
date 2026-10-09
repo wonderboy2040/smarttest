@@ -33,6 +33,17 @@ import { adverseCircuitRisk } from '../ai/circuitGuard.js';
 const FILE = 'paper-trades.json';
 const MAX_TRADES = 500;
 const PAPER_SQOFF_MIN = 15 * 60 + 10; // 15:10 IST hard square-off (NSE only)
+// v21.0.2: EXPIRY-DAY EARLY SQUARE-OFF — option cards advertise
+// "expiry-day 14:30" (optionsDesk exitPlan.timeExit), par engine flat
+// 15:10 chalata tha — expiry-day pe option BUYER 40 extra min theta
+// burn karta tha. Ab expiry wale OPTION trades aaj hi expire ho rahe
+// hon to 14:30 pe square-off (PAPER_OPT_EXPIRY_SQOFF_MIN).
+const PAPER_OPT_EXPIRY_SQOFF_MIN = 14 * 60 + 30; // 14:30 IST expiry-day
+const _todayISTDateStr = () => new Date(Date.now() + (5.5 * 3600_000)).toISOString().slice(0, 10);
+const _sqoffMinFor = (t) => (String(t?.assetKind || '').toUpperCase() === 'OPTION'
+  && String(t?.expiry || '') === _todayISTDateStr())
+  ? PAPER_OPT_EXPIRY_SQOFF_MIN
+  : PAPER_SQOFF_MIN;
 
 // Per-trade market: CRYPTO trades 24/7 with fractional units (0.0027 BTC);
 // INDIA stays whole-share with the 15:10 IST square-off.
@@ -311,9 +322,11 @@ export function evaluatePaper(quotes, events) {
       changed = true;
       continue;
     }
-    // NSE hard square-off 15:10 IST — crypto is 24/7, no EOD (it rolls
-    // at the UTC day boundary via the boot/restore stale checks).
-    const afterSqOff = mkt !== 'CRYPTO' && m >= PAPER_SQOFF_MIN;
+    // NSE hard square-off 15:10 IST (expiry-day options: 14:30) — crypto
+    // is 24/7, no EOD (it rolls at the UTC day boundary via the
+    // boot/restore stale checks).
+    const sqOffMin = _sqoffMinFor(t);
+    const afterSqOff = mkt !== 'CRYPTO' && m >= sqOffMin;
     const q = quotes[t.symbol];
     const price = q?.price;
     if (price > 0) t.lastPrice = pRound(price);
@@ -379,7 +392,7 @@ export function evaluatePaper(quotes, events) {
 
     if (afterSqOff && t.status !== 'CLOSED') {
       _closePart(t, t.remainingQty, p, 'EOD_SQOFF');
-      events.push({ type: 'PAPER_CLOSE', symbol: t.symbol, direction: t.direction, price: p, pnl: t.realizedPnl, pnlNet: t.netPnl ?? null, note: 'Paper: 15:10 auto square-off' });
+      events.push({ type: 'PAPER_CLOSE', symbol: t.symbol, direction: t.direction, price: p, pnl: t.realizedPnl, pnlNet: t.netPnl ?? null, note: `Paper: ${sqOffMin === PAPER_OPT_EXPIRY_SQOFF_MIN ? 'expiry-day 14:30' : '15:10'} auto square-off` });
       changed = true;
     }
   }

@@ -111,6 +111,12 @@ import {
   indiaAgentTick, indiaAgentStatus, indiaAgentStart, indiaAgentStop,
   updateIndiaAgentConfig, INDIA_AGENT_TICK_SEC,
 } from './indiaAgent.js';
+// v21.0.2 OPTIONS AUTO-ENTRY — NIFTY/SENSEX option cards ka paper
+// auto-entry loop (tradeable cards → openPaperTrade; exit watcher
+// intraday/stream.js me pehle se hai). Default OFF — UI/API se toggle.
+import {
+  optionsAutoTick, optionsAutoStatus, setOptionsAutoEnabled,
+} from './optionsAutoEntry.js';
 import { runBacktest } from './backtest.js';
 // v10.8 PRO #2: NL Custom Strategy Lab — description → bounded rules → replay
 import { runCustomStrategyBacktest } from './strategyLab.js';
@@ -689,6 +695,19 @@ export function registerAITradingRoutes(app, deps) {
     } catch (e) {
       jsonError(res, 500, 'option signals failed', e);
     }
+  });
+
+  // ---------------- v21.0.2 OPTIONS AUTO-ENTRY (paper) ----------------
+  // Status + toggle for the NIFTY/SENSEX options auto-entry loop
+  // (optionsAutoEntry.js — default OFF, UI se on karte hain).
+  app.get('/api/ai/options-auto/status', (_req, res) => {
+    res.set('Cache-Control', 'no-store');
+    res.json(optionsAutoStatus());
+  });
+  app.post('/api/ai/options-auto/toggle', (req, res) => {
+    const enabled = Boolean((req.body || {}).enabled);
+    const st = setOptionsAutoEnabled(enabled);
+    res.json(st);
   });
 
   // ---------------- v10.17: OPTIONS SCANNER ----------------
@@ -2309,6 +2328,16 @@ export function registerAITradingRoutes(app, deps) {
     } catch { /* non-fatal — agent logs its own errors */ }
   }, INDIA_AGENT_TICK_SEC * 1000);
   if (indiaAgentLoop.unref) indiaAgentLoop.unref();
+
+  // v21.0.2 OPTIONS AUTO-ENTRY loop — NSE hours me har 30s tradeable
+  // option cards check karke paper auto-entry (quota/cooldown gated).
+  // Tick NSE-clock gated hai — after-hours me sasta no-op.
+  const optionsAutoLoop = setInterval(async () => {
+    try {
+      await optionsAutoTick(depsForSignals(), sendTelegram);
+    } catch { /* non-fatal — options auto logs its own errors */ }
+  }, 30 * 1000);
+  if (optionsAutoLoop.unref) optionsAutoLoop.unref();
 
   // India watcher — SL/TP + trailing + 15:15 square-off (NSE hours only).
   const indiaWatcher = setInterval(async () => {

@@ -697,16 +697,23 @@ async function moveAgentSlToBreakeven(posId) {
 }
 
 // ---------------- agent trade accounting (journal is truth) ----------------
-/** Agent trades today = journal ORDER entries with source 'agent' (non-rejected). */
-function agentTradesToday(j) {
+/** Agent trades today = journal ORDER entries with source 'agent' (non-rejected).
+ *  v21.0.2: exported for the quota-separation regression test. */
+export function agentTradesToday(j) {
   const day = todayIST();
   // v6.11: NOTIFIED = alert-only — the 3-per-day TRADE quota counts real entries.
   // v12.1: FAILED joins the exclusions (same fix as dailyStats): an order
   // the exchange refused never traded — journal-proven 2026-09-18, when
   // three [422] failures ate the whole day's quota and the agent stood
   // down on trades that never existed.
+  // v21.0.2 SIM-QUOTA SEPARATION: GLOBALFUTURES (equity-sim AAPL/NVDA...)
+  // entries ab REAL quota me count NAHI hoti — sim desk apna sim budget
+  // use karti hai (coindcxOrders simTradesCount, v20.2 SIM DESK SEPARATION)
+  // aur practice trades real FUTURES/INDIA desk ke slots kha rahi thi
+  // ("futures me auto trade nahi lagta" starvation ka dusra root cause).
   return (j?.entries || []).filter(e => e.day === day && e.kind === 'ORDER' && e.source === 'agent'
-    && e.status !== 'REJECTED' && e.status !== 'NOTIFIED' && e.status !== 'FAILED');
+    && e.status !== 'REJECTED' && e.status !== 'NOTIFIED' && e.status !== 'FAILED'
+    && e.market !== 'GLOBALFUTURES');
 }
 /** Realized P&L (INR) of agent-sourced closes today. v7.0: PARTIAL_TP
  *  legs count the moment they fill (a booked winner is real money —
@@ -1075,8 +1082,13 @@ Ye fix hote hi futures auto-entries phir se chalegi.`);
   const _futMargin = _futReadFailed
     ? _lastKnownFutMargin
     : (wallet ? combinedFutDeployableUSDT(wallet) : _lastKnownFutMargin);
-  const futuresViable = !coindcxConnected()
-    ? true // practice-equity fallback keeps paper futures alive
+  const futuresViable = (!coindcxConnected() || cfg.mode !== 'live')
+    ? true // v21.0.2: PAPER/NOTIFY mode me futures bhi practice-equity pe
+           // sizes hota hai (sizing niche dekhega) — wallet/margin gate sirf
+           // LIVE ke liye. Ye fix "sirf equity-sim ka auto trade lagta hai,
+           // FUTURES USDT me nahi" complaint ka root cause tha: connected
+           // key + failed futures-wallet read/margin<2 saare PAPER futures
+           // candidates bhi silently drop kar deta tha.
     : (_futMargin >= 2);
   if (_futReadFailed && _lastKnownFutMargin > 0) {
     maybeLogSkip('fut_wallet_lastknown', `futures wallet READ fail — last-known margin ${r2(_lastKnownFutMargin)} USDT (${Math.max(1, Math.round((Date.now() - Number(_lastW.at)) / 60000))}m purana) pe futures desk chalu (read heal hote tak)`);
@@ -1495,7 +1507,10 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
     const board = scans[bi];
     const m = boards[bi];
     if (!board?.ok) continue;
-    if (m === 'FUTURES' && !futuresViable) continue; // v9.7: margin floor can't fund it
+    // v21.0.2: paper/notify mode me futures wallet/margin candidates ko
+    // drop NAHI karte (practice-equity sizing) — sirf LIVE me margin floor
+    // enforce hota hai (upar futuresViable ab mode-aware hai).
+    if (m === 'FUTURES' && !futuresViable && cfg.mode === 'live') continue; // v9.7: margin floor can't fund it (LIVE)
     for (const s of (board.signals || [])) {
       // v18.10 CYCLE-CRASH FIX (user log: "cycle error: Cannot read
       // properties of null (reading 'riskPct')" har cycle me): boards CAN
@@ -1630,6 +1645,27 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
     }
     candidates.sort((a, b) => (signalOf(b) - signalOf(a)) || (b.confidence - a.confidence));
     best = candidates[0];
+    // v21.0.2 DESK-FAIRNESS PICK: cross-desk AI-score ranking me GLOBALFUTURES
+    // (sim AAPL/NVDA — practice, zero exchange dependency) routine high score
+    // pe har cycle jeet leta tha aur FUTURES (BTCUSDT/ETHUSDT) desk kabhi apna
+    // turn nahi paata tha. Rule: jab futures desk aaj sim se KAM ya barabar
+    // entries le chuka ho aur koi futures candidate qualify hua hai, futures
+    // ko pick karo (tie-broken by score). Sim apna sim-budget alag use karta
+    // hai — quota pehle se separated hai (agentTradesToday v21.0.2).
+    try {
+      const { loadJournal } = await import('./coindcxOrders.js');
+      const jNow = await loadJournal();
+      const dayNow = todayIST();
+      const realEnts = (jNow?.entries || []).filter(e => e.day === dayNow && e.kind === 'ORDER' && e.source === 'agent'
+        && e.status !== 'REJECTED' && e.status !== 'NOTIFIED' && e.status !== 'FAILED');
+      const futCnt = realEnts.filter(e => e.market === 'FUTURES').length;
+      const simCnt = realEnts.filter(e => e.market === 'GLOBALFUTURES').length;
+      const futCand = candidates.find(c => c.market === 'FUTURES');
+      if (futCand && futCnt <= simCnt) {
+        maybeLogSkip('desk_fairness', `desk-fairness pick: FUTURES ${futCand.symbol} (fut ${futCnt}/sim ${simCnt} aaj) — sim candidate ${best.symbol} ke bajaye`);
+        best = futCand;
+      }
+    } catch { /* journal unavailable — normal best pick chalta rahega */ }
   }
 
   // ---- v10.15 GAP 3: PATIENT ENTRY — the resting order comes FIRST.
@@ -1887,10 +1923,15 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
     let marginUSDT = (qty * best.plan.entry) / lev;
     // never commit more than 60% of the deployable margin — the SIM desk
     // sizes against practice equity (CoinDCX margin is desk par nahi)
+    // v21.0.2: PAPER/NOTIFY mode me FUTURES desk bhi practice-equity pe
+    // sizes hota hai (sim desk jaisa) — warna wallet me 0.5-2 USDT hone par
+    // cap usi pe lagti thi aur har paper futures entry "margin too small"
+    // se skip ho jati thi. LIVE me combined wallet margin hi authoritative.
     const deployable = isGlobal
       ? (equityINR * 0.5 / usdInr)
-      // v20.9.1 [H2]: combined USDT+INR legs — INR-margined futures wallet
-      : (combinedFutDeployableUSDT(wallet) || (equityINR * 0.5 / usdInr));
+      : (cfg.mode === 'live'
+        ? (combinedFutDeployableUSDT(wallet) || (equityINR * 0.5 / usdInr))
+        : (equityINR * 0.5 / usdInr));
     const capUSDT = deployable * 0.6;
     if (marginUSDT > capUSDT) marginUSDT = capUSDT;
     marginUSDT = Math.round(marginUSDT * 1000) / 1000;

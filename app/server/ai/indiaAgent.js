@@ -669,6 +669,14 @@ async function _tick(deps, sendTelegram) {
 
   // ---- candidates ----
   let candidates = [];
+  // v21.0.2 INDEX-POLLUTION FIX: NIFTY/BANKNIFTY jaise index contexts INDIA
+  // board me bhi chalte hain (signals.js board seeding), par indiaAgent
+  // EQUITY desk hai — index qualify hone par LIVE dhanPlaceOrder "not
+  // NSE-equity" se reject hota tha aur PAPER 1-share NIFTY (~₹24k ka
+  // pseudo-equity practice position) khol deta tha, track-record ganda
+  // karta tha. Index symbols ko yahin filter kar do — options desk hi
+  // index ka sahi rakam hai (getOptionSignalsView).
+  const _INDEX_SYMBOLS = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX', 'INDIAVIX']);
   if (board?.ok) {
     for (const s of (board.signals || [])) {
       // v18.10 defensive: qualifies() already requires s.plan, but the
@@ -676,6 +684,7 @@ async function _tick(deps, sendTelegram) {
       // taught us the guard belongs HERE too — ordering can silently
       // change in future refactors.
       if (!s?.plan || !s.side) continue;
+      if (_INDEX_SYMBOLS.has(String(s.symbol || '').toUpperCase())) continue; // v21.0.2
       if (!qualifies(s)) continue;
       if ((s.plan.riskPct ?? 0) > (trading.maxRiskPct || 5)) continue;
       // already positioned on this symbol? skip (one-per-symbol anyway)

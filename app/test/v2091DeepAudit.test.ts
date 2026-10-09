@@ -99,8 +99,11 @@ describe('A. wrapped-rejection verdicts (H1 money path)', () => {
 describe('B. feature repairs (H2)', () => {
   it('agent: INR-margined futures wallet combined viability (USDT + INR/fx)', () => {
     expect(src.agent).toMatch(/function combinedFutDeployableUSDT/);
-    expect(src.agent).toMatch(/const futuresViable = !coindcxConnected\(\)\s*\n\s*\? true[\s\S]{0,120}?: \(_futMargin >= 2\);/);
-    expect(src.agent).toMatch(/combinedFutDeployableUSDT\(wallet\) \|\| \(equityINR \* 0\.5 \/ usdInr\)/); // 60% cap site
+    // v21.0.2: viability gate ab MODE-AWARE hai — PAPER/NOTIFY me futures
+    // practice-equity pe chalta hai (sirf equity-sim auto-trade hota complaint
+    // fix), LIVE me wallet/margin floor. Source contract updated v21.0.2.
+    expect(src.agent).toMatch(/const futuresViable = \(!coindcxConnected\(\) \|\| cfg\.mode !== 'live'\)\s*\n\s*\? true[\s\S]{0,700}?: \(_futMargin >= 2\);/);
+    expect(src.agent).toMatch(/combinedFutDeployableUSDT\(wallet\) \|\| \(equityINR \* 0\.5 \/ usdInr\)/); // 60% cap site (LIVE branch — v21.0.2 paper branch practice equity)
     expect(src.agent).toMatch(/deployableFuturesINR: w\.deployableFuturesINR/); // lastWallet carries INR leg
   });
   it('agent: last-known equity fallback is 10-minute bounded', () => {

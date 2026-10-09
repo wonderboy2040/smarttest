@@ -1,0 +1,211 @@
+// ============================================================
+// server/ai/optionsAutoEntry.js — v21.0.2 OPTIONS AUTO-ENTRY
+// ------------------------------------------------------------
+// NIFTY/SENSEX options desk ka AUTO ENTRY engine (paper).
+//
+// CONTEXT: pehle options desk sirf DISPLAY + MANUAL paper button
+// tha — koi auto-entry loop exist hi nahi karta tha (auto-exit
+// watcher pehle se tha: SL/T1-book/T2/BE-trail/15:10 sqoff).
+// User goal: "Nifty & Sensex Options Trading Auto Entry aur Auto
+// Exit" — ye module entry side bolti hai; exit side intraday/
+// stream.js watcher (5s) + evaluatePaper already sambhalta hai.
+//
+// FLOW (har 30s tick, NSE hours me):
+//   getOptionSignalsView(deps, ['NIFTY','SENSEX'])
+//     → cards (tradeable: STRONG/ACTION grade ya AI ≥75)
+//     → [gates] enabled · NSE open + fresh-entry window · killSwitch
+//             · quota/day · per-underlying cooldown · one-per-contract
+//             · max 10 open paper (openPaperTrade ka apna guard)
+//     → openPaperTrade({ assetKind:'OPTION', ... }) — 1 lot premium BUY
+//     → watcher auto-exit (SL / T1 50% book / T2 / BE-trail / EOD sqoff
+//        + expiry-day 14:30 — v21.0.2)
+//
+// EXIT PLAN (card ke displayed plan se EXACT match — v21.0.2 fix):
+//   T1 = entry + 0.5×reward  → engine 50% book + trail-to-entry
+//   T2 = entry + 1.0×reward  → engine baaki sab close
+//   (Pehle T1=full-target bheja jata tha — card vs engine mismatch.)
+//
+// STATE: server/data/options-auto-config.json (user toggle + caps)
+//        server/data/options-auto-state.json (quota/cooldown counters)
+// ============================================================
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = path.resolve(__dirname, '..', 'data');
+const CFG_FILE = path.join(DATA_DIR, 'options-auto-config.json');
+const STATE_FILE = path.join(DATA_DIR, 'options-auto-state.json');
+
+const DEFAULT_CFG = {
+  enabled: false,        // opt-in — user toggle karega (UI/API)
+  quotaPerDay: 3,        // India agent jaisa hi trade quota
+  cooldownMin: 20,       // same underlying pe agli entry itne min baad
+  minAiScore: 75,        // auto-agent ki qualify bar ke barabar
+  maxPerUnderlyingPerDay: 2, // NIFTY + SENSEX dono ko fair chance
+};
+
+const DEFAULT_STATE = { day: null, count: 0, perUnderlying: {}, lastEntryAt: {}, lastEntry: null };
+
+// ---- NSE clock (intraday/time.js se — same source of truth) ----
+async function _time() {
+  try { return await import('../intraday/time.js'); } catch { return null; }
+}
+
+function _nowISTMinutes() {
+  const d = new Date(Date.now() + (5.5 * 3600_000));
+  return d.getUTCHours() * 60 + d.getUTCMinutes();
+}
+
+function _todayIST() {
+  return new Date(Date.now() + (5.5 * 3600_000)).toISOString().slice(0, 10);
+}
+
+// ---- config/state persistence (crash-safe, best-effort) ----
+function _readJson(file, fallback) {
+  try { return { ...fallback, ...JSON.parse(fs.readFileSync(file, 'utf8')) }; }
+  catch { return { ...fallback }; }
+}
+function _writeJson(file, obj) {
+  try { fs.mkdirSync(DATA_DIR, { recursive: true }); fs.writeFileSync(file, JSON.stringify(obj, null, 2)); }
+  catch { /* best-effort — runtime state hai, restart pe fresh */ }
+}
+
+export function loadOptionsAutoCfg() { return _readJson(CFG_FILE, DEFAULT_CFG); }
+export function saveOptionsAutoCfg(cfg) { _writeJson(CFG_FILE, cfg); }
+function _loadState() {
+  const s = _readJson(STATE_FILE, DEFAULT_STATE);
+  const today = _todayIST();
+  if (s.day !== today) {
+    // day rollover — counters reset
+    return { ...DEFAULT_STATE, day: today, count: 0, perUnderlying: {}, lastEntryAt: {}, lastEntry: s.lastEntry || null };
+  }
+  return s;
+}
+function _saveState(s) { _writeJson(STATE_FILE, s); }
+
+// ---- status view (API + UI ke liye) ----
+export function optionsAutoStatus() {
+  const cfg = loadOptionsAutoCfg();
+  const s = _loadState();
+  const m = _nowISTMinutes();
+  const nseOpen = m >= 555 && m < 900; // 09:15–15:00 IST approx window (holiday/hours gate tick me lagta hai)
+  return {
+    ok: true,
+    enabled: !!cfg.enabled,
+    cfg: { quotaPerDay: cfg.quotaPerDay, cooldownMin: cfg.cooldownMin, minAiScore: cfg.minAiScore, maxPerUnderlyingPerDay: cfg.maxPerUnderlyingPerDay },
+    day: s.day,
+    entriesToday: s.count,
+    quotaLeft: Math.max(0, Number(cfg.quotaPerDay) - Number(s.count || 0)),
+    cooldownRemainingMin: (() => {
+      const last = Math.max(0, ...Object.values(s.lastEntryAt || {}).map(Number));
+      if (!last) return 0;
+      const left = Number(cfg.cooldownMin) - Math.floor((Date.now() - last) / 60000);
+      return Math.max(0, left);
+    })(),
+    lastEntry: s.lastEntry || null,
+    windowOpen: nseOpen,
+  };
+}
+
+export function setOptionsAutoEnabled(enabled) {
+  const cfg = loadOptionsAutoCfg();
+  cfg.enabled = !!enabled;
+  saveOptionsAutoCfg(cfg);
+  return optionsAutoStatus();
+}
+
+// ---- the tick (30s loop se call hota hai) ----
+export async function optionsAutoTick(deps, sendTelegram) {
+  const cfg = loadOptionsAutoCfg();
+  if (!cfg.enabled) return { ok: true, idle: 'disabled' };
+
+  // NSE session gate — same rules jo manual paper entry route lagata hai
+  // (09:15–15:00 fresh entries; holidays honored by time.js).
+  const T = await _time();
+  if (T?.isNseMarketOpen && !T.isNseMarketOpen()) return { ok: true, idle: 'nse-closed' };
+  if (T?.freshEntriesAllowedFor && !T.freshEntriesAllowedFor('INDIA')) return { ok: true, idle: 'past-fresh-entry-window' };
+  if (T?.isNseMarketOpen === undefined) {
+    // time module unavailable — conservative clock fallback
+    const m = _nowISTMinutes();
+    if (m < 555 || m >= 900) return { ok: true, idle: 'nse-closed-fallback' };
+  }
+
+  // kill switch (shared trading config — India agent jaisa)
+  try {
+    const { loadConfig } = await import('./coindcxOrders.js');
+    const trading = loadConfig();
+    if (trading?.killSwitch) return { ok: true, idle: 'kill-switch' };
+  } catch { /* config unavailable — continue (paper-only engine) */ }
+
+  // quota + cooldown state
+  const s = _loadState();
+  if (Number(s.count || 0) >= Number(cfg.quotaPerDay)) return { ok: true, idle: 'quota-done' };
+  const now = Date.now();
+  for (const [u, at] of Object.entries(s.lastEntryAt || {})) {
+    if (now - Number(at) < Number(cfg.cooldownMin) * 60000) return { ok: true, idle: `cooldown-${u}` };
+  }
+
+  // option signal cards
+  let view;
+  try {
+    const { getOptionSignalsView } = await import('./optionsDesk.js');
+    view = await getOptionSignalsView(deps, ['NIFTY', 'SENSEX']);
+  } catch { return { ok: true, idle: 'view-error' }; }
+  if (!view?.ok || !Array.isArray(view.cards)) return { ok: true, idle: 'no-cards' };
+
+  // already-open contracts (paper watcher one-per-contract guard hai,
+  // par pre-filter se openPaperTrade ka error-loop avoid hota hai)
+  let openSyms = new Set();
+  try {
+    const { getPaperSummary } = await import('../intraday/paperTrading.js');
+    const sum = getPaperSummary();
+    openSyms = new Set((sum?.open || []).map(t => String(t.symbol || '').toUpperCase()));
+  } catch { /* summary unavailable — openPaperTrade khud guard karega */ }
+
+  // best tradeable card (view already AI-score sorted)
+  const pick = view.cards.find(c =>
+    c?.tradeable
+    && Number(c.aiScore ?? 0) >= Number(cfg.minAiScore)
+    && Number(c.entry) > 0 && Number(c.stopLoss) > 0 && Number(c.target) > Number(c.entry)
+    && Number((s.perUnderlying || {})[String(c.symbol || '').toUpperCase()] || 0) < Number(cfg.maxPerUnderlyingPerDay)
+    && !openSyms.has(String(`${c.symbol}${Math.round(c.strike)}${c.type}`).toUpperCase()));
+  if (!pick) return { ok: true, idle: 'no-qualifying-card' };
+
+  // ---- OPEN the paper trade (card plan ke EXACT displayed levels) ----
+  const entry = Number(pick.entry);
+  const reward = Number(pick.target) - entry; // R
+  const t1 = +(entry + reward * 0.5).toFixed(2);  // card t1 — 50% book halfway
+  const t2 = +(entry + reward * 1.0).toFixed(2); // card t2 — full target pe runner
+  const sl = Number(pick.stopLoss);
+
+  const { openPaperTrade } = await import('../intraday/paperTrading.js');
+  const res = openPaperTrade({
+    symbol: `${pick.symbol}${Math.round(pick.strike)}${pick.type}`, // NIFTY23400CE
+    direction: 'LONG',                                  // premium BUY
+    entry, qty: 1,                                      // 1 lot
+    stopLoss: sl, target1: t1, target2: t2,
+    market: 'INDIA',
+    assetKind: 'OPTION', underlying: pick.symbol,
+    strike: Number(pick.strike), optType: pick.type, expiry: pick.expiry,
+    iv: Number(pick.iv) > 0 ? Number(pick.iv) : 13,     // BS fallback IV — card builder jaisa
+    lotSize: Number(pick.lotSize) || 1,
+    label: `${pick.name} · AUTO`,                        // marker: UI me auto-entry pehchana jaye
+  });
+  if (res?.error) return { ok: false, error: res.error };
+
+  // state update (quota/cooldown)
+  const u = String(pick.symbol || '').toUpperCase();
+  s.count = Number(s.count || 0) + 1;
+  s.perUnderlying = { ...(s.perUnderlying || {}), [u]: Number((s.perUnderlying || {})[u] || 0) + 1 };
+  s.lastEntryAt = { ...(s.lastEntryAt || {}), [u]: now };
+  s.lastEntry = { at: now, contract: `${pick.symbol}${Math.round(pick.strike)}${pick.type}`, underlying: u, aiScore: pick.aiScore, entry, t1, t2, sl };
+  _saveState(s);
+
+  const line = `🪜 <b>OPTIONS AUTO-ENTRY (paper)</b> — ${pick.name}\n` +
+    `Entry ₹${entry} · SL ₹${sl} · T1 ₹${t1} (50% book) · T2 ₹${t2}\n` +
+    `AI ${pick.aiScore}/100 · lot ${pick.lotSize} · quota ${s.count}/${cfg.quotaPerDay}`;
+  try { if (sendTelegram) await sendTelegram(line); } catch { /* notify best-effort */ }
+  return { ok: true, opened: s.lastEntry };
+}
