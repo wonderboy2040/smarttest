@@ -60,6 +60,7 @@ import { useDeepAutoRecheck, DeepFreshnessChip, DeepTransitionLog, DeepIndicator
 // v20.7.5 THE 15s SIGNAL RECHECK PANEL — every STRONG/ACTION signal's
 // live re-validation state (loop ki hi cadence par poll hota hai).
 import { SignalRecheckPanel } from '../aitrading/SignalRecheckPanel';
+import { EngineHealthStrip } from '../aitrading/EngineHealthStrip';
 import {
   SectionLabel, RegimeChips, BreadthStrip, FilterChips, RefreshCountdown, BoardSummary, DeskStatsStrip,
   FreshnessBadge, boardStaleClass,
@@ -548,6 +549,16 @@ export default memo(function CoinDcxTab() {
 
       {/* ============ 📊 DESK STATS (v6.10 — active desk one-glance) ============ */}
       <DeskStatsStrip board={board} deskLabel={desk === 'FUTURES' ? '⚡ FUTURES DESK SNAPSHOT' : desk === 'GLOBAL' ? '🌍 EQUITY SIM DESK SNAPSHOT' : '₿ SPOT DESK SNAPSHOT'} />
+
+      {/* ============ v21.0.3 LOCAL LLM (OLLAMA) MODEL STRIP ============
+          India tab jaisa hi — "konsa local ollama model use ho raha hai"
+          ab crypto desk par bhi top-level visible (pehle sirf collapsed
+          chat panel ke andar). Chip: SCAN + DEEP model; hover: vision/
+          ctx/installed; 30s auto-refresh + RECHECK. Dono tabs me accurate
+          aur hamesha-visible model attribution. */}
+      <div className="quantum-panel rounded-2xl py-1.5">
+        <EngineHealthStrip />
+      </div>
 
       {/* ============ 00 · SUPERINTELLIGENCE AUTO-AGENT ============ */}
       <div id="cx-agent">

@@ -235,6 +235,39 @@ describe('v9.5 — evaluateExecutionGate side-vocabulary aliases', () => {
   });
 });
 
+// v21.0.3 — EXPIRY-FORMAT + SYMBOL-LENGTH REGRESSION (the "option paper
+// trade show nahi hua" root cause). Live NSE chain DD-Mmm-YYYY expiries
+// bhejta tha; openPaperTrade ka ISO regex unhe reject kar deta tha aur
+// trade KABHI panel me nahi dikhta tha. Ab expiry normalize hoke accept
+// hota hai (data.js bhi source par ISO karta hai — ye defensive layer hai).
+// BANKNIFTY51000CE (16 chars) pehle 15-char symbol cap me bhi reject hota tha.
+describe('v21.0.3 — expiry-format normalization + F&O symbol length', () => {
+  it('accepts a DD-Mmm-YYYY (NSE live) expiry and stores it as ISO', () => {
+    const dmy = new Date(NOW_MS + 7 * 24 * 3600_000);
+    const MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const raw = `${dmy.getUTCDate()}-${MONS[dmy.getUTCMonth()]}-${dmy.getUTCFullYear()}`;
+    const r = openPaperTrade({ ...OPTION_BODY, expiry: raw });
+    expect(r.ok).toBe(true);
+    expect(r.trade.expiry).toBe(nextWeek); // ISO me store
+  });
+
+  it('still rejects genuinely-broken expiry formats', () => {
+    expect(openPaperTrade({ ...OPTION_BODY, expiry: '15/09/2026' }).error).toMatch(/expiry/i);
+    expect(openPaperTrade({ ...OPTION_BODY, expiry: '' }).error).toMatch(/expiry/i);
+  });
+
+  it('accepts 16-char F&O contract ids (BANKNIFTY51000CE)', () => {
+    const r = openPaperTrade({
+      ...OPTION_BODY,
+      symbol: 'BANKNIFTY51000CE', underlying: 'BANKNIFTY', strike: 51000, lotSize: 35,
+      label: 'BankNifty 17Sep 51000 CE',
+    });
+    expect(r.ok).toBe(true);
+    expect(r.trade.symbol).toBe('BANKNIFTY51000CE');
+    expect(r.trade.underlying).toBe('BANKNIFTY');
+  });
+});
+
 // v21.0.2 — EXPIRY-DAY 14:30 EARLY SQUARE-OFF
 // Card advertise karta hai "expiry-day 14:30" (optionsDesk exitPlan.timeExit);
 // pehle engine flat 15:10 chalata tha. Ab expiry wale OPTION trades aaj hi

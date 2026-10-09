@@ -1,5 +1,10 @@
 # SmartAI Pro v21 — Three-Desk AI Trading Terminal
 
+> **v21.0.3 — OPTIONS ACCURACY + PAPER-DESK VISIBILITY + OLLAMA MODEL STRIP**
+> - **Options root-cause fix**: NSE live chain ka `DD-Mmm-YYYY` expiry (jaise `13-Oct-2026`) ab source par hi ISO me normalize hota hai — pehle galat/far expiry chain dikhti thi, Greeks/GEX/DTE null/zero the, aur option paper trades **server reject** ho jaate the (ISO regex) — "options accurate nahi / paper trade show nahi hua" ka asli reason. Defensive normalize `openPaperTrade` me bhi (live formats kabhi reject nahi honge) + BANKNIFTY51000CE jaise 16-char contract IDs ab allowed
+> - **Paper Desk ab hamesha visible**: SIMPLE view (default) me bhi Paper Trading Simulator dikhta hai + option paper trade khulte hi turant toast + instant refresh (pehle 15s poll wait)
+> - **Ollama model strip dono tabs me**: India + CoinDCX desk-top par hamesha-visible chip — `QWEN3·8B ↗R1·14B` (scan + deep), hover par vision model/ctx/RAM guard/installed list; 🔬 deep modal ka "AI COUNCIL" ab real model naam dikhata hai (`ollama:deepseek-r1:14b`); gamma 4dp precision
+>
 > **v21.0.2 — DEDUP + LOCAL AI + TELEGRAM SELF-HEAL + DIST-IN-REPO**
 > - **Duplicate-indicator fix**: BOS/CHoCH ab sirf SmartMoneyICT me (StructurePro = Fib/VP/S&D/EMA key-level seat); VWAP ab sirf Tape seat me (VolumeFlow = pure volume family); core-seat correlation guard (ledger-settled corr > 0.85 → weight ×0.5); aiScore self-echo band; TopPicks + board grid ek hi rank formula
 > - **Ollama superintelligence**: qwen3:8b scan seat + deepseek-r1:14b deep seat + qwen2.5vl:7b VISION seat (chart screenshot pe "Vision AI" button); native /api/chat (num_ctx + keep_alive + think-strip — 4k silent truncation fix); 16GB RAM guard

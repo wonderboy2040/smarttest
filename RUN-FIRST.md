@@ -4,6 +4,35 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.0.3 — OPTIONS + PAPER DESK + OLLAMA MODEL (kya fix hua)
+
+**1) Options Trading abhi bhi galat dikhe to:**
+NSE live chain sirf market hours (09:15–15:30 IST) me aata hai. NSE band ho
+to app **honest label** ke saath Black-Scholes MODEL chain dikhata hai
+("BS MODEL CHAIN — NSE BLOCKED" chip). Ye galat nahi hai — model estimate
+hai. Live chain wapas aate hi chip **"LIVE NSE CHAIN"** ho jata hai aur
+premiums exchange se aate hain. Expiry ab hamesha **13-Oct-2026 jaisa
+sahi nearest weekly** hoga + Greeks/DTE/GEX live.
+
+**2) Option paper trade kholo — Paper Desk me turant dikhega:**
+- 🧪 PAPER TRADE button (F&O card pe) dabao → toast confirmation + **Paper
+  Desk section me trade turant** (SIMPLE view me bhi — pehle sirf PRO me tha)
+- NSE band ho (raat/weekend/15:00 ke baad) to naya paper entry **reject**
+  hota hai with clear message — ye jaan-bujh kar hai (entries sirf live
+  session me), crypto paper 24×7 chalta hai
+- Max 10 open paper trades + same contract duplicate entry block
+
+**3) Konsa Ollama model use ho raha hai — dono tabs me top par chip:**
+India Intraday aur CoinDCX dono desk par ab **AI ENGINES strip** hamesha
+dikhti hai. Ollama chalu ho to chip me **`QWEN3·8B ↗R1·14B`** (scan model
++ deep model) dikhta hai; hover par vision model, ctx, RAM guard, installed
+models sab details. Ollama band ho to **`OLLAMA —`** (slate, honest).
+🔬 deep analysis modal me "AI COUNCIL · ollama:deepseek-r1:14b" — ab
+REAL model name, sirf "ollama" nahi. Model change kiya ho to **RECHECK**
+button dabao (naya probe turant).
+
+---
+
 ## 🚀 v21.0.2 — LOCAL AI (OLLAMA) SETUP (naya, 16GB laptop)
 
 Aapke paas **Ollama + deepseek-r1:14b + qwen3:8b** already hai — bas

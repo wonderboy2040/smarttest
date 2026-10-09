@@ -487,9 +487,41 @@ async function nseBootstrapCookies() {
 }
 
 /**
+ * Normalize an expiry string to ISO YYYY-MM-DD (all-ISO contract).
+ * Handles every format the live exchanges return:
+ *   • 'YYYY-MM-DD'  — already ISO (synthetic/BSE-normalized) → passthrough
+ *   • 'DD-Mmm-YYYY' — NSE live format ('13-Oct-2026')
+ *   • 'DD Mmm YYYY' — BSE-ish ('17 Sep 2026')
+ * Returns null when unparseable.
+ *
+ * v21.0.3 ROOT-CAUSE FIX: NSE's raw DD-Mmm-YYYY expiries were passed
+ * through unnormalized, while EVERY downstream consumer (expiry pick,
+ * daysToExpiry, BS yearsToExpiry, GEX, paper-trade ISO validation)
+ * assumes ISO. Lexicographic compare of '13-Oct-2026' vs '2026-10-09'
+ * picked a far monthly chain (or silently fell back to the model
+ * chain), Greeks/GEX/DTE went null/zero, and option paper trades were
+ * server-REJECTED on the ISO regex — the "options accurate nahi /
+ * paper trade show nahi hua" bug.
+ */
+export function _expiryNormISO(s) {
+  const t = String(s || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const m = t.match(/^(\d{1,2})[-\s]+([A-Za-z]{3})[-\s]+(\d{4})$/);
+  if (m) {
+    const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const mi = MON.findIndex(x => x.toLowerCase() === m[2].toLowerCase());
+    if (mi >= 0) return `${m[3]}-${String(mi + 1).padStart(2, '0')}-${String(parseInt(m[1], 10)).padStart(2, '0')}`;
+  }
+  return null;
+}
+
+/**
  * REAL NSE option chain for an index. Returns null when NSE blocks
  * the request (datacenter IP / Cloudflare) — the options desk then
  * falls back to the clearly-labeled Black-Scholes synthetic chain.
+ * v21.0.3: ALL expiries are normalized to ISO by _expiryNormISO at
+ * this boundary — the desk, Greeks, GEX and paper trades can keep
+ * their all-ISO contract.
  */
 export async function fetchNSEOptionChain(symbol) {
   const sym = String(symbol || 'NIFTY').toUpperCase();
@@ -508,13 +540,17 @@ export async function fetchNSEOptionChain(symbol) {
       const j = await r.json();
       const rows = j?.records?.data;
       if (!Array.isArray(rows) || rows.length === 0) continue;
+      // v21.0.3: normalize EVERY expiry to ISO at the source (see
+      // _expiryNormISO header). Unparseable dates are dropped from the
+      // list / fall back to the raw string so the desk's own fallback
+      // (nextWeeklyExpiryFor) still has a path.
       return {
         symbol: sym,
         spot: Number(j?.records?.underlyingValue) || null,
-        expiryDates: j?.records?.expiryDates || [],
+        expiryDates: (j?.records?.expiryDates || []).map(_expiryNormISO).filter(Boolean),
         rows: rows.map(x => ({
           strike: Number(x.strikePrice),
-          expiry: x.expiryDate,
+          expiry: _expiryNormISO(x.expiryDate) || String(x.expiryDate || ''),
           callOI: Number(x.CE?.openInterest) || 0,
           callOIChange: Number(x.CE?.changeinOpenInterest) || 0,
           callIV: Number(x.CE?.impliedVolatility) || null,

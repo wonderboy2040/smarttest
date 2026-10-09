@@ -41,6 +41,7 @@ interface OllamaInfo {
   numCtxDeep?: number;
   keepAlive?: string;
   ramGuard?: { sysTotalGb?: number; ctxClamped?: boolean };
+  checkedAgeSec?: number;
 }
 
 const LABEL: Record<string, string> = {
@@ -64,14 +65,31 @@ function chipClass(e: EngineRow): string {
   }
 }
 
+// v21.0.3: model short-name — 'qwen3:8b' → 'QWEN3·8B', 'deepseek-r1:14b'
+// → 'R1·14B', 'qwen2.5vl:7b' → 'Q2.5VL·7B' style compact chip text.
+function modelShort(m?: string | null): string {
+  if (!m) return '';
+  const raw = String(m);
+  const [f, v] = raw.split(':');
+  if (!v) return raw.slice(0, 12).toUpperCase();
+  let fam = f.replace(/[^a-zA-Z0-9.]/g, '').toUpperCase();
+  if (fam.startsWith('DEEPSEEK')) fam = fam.includes('R1') ? 'R1' : 'DSEEK';
+  else if (/^QWEN2\.?5?VL/.test(fam)) fam = 'Q2.5VL';
+  else if (fam.length > 6) fam = fam.slice(0, 6);
+  return `${fam}·${v.toUpperCase()}`;
+}
+
 function chipText(e: EngineRow, ol?: OllamaInfo | null): string {
   if (e.provider === 'ollama') {
     if (!e.configured) return 'OLLAMA —';
-    // v21.0: chip par SCAN model ka short naam (qwen3:8b → QWEN3·8B)
-    const m = (ol?.model || '').split(':');
-    return m.length === 2 && m[1]
-      ? `${String(m[0]).toUpperCase().slice(0, 8)}·${m[1].toUpperCase()}`
-      : 'OLLAMA LOCAL';
+    // v21.0.3: chip par SCAN + DEEP dono models (accurate attribution):
+    // 'QWEN3·8B ↗R1·14B' — scan boards/chat ke liye, ↗ deep (🔬 deep
+    // ensemble) ke liye. Vision tooltip me (chart 👁 button pe model
+    // verdict ke saath khud aata hai).
+    const scan = modelShort(ol?.model);
+    const deep = modelShort(ol?.deepModel);
+    const same = !deep || deep === scan;
+    return scan ? (same ? scan : `${scan} ↗${deep}`) : 'OLLAMA LOCAL';
   }
   if (!e.configured) return `${LABEL[e.provider] || e.provider} NO-KEY`;
   switch (e.state) {
@@ -87,12 +105,13 @@ function chipTitle(e: EngineRow, ol?: OllamaInfo | null): string {
     if (!e.configured) return 'Ollama install karo (localhost:11434) to get a keyless local language engine';
     const parts = [
       'keyless local engine (127.0.0.1:11434)',
-      `scan: ${ol?.model || '?'}`,
-      `deep: ${ol?.deepModel || 'same as scan'}`,
-      ol?.visionModel ? `vision: ${ol.visionModel}` : 'vision: NOT installed (ollama pull qwen2.5vl:7b)',
+      `scan (board/chat/council): ${ol?.model || '?'}`,
+      `deep (🔬 deep ensemble): ${ol?.deepModel || 'same as scan'}`,
+      ol?.visionModel ? `vision (👁 chart button): ${ol.visionModel}` : 'vision: NOT installed (ollama pull qwen2.5vl:7b)',
       `ctx ${ol?.numCtx ?? '?'} · keep_alive ${ol?.keepAlive || '5m'}`,
       ol?.ramGuard?.ctxClamped ? `RAM guard ON (${ol.ramGuard.sysTotalGb}GB system → ctx clamped)` : undefined,
       ol?.models?.length ? `installed: ${ol.models.slice(0, 6).join(', ')}` : undefined,
+      ol?.checkedAgeSec != null ? `probed ${ol.checkedAgeSec.toFixed(0)}s pehle` : undefined,
     ].filter(Boolean);
     return parts.join(' · ');
   }

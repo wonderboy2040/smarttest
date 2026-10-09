@@ -32,6 +32,7 @@ import { CandleChart } from '../aitrading/CandleChart';
 import { TopPicksPanel } from '../aitrading/TopPicksPanel';
 import { ExpertPicksPanel } from '../aitrading/ExpertPicksPanel';
 import { MarketClockStrip } from '../aitrading/MarketClockStrip';
+import { EngineHealthStrip } from '../aitrading/EngineHealthStrip';
 import { QuickNav } from '../aitrading/QuickNav';
 import { OptionsDeskPanel } from '../aitrading/OptionsDeskPanel';
 import { OrderConsole } from '../aitrading/OrderConsole';
@@ -394,6 +395,17 @@ export default memo(function IndiaIntradayTab() {
       {/* ============ NSE SESSION CLOCK (v6.9) ============ */}
       <MarketClockStrip marketOpen={board?.marketOpen} />
 
+      {/* ============ v21.0.3 LOCAL LLM (OLLAMA) MODEL STRIP ============
+          User request: "konsa local ollama model use ho raha hai ye dono
+          tabs me accurately show hona chahiye" — pehle ye strip sirf
+          COLLAPSED chat panel ke andar thi (2 interactions deep). Ab
+          desk-top par hamesha visible: chip par SCAN + DEEP model
+          (QWEN3·8B ↗R1·14B), hover par vision/ctx/installed models,
+          30s auto-refresh + RECHECK. */}
+      <div className="quantum-panel rounded-2xl py-1.5">
+        <EngineHealthStrip />
+      </div>
+
       {/* ============ v6.12 PRO SESSION GATE ============ */}
       {board?.sessionPhase && (
         <div className={`mt-1.5 mb-1.5 rounded-lg border px-3 py-1.5 flex items-center gap-2 flex-wrap ${board.sessionPhase.tradeable
@@ -590,7 +602,14 @@ export default memo(function IndiaIntradayTab() {
       <div id="in-options">
         <SectionLabel num="02" title="Options Desk" sub="NSE indices — live chain / BS model · PCR · max pain · GEX + gamma flip · strategies with POP" />
         <div className="mt-2.5">
-          <OptionsDeskPanel />
+          {/* v21.0.3: onPaperOpened — option paper trade khulte hi
+              toast + paperRefresh bump (panel instant refresh, 15s
+              poll nahi). v21.0.3 root-cause ke saath: expiry ab ISO
+              normalize hota hai, trade reject nahi hota. */}
+          <OptionsDeskPanel onPaperOpened={(msg, ok) => {
+            notify(ok, msg);
+            if (ok) setPaperRefresh(k => k + 1);
+          }} />
         </div>
       </div>
 
@@ -697,29 +716,35 @@ export default memo(function IndiaIntradayTab() {
           The orphaned v4 intraday tree, merged into the live desk:
           server-managed virtual trades (T1 50% book → breakeven trail →
           SL/T2/EOD auto-exit) + signal track record + AI-reviewed journal
-          + committee debate. Board cards open positions via 📈 DESK PAPER. */}
-      {!simple && (
-        <div id="in-paper-desk">
-          <div className="flex items-end justify-between gap-2 flex-wrap">
-            <SectionLabel num="08" title="Paper Desk & AI Journal" sub="virtual trade simulator (server-managed T1/trail/SL/EOD) · signal track record · AI-reviewed trade journal · committee debate" />
-            <button onClick={() => setUniverseOpen(true)}
-              title="Universe edit karo — v20.2 se ye SIGNAL BOARD pe bhi apply hota hai (remove kiya hua symbol board se gayab, custom symbol Tier-1 scan me aata hai) + committee/briefing/track-record scans isi se chalte hain (server-side persisted)"
-              className="quantum-btn-ghost px-2.5 py-1.5 rounded-lg text-[10px] font-black shrink-0">
-              ⚙ UNIVERSE
-            </button>
-          </div>
-          <div className="mt-2.5 space-y-3">
-            <PaperTradePanel livePrices={stream.livePrices} refreshKey={paperRefresh} onOpenSymbolsChange={handlePaperSymbols} />
-            <TrackRecordPanel refreshKey={paperRefresh + trackTick} />
-            <JournalPanel refreshKey={paperRefresh + trackTick} />
-            <CommitteePanel />
-          </div>
+          + committee debate. Board cards open positions via 📈 DESK PAPER.
+          v21.0.3: PaperTradePanel ab SIMPLE view me bhi dikhta hai —
+          "option paper trade kholo aur kahi dikhe nahi" ka fix (options
+          cards 02 me hain, paper positions yahan — dono hamesha saath
+          dikhenge). Journal/TrackRecord/Committee PRO-only rehte hain. */}
+      <div id="in-paper-desk">
+        <div className="flex items-end justify-between gap-2 flex-wrap">
+          <SectionLabel num="08" title="Paper Desk & AI Journal" sub="virtual trade simulator (server-managed T1/trail/SL/EOD) · signal track record · AI-reviewed trade journal · committee debate" />
+          <button onClick={() => setUniverseOpen(true)}
+            title="Universe edit karo — v20.2 se ye SIGNAL BOARD pe bhi apply hota hai (remove kiya hua symbol board se gayab, custom symbol Tier-1 scan me aata hai) + committee/briefing/track-record scans isi se chalte hain (server-side persisted)"
+            className="quantum-btn-ghost px-2.5 py-1.5 rounded-lg text-[10px] font-black shrink-0">
+            ⚙ UNIVERSE
+          </button>
         </div>
-      )}
+        <div className="mt-2.5 space-y-3">
+          <PaperTradePanel livePrices={stream.livePrices} refreshKey={paperRefresh} onOpenSymbolsChange={handlePaperSymbols} />
+          {!simple && (
+            <>
+              <TrackRecordPanel refreshKey={paperRefresh + trackTick} />
+              <JournalPanel refreshKey={paperRefresh + trackTick} />
+              <CommitteePanel />
+            </>
+          )}
+        </div>
+      </div>
 
       {/* ============ v6.13: SIMPLE-mode me PRO sections ka pointer ============ */}
       {simple && (
-        <ProSectionsNote names="Brief · Sector Map · Swing · Backtest · Alerts · Models · Ledger · Trust · Paper Desk" />
+        <ProSectionsNote names="Brief · Sector Map · Swing · Backtest · Alerts · Models · Ledger · Trust · Track Record · Journal" />
       )}
 
       {/* ============ DEEP ANALYSIS MODAL ============ */}

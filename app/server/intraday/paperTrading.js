@@ -91,7 +91,25 @@ export function flushPaperState() {
 }
 
 function _validateSym(sym) {
-  return typeof sym === 'string' && /^[A-Z0-9&-]{2,15}$/.test(sym.trim().toUpperCase());
+  // v21.0.3: 15 → 20 chars — BANKNIFTY51000CE (16) jaise F&O contract
+  // ids ke liye headroom (BSE equities 10 + .NS bhi fit rehte hain).
+  return typeof sym === 'string' && /^[A-Z0-9&-]{2,20}$/.test(sym.trim().toUpperCase());
+}
+
+/** v21.0.3 — defensive expiry normalization. Live NSE chain pehle DD-Mmm-YYYY
+ *  bhejta tha (ab data.js source par ISO karta hai); agar kabhi koi layer
+ *  raw format phir se leak kare to openPaperTrade usse ISO bana lega, reject
+ *  nahi karega. ISO passthrough, unparseable → null. */
+function _normExpiryISO(v) {
+  const t = String(v || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+  const m = t.match(/^(\d{1,2})[-\s]+([A-Za-z]{3})[-\s]+(\d{4})$/);
+  if (m) {
+    const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const mi = MON.findIndex(x => x.toLowerCase() === m[2].toLowerCase());
+    if (mi >= 0) return `${m[3]}-${String(mi + 1).padStart(2, '0')}-${String(parseInt(m[1], 10)).padStart(2, '0')}`;
+  }
+  return null;
 }
 
 // ------------------------------------------------------------
@@ -168,6 +186,10 @@ export function openPaperTrade(input) {
   if (!_validateSym(symbol)) return { error: 'Invalid symbol format.' };
   const sym = symbol.trim().toUpperCase();
   const isOption = String(assetKind || '').toUpperCase() === 'OPTION';
+  // v21.0.3: expiry ko pehle ISO me normalize karo (DD-Mmm-YYYY /
+  // DD Mmm YYYY accept) — validation ISO hi rehti hai, magar live-chain
+  // formats ab reject nahi honge ("paper trade show nahi hua" fix).
+  const expiryISO = isOption ? _normExpiryISO(expiry) : null;
   if (isOption) {
     const u = String(underlying || '').trim().toUpperCase();
     if (!OPTION_UNDERLYINGS.has(u)) {
@@ -177,7 +199,9 @@ export function openPaperTrade(input) {
     if (!(Number.isFinite(k) && k > 0)) return { error: 'Option paper trade: valid strike required.' };
     const ot = String(optType || '').toUpperCase();
     if (ot !== 'CE' && ot !== 'PE') return { error: 'Option paper trade: optType must be CE or PE.' };
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(expiry || ''))) return { error: 'Option paper trade: expiry (YYYY-MM-DD) required.' };
+    // v21.0.3: expiryISO normalize ho chuka hai (ISO/DD-Mmm-YYYY dono
+    // accept); yahan sirf valid-ISO check rehta hai.
+    if (!expiryISO) return { error: 'Option paper trade: expiry (YYYY-MM-DD) required.' };
     const ivn = Number(iv);
     if (!(Number.isFinite(ivn) && ivn > 0)) return { error: 'Option paper trade: IV required for premium re-pricing.' };
     const ls = Number(lotSize);
@@ -245,7 +269,7 @@ export function openPaperTrade(input) {
     trade.underlying = String(underlying).trim().toUpperCase();
     trade.strike = Number(strike);
     trade.optType = String(optType).toUpperCase();
-    trade.expiry = String(expiry).slice(0, 10);
+    trade.expiry = expiryISO; // v21.0.3 normalized ISO (10 chars)
     trade.iv = Number(iv);                 // entry IV, held fixed
     trade.lotSize = Number(lotSize);       // P&L multiplier (qty = lots)
     trade.label = String(label || '').slice(0, 40) || null; // "Nifty50 15Sep 23400 CE"

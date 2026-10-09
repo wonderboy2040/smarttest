@@ -88,7 +88,10 @@ describe('v18.8 — councilAsk rides the KEYLESS LOCAL ollama engine', () => {
       '127.0.0.1:11434/api/chat': okOllamaNative('{"verdict":"CONFIRM","confidence":81,"reason":"local brain"}'),
     };
     const { json, model } = await councilAsk('prompt', { KEYS: {}, OPENAI_COMPAT: COMPAT });
-    expect(model).toBe('ollama');
+    // v21.0.3: honest model attribution — 'ollama' provider-name ke
+    // bajaye ab real model jata hai (installed llama3.1:8b here →
+    // 'ollama:llama3.1:8b').
+    expect(model).toBe('ollama:llama3.1:8b');
     expect(json?.verdict).toBe('CONFIRM');
     expect(fetchCalls.some(u => u.includes('127.0.0.1:11434/api/chat'))).toBe(true);
     // ZERO cloud provider calls — the local engine carried the whole ask

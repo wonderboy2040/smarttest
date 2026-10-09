@@ -281,7 +281,16 @@ export async function councilAsk(prompt, deps, opts = {}) {
         threw = true;
         engineTrack('ollama', e);
       }
-      if (json) { engineOk('ollama'); model = 'ollama'; }
+      if (json) {
+        engineOk('ollama');
+        // v21.0.3 HONEST MODEL ATTRIBUTION: sirf 'ollama' provider-name
+        // ke bajaye ab REAL model naam jata hai — scan path
+        // ollama:qwen3:8b, deep path ollama:deepseek-r1:14b (🔬 modal
+        // ka "AI COUNCIL · ollama" ab sach me kaunsa model bola wo
+        // dikhata hai; user request: "konsa local ollama model use ho
+        // raha hai accurately show hona chahiye").
+        model = `ollama:${ollamaCompatCfg({ deep }).defModel}`;
+      }
       else if (!threw) { engineTrack('ollama', new Error('ollama no-json response')); }
     }
   }

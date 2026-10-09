@@ -77,7 +77,7 @@ function OptionSignalCardView({ c, onOpened }: { c: OptionSignalCard; onOpened?:
     });
     setPaperBusy(false);
     const msg = r.ok
-      ? `🧪 F&O paper trade opened — ${c.name} · 1 lot (${c.lotSize}) @ ₹${prem(c.entry)} · watcher premium live re-price karega (08 PAPER DESK me track)`
+      ? `🧪 F&O paper trade opened — ${c.name} · 1 lot (${c.lotSize}) @ ₹${prem(c.entry)} · Paper Desk me abhi dikhega (watcher premium live re-price karega)`
       : `⛔ ${r.error || 'option paper trade failed'}`;
     setPaperMsg(msg);
     onOpened?.(msg, r.ok);
@@ -249,7 +249,7 @@ function OptionSignalCardView({ c, onOpened }: { c: OptionSignalCard; onOpened?:
   );
 }
 
-function OptionSignalCardsStrip() {
+function OptionSignalCardsStrip({ onOpened }: { onOpened?: (msg: string, ok: boolean) => void }) {
   const [view, setView] = useState<OptionSignalsView | null>(null);
   const [err, setErr] = useState(false);
   // v21.0.2 OPTIONS AUTO-ENTRY toggle state (server loop: optionsAutoEntry.js)
@@ -350,7 +350,7 @@ function OptionSignalCardsStrip() {
       )}
       {cards.length > 0 ? (
         <div className="grid md:grid-cols-2 gap-2.5">
-          {cards.map(c => <OptionSignalCardView key={`${c.symbol}-${c.strike}-${c.type}-${c.expiry}`} c={c} />)}
+          {cards.map(c => <OptionSignalCardView key={`${c.symbol}-${c.strike}-${c.type}-${c.expiry}`} c={c} onOpened={onOpened} />)}
         </div>
       ) : (
         <div className="quantum-panel rounded-2xl p-4 text-[11px] text-slate-400">
@@ -689,7 +689,14 @@ function OptionsScannerView({ scan, loading, err, onRefresh }: { scan: OptionsSc
   );
 }
 
-export const OptionsDeskPanel = memo(function OptionsDeskPanel() {
+// v21.0.3: onPaperOpened — jab bhi option paper trade khulta hai
+// (manual 🧪 button), tab ko turant pata chal jata hai: toast + Paper
+// Desk instant refresh (15s poll ka inteza nahi). Pehle strip ke
+// andar ka msg hi dikhta tha aur panel bad-me update hota tha
+// ("paper trade show nahi hua" complaint ka UX hissa).
+export const OptionsDeskPanel = memo(function OptionsDeskPanel({ onPaperOpened }: {
+  onPaperOpened?: (msg: string, ok: boolean) => void;
+}) {
   const [symbol, setSymbol] = useState('NIFTY');
   const [desk, setDesk] = useState<OptionsDesk | null>(null);
   const [loading, setLoading] = useState(true);
@@ -794,7 +801,7 @@ export const OptionsDeskPanel = memo(function OptionsDeskPanel() {
 
       {/* v9.4 — F&O OPTION SIGNAL CARDS: Nifty50 + Sensex, the user's
           exact format (Stock name / Target / Entry (Buy) / Stop Loss) */}
-      <OptionSignalCardsStrip />
+      <OptionSignalCardsStrip onOpened={onPaperOpened} />
 
       {/* Metrics strip */}
       <div className="flex flex-wrap gap-2">

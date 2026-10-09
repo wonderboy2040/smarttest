@@ -137,6 +137,76 @@ describe('fetchBSEOptionChain (real module, stubbed fetch)', () => {
 });
 
 // ============================================================
+// 1b. fetchNSEOptionChain — v21.0.3 EXPIRY NORMALIZATION
+// (the "options desk accurate nahi dikh raha" root cause)
+// Live NSE returns expiryDates/rows in DD-Mmm-YYYY ("13-Oct-2026").
+// Before v21.0.3 those raw strings flowed into an all-ISO pipeline:
+// lexicographic '13-Oct-2026' >= '2026-10-09' picked a far monthly
+// expiry (or silently fell back to the BS-model chain), Greeks/GEX/DTE
+// went zero/null, and paper trades carrying the raw expiry were
+// server-rejected on the ISO regex. This locks the source normalization.
+// ============================================================
+describe('fetchNSEOptionChain (real module, stubbed fetch) — v21.0.3 expiry ISO normalization', () => {
+  const mkDmy = (iso: string) => {
+    const MONS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const [y, m, d] = iso.split('-');
+    return `${Number(d)}-${MONS[Number(m) - 1]}-${y}`;
+  };
+
+  const nextTue = () => {
+    const d = new Date();
+    const day = d.getUTCDay();
+    d.setUTCDate(d.getUTCDate() + ((2 - day + 7) % 7 || 7));
+    return d.toISOString().slice(0, 10);
+  };
+  const TUE_ISO = nextTue();
+
+  it('normalizes DD-Mmm-YYYY expiryDates AND per-row expiries to ISO YYYY-MM-DD', async () => {
+    const real: any = await vi.importActual('../server/ai/data.js');
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => ({
+        records: {
+          underlyingValue: 25980.4,
+          expiryDates: [mkDmy(TUE_ISO), mkDmy('2027-01-26')],
+          data: [
+            { strikePrice: 25950, expiryDate: mkDmy(TUE_ISO), CE: { openInterest: 1100, changeinOpenInterest: 60, impliedVolatility: 12.2, lastPrice: 181.4, totalTradedVolume: 8000 }, PE: { openInterest: 1400, changeinOpenInterest: 90, impliedVolatility: 12.9, lastPrice: 122.7, totalTradedVolume: 9000 } },
+            { strikePrice: 26000, expiryDate: mkDmy(TUE_ISO), CE: { openInterest: 2600, changeinOpenInterest: 140, impliedVolatility: 11.8, lastPrice: 141.9, totalTradedVolume: 15000 }, PE: { openInterest: 2100, changeinOpenInterest: 110, impliedVolatility: 12.4, lastPrice: 173.2, totalTradedVolume: 12000 } },
+          ],
+        },
+      }),
+    })) as any);
+    const out = await real.fetchNSEOptionChain('NIFTY');
+    expect(out).toBeTruthy();
+    expect(out.source).toBe('nse');
+    // the WHOLE contract is ISO now — this is what the desk filter, the
+    // BS Greeks, daysToExpiry/GEX and openPaperTrade's ISO validation
+    // all assume.
+    expect(out.expiryDates).toEqual([TUE_ISO, '2027-01-26']);
+    expect(out.rows.every(r => /^\d{4}-\d{2}-\d{2}$/.test(r.expiry))).toBe(true);
+    expect(out.rows[0].expiry).toBe(TUE_ISO);
+  });
+
+  it('drops unparseable expiryDates from the list (rows keep raw fallback)', async () => {
+    const real: any = await vi.importActual('../server/ai/data.js');
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      json: async () => ({
+        records: {
+          underlyingValue: 25980.4,
+          expiryDates: ['garbage-date', mkDmy(TUE_ISO)],
+          data: [
+            { strikePrice: 26000, expiryDate: mkDmy(TUE_ISO), CE: { openInterest: 100, impliedVolatility: 12, lastPrice: 140, totalTradedVolume: 100 }, PE: { openInterest: 120, impliedVolatility: 12.4, lastPrice: 170, totalTradedVolume: 200 } },
+          ],
+        },
+      }),
+    })) as any);
+    const out = await real.fetchNSEOptionChain('NIFTY');
+    expect(out.expiryDates).toEqual([TUE_ISO]); // garbage dropped
+  });
+});
+
+// ============================================================
 // 2/3. getOptionsDesk — SENSEX full-parity vs the honest fallback
 // ============================================================
 describe('getOptionsDesk — SENSEX source honesty', () => {

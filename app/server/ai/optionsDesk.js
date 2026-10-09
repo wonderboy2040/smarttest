@@ -454,8 +454,12 @@ function greeksFor(spot, strike, expiry, ivPct, type) {
   const sigma = ivPct ? Math.max(IV_FLOOR, Math.min(IV_CAP, ivPct / 100)) : 0.13;
   const g = bsGreeks(spot, strike, T, RISK_FREE, sigma, type);
   return {
-    delta: r2(g.delta), gamma: r2(g.gamma),
-    theta: r2(g.theta), vega: r2(g.vega),
+    delta: r2(g.delta),
+    // v21.0.3: index-option gamma ~0.0005-0.005 — r2 usse 0.00 bana deta
+    // tha (chain table me "gamma khaali" dikhta tha). 4dp jab chhota ho.
+    gamma: Math.abs(g.gamma) < 0.01 ? +(g.gamma).toFixed(4) : r2(g.gamma),
+    theta: r2(g.theta),
+    vega: r2(g.vega),
   };
 }
 
