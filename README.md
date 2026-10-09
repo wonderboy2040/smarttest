@@ -1,5 +1,17 @@
 # SmartAI Pro v21 — Three-Desk AI Trading Terminal
 
+> **v21.0.5 — NIFTY REALTIME DATA FIX + COINDCX SPOT DESK REMOVED**
+> - **NIFTY options ab REAL NSE chain — har host se**: v21.0.4 ka Groww-mirror formula ab NIFTY pe bhi — `groww.in/options/nifty` server-render karta hai asli NSE chain (108 contracts, real LTP/OI/IV/Greeks, weekly expiry list, lot size, live spot). Ladder: **direct NSE FIRST** (richest feed — volume + saari expiries; residential/laptop hosts pe wahi chalta rehta hai) → NSE block kare to **Groww mirror** (datacenter/VPS/cloud friendly) → dono fail tabhi honest model chain (amber banner, dono paths named + auto-retry). 10-min negative-hold se blocked host pe dead probe free rehta hai
+> - **Chip ab `LIVE NSE CHAIN · GROWW`** jab mirror serve kare (direct pe `LIVE NSE CHAIN` jaisa pehle) — BANKNIFTY-family sirf direct NSE pe (unki Groww pages client-side hain)
+> - **CoinDCX tab me SPOT desk COMPLETELY REMOVED** (user spec): ab sirf **⚡ GLOBAL FUTURES (USDT)** + **🌍 EQUITY SIM (AAPL/NVDA/…/SPACEX)** — spot switcher button, spot board fetch, spot execute handler, SPOT·WS heartbeat tier, Swing/Whales/Orderbook spot-analytics section aur crypto Backtest/ModelPerf panels sab hata diye. Auto-agent ki third picks strip ab **EQUITY SIM PICKS** dikhati hai (pehle invisible thi); shared infra (wallet, execution console, mesh, reversal, correlations) intact
+
+> **v21.0.4 — SENSEX OPTIONS REAL LIVE DATA (Groww public mirror)**
+> - **SENSEX options ab REAL BSE chain**: Groww ka public option-chain page (`groww.in/options/sp-bse-sensex`) server-render karta hai asli BSE SENSEX chain — real LTP, OI/prevOI, exchange Greeks + IV, weekly expiry list, lot size 20, live spot. App isse `__NEXT_DATA__` se parse karta hai (90s cache, 5-min backoff) — **datacenter/VPS/cloud pe bhi kaam karta hai** (jahan BSE direct Akamai-block karta hai)
+> - **Ladder design**: Groww mirror FIRST → direct BSE candidates second (future-proof) → dono fail tab honest `bs-model-sensex-always` + rose banner ("auto-retry chalu rehta hai") — model mode ab RARE case hai
+> - **Real analytics ab SENSEX pe bhi**: PCR 1.55 / Max Pain / OI walls / GEX / ATM IV — pehle ye SENSEX me hamesha null the
+> - **UI honesty**: chip `LIVE BSE CHAIN · GROWW` (teal) + `sourceVia` field; scan rows me SENSEX = LIVE BSE; F&O cards me `LIVE BSE PREMIUM`
+> - NIFTY-family NSE path untouched (jaisa tha waisa — live NSE + recoverable model fallback)
+
 > **v21.0.3 — OPTIONS ACCURACY + PAPER-DESK VISIBILITY + OLLAMA MODEL STRIP**
 > - **Options root-cause fix**: NSE live chain ka `DD-Mmm-YYYY` expiry (jaise `13-Oct-2026`) ab source par hi ISO me normalize hota hai — pehle galat/far expiry chain dikhti thi, Greeks/GEX/DTE null/zero the, aur option paper trades **server reject** ho jaate the (ISO regex) — "options accurate nahi / paper trade show nahi hua" ka asli reason. Defensive normalize `openPaperTrade` me bhi (live formats kabhi reject nahi honge) + BANKNIFTY51000CE jaise 16-char contract IDs ab allowed
 > - **Paper Desk ab hamesha visible**: SIMPLE view (default) me bhi Paper Trading Simulator dikhta hai + option paper trade khulte hi turant toast + instant refresh (pehle 15s poll wait)
@@ -12,7 +24,7 @@
 
 Advance Pro Intelligence trading terminal with three dedicated, self-contained desks:
 - 🇮🇳 **India Intraday Desk (NSE)**: Real-time signals, 10-model consensus committee, paper trading simulator, journal, options desk, and Dhan execution.
-- ₿ **CoinDCX Desk (Crypto)**: Spot (INR pairs) and Global Futures (USDT perps), autonomous trading agent, wallet sync, reversal engine, and real-time WebSocket orderbook depth.
+- ₿ **CoinDCX Desk (Crypto Futures + Equity SIM)**: Global Futures (USDT perps) + Equity SIM desk, autonomous trading agent, wallet sync, reversal engine, and perp intelligence. *(v21.0.5: SPOT desk removed — sirf Futures USDT + Equity SIM.)*
 - 🤖 **JEV Bot Lab**: 3-arm honest signal pipeline (rules | gated | jev), ORB/LVL strategies with honest backtests, paper-trading virtual accounts, kill-switches and decision stream.
 
 ---

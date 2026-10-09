@@ -809,6 +809,9 @@ export interface OptionsDesk {
   /** v6.13: days to expiry (0 = expiry-day) */
   dte?: number | null;
   source: OptionSource;
+  /** v21.0.4: which live relay served the chain ('groww' public mirror
+   *  vs a direct exchange fetch) — null for synthetic/model chains. */
+  sourceVia?: string | null;
   syntheticNote?: string | null;
   lotSize: number;
   analytics: {
@@ -1465,7 +1468,7 @@ export interface AgentView {
   };
   openPositions: AgentOpenPosition[];
   wallet: WalletView | null;
-  picks: Partial<Record<'INDIA' | 'FUTURES' | 'CRYPTO', AgentPick[]>>;
+  picks: Partial<Record<'INDIA' | 'FUTURES' | 'CRYPTO' | 'GLOBALFUTURES', AgentPick[]>>;
   /** v7.0 PRO TRADER: next-trade sizing preview */
   sizingPreview?: AgentSizingPreview | null;
 }

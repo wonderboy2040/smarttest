@@ -38,9 +38,10 @@ const prem = (v: number | null | undefined): string => {
 function OptionSignalCardView({ c, onOpened }: { c: OptionSignalCard; onOpened?: (msg: string, ok: boolean) => void }) {
   const bull = c.direction === 'LONG';
   // v11.1 NSE+SENSEX addendum — three-way source honesty: live NSE /
-  // live BSE / model. SENSEX model mode is PERMANENT (BSE blocks
-  // datacenter IPs — spike-verified), so its chip + persistent banner
-  // say so explicitly instead of the generic amber "sometimes down"
+  // live BSE / model. v21.0.4: the SENSEX desk now gets the REAL BSE
+  // chain (Groww public mirror → direct BSE ladder), so the model chip
+  // only fires when BOTH live paths are unreachable — still its own
+  // explicit rose label instead of the generic amber "sometimes down"
   // framing NIFTY's recoverable fallback uses.
   const srcLabel = c.source === 'nse' ? 'LIVE NSE PREMIUM'
     : c.source === 'bse' ? 'LIVE BSE PREMIUM'
@@ -51,9 +52,9 @@ function OptionSignalCardView({ c, onOpened }: { c: OptionSignalCard; onOpened?:
       : c.source === 'bs-model-sensex-always' ? 'bg-rose-500/10 text-rose-300 border-rose-500/30'
         : 'bg-amber-500/10 text-amber-300 border-amber-500/30';
   const srcTitle = c.source === 'nse' ? 'Live NSE chain premiums'
-    : c.source === 'bse' ? 'Live BSE chain premiums'
+    : c.source === 'bse' ? 'Live BSE chain premiums (direct BSE ya Groww public mirror relay)'
       : c.source === 'bs-model-sensex-always'
-        ? 'PERMANENT LIMITATION: BSE blocks datacenter IPs — these premiums are Black-Scholes model estimates, ALWAYS. Cross-check your broker for live SENSEX option prices.'
+        ? 'Live sources unreachable: BSE direct + Groww mirror dono is server se blocked — Black-Scholes model estimates. Auto-retry chalu rehta hai; live prices ke liye apna broker cross-check karo.'
         : 'NSE chain temporarily blocked from this server — Black-Scholes model premiums (IV anchored to India VIX). Recoverable: next successful NSE fetch restores live data.';
   // v9.6 superintelligence tier styling (AI score 85+ ELITE · 75+ STRONG · 65+ ACTION)
   const tier = (c.tier as string) || 'WATCH';
@@ -109,12 +110,13 @@ function OptionSignalCardView({ c, onOpened }: { c: OptionSignalCard; onOpened?:
       </div>
 
       {/* v11.1 NSE+SENSEX addendum — the PERSISTENT (non-dismissible)
-          limitation banner every SENSEX model card must carry: BSE does
-          not expose a public real-time option feed usable from this
-          server, so these premiums can never be live here. */}
+          limitation banner every SENSEX model card must carry. v21.0.4:
+          fires only when BOTH live paths (direct BSE + Groww public
+          mirror) are unreachable — until then the desk serves the
+          REAL BSE chain with live premiums. */}
       {c.source === 'bs-model-sensex-always' && (
         <div className="mt-2 rounded-lg bg-rose-500/[0.07] border border-rose-500/30 px-2.5 py-1.5 text-[9px] text-rose-200/90 leading-relaxed" data-testid="sensex-model-banner">
-          ⚠ SENSEX premiums are model-estimated — BSE does not expose a public real-time option feed usable from this server. For live SENSEX option prices, cross-check your broker.
+          ⚠ SENSEX premiums are model-estimated — live BSE quotes (direct + Groww public mirror) are unreachable from this server right now; auto-retry chalu rehta hai. For live SENSEX option prices, cross-check your broker.
           {c.structuralDiscount ? ` AI score pe −${c.structuralDiscount} structural discount laga hai (no live-market cross-check possible).` : ''}
         </div>
       )}
@@ -606,7 +608,7 @@ function ScanRow({ r, council, onRequestCouncil, councilBusy }: { r: OptionsScan
             {r.dte === 0 ? 'EXPIRY DAY' : `${r.dte}d`}
           </span>
         )}
-        <span className={`px-1.5 py-0.5 rounded text-[9px] font-black ${r.source === 'nse' ? 'bg-emerald-500/15 text-emerald-300' : r.source === 'bse' ? 'bg-teal-500/15 text-teal-300' : r.source === 'bs-model-sensex-always' ? 'bg-rose-500/15 text-rose-300' : 'bg-amber-500/15 text-amber-300'}`} title={r.source === 'nse' ? 'real NSE option chain' : r.source === 'bse' ? 'real BSE option chain' : r.source === 'bs-model-sensex-always' ? 'PERMANENT: BSE blocks datacenter IPs — Black-Scholes model chain, always (cross-check broker)' : 'exchange chain unreachable — Black-Scholes model chain (premiums estimates)'}>
+        <span className={`px-1.5 py-0.5 rounded text-[9px] font-black ${r.source === 'nse' ? 'bg-emerald-500/15 text-emerald-300' : r.source === 'bse' ? 'bg-teal-500/15 text-teal-300' : r.source === 'bs-model-sensex-always' ? 'bg-rose-500/15 text-rose-300' : 'bg-amber-500/15 text-amber-300'}`} title={r.source === 'nse' ? 'real NSE option chain' : r.source === 'bse' ? 'real BSE option chain (direct ya Groww public mirror se)' : r.source === 'bs-model-sensex-always' ? 'live BSE sources (direct + Groww mirror) unreachable — Black-Scholes model chain, auto-retry on' : 'exchange chain unreachable — Black-Scholes model chain (premiums estimates)'}>
           {r.source === 'nse' ? 'LIVE NSE' : r.source === 'bse' ? 'LIVE BSE' : r.source === 'bs-model-sensex-always' ? 'SENSEX MODEL' : 'BS MODEL'}
         </span>
         <span className="ml-auto flex items-center gap-2">
@@ -775,8 +777,11 @@ export const OptionsDeskPanel = memo(function OptionsDeskPanel({ onPaperOpened }
           <span className={`px-2 py-1 rounded-lg text-[10px] font-black border ${desk.source === 'nse' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
             : desk.source === 'bse' ? 'bg-teal-500/15 text-teal-300 border-teal-500/30'
               : desk.source === 'bs-model-sensex-always' ? 'bg-rose-500/15 text-rose-300 border-rose-500/30'
-                : 'bg-amber-500/15 text-amber-300 border-amber-500/30'}`}>
-            {desk.source === 'nse' ? 'LIVE NSE CHAIN' : desk.source === 'bse' ? 'LIVE BSE CHAIN' : desk.source === 'bs-model-sensex-always' ? 'SENSEX MODEL CHAIN — ALWAYS' : 'BS MODEL CHAIN — NSE BLOCKED'}
+                : 'bg-amber-500/15 text-amber-300 border-amber-500/30'}`}
+            title={desk.sourceVia === 'groww'
+              ? `Real ${desk.source === 'nse' ? 'NSE NIFTY' : 'BSE SENSEX'} chain — Groww public page se relay (live LTP / OI / IV)`
+              : desk.source === 'bse' ? 'Real BSE option chain (direct)' : desk.source === 'nse' ? 'Real NSE option chain (direct)' : undefined}>
+            {desk.source === 'nse' ? (desk.sourceVia === 'groww' ? 'LIVE NSE CHAIN · GROWW' : 'LIVE NSE CHAIN') : desk.source === 'bse' ? (desk.sourceVia === 'groww' ? 'LIVE BSE CHAIN · GROWW' : 'LIVE BSE CHAIN') : desk.source === 'bs-model-sensex-always' ? 'SENSEX MODEL CHAIN — NO LIVE FEED' : 'BS MODEL CHAIN — NSE BLOCKED'}
           </span>
         )}
         {!scanMode && desk?.consensus && (

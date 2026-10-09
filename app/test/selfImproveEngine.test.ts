@@ -497,7 +497,11 @@ describe('v19.0 wiring — routes + scheduler + council + frontend', () => {
     const agentPanelSrc = readFileSync(path.join(repoRoot, 'src/components/aitrading/AgentPanel.tsx'), 'utf8');
     expect(agentPanelSrc).toMatch(/AUTO SCOPE:/);
     expect(agentPanelSrc).toMatch(/EQUITY SIM · USDC/);
-    expect(agentPanelSrc).toMatch(/SPOT.*AUTO OFF/);
+    // v21.0.5: the SPOT desk is REMOVED from the CoinDCX tab — the old
+    // "SPOT AUTO OFF" chip is gone; an honest disclosure chip appears
+    // only when a legacy saved config had spot explicitly enabled.
+    expect(agentPanelSrc).toMatch(/SPOT DESK REMOVED \(v21\.0\.5\)/);
+    expect(agentPanelSrc).not.toMatch(/SPOT AUTO OFF/);
   });
 
   it('SAPTA (browser auto-trader) crypto scope is FUTURES by default (spot = explicit opt-in)', () => {

@@ -617,10 +617,10 @@ export const AgentPanel = memo(function AgentPanel({ notify }: { notify: (ok: bo
             <div className="text-[10px] text-slate-500 mt-0.5">
               wallet-sizing · auto entry · 3-tier partial TP (T1 {cfg?.partialTpEnabled ? `${cfg?.tp1ClosePct ?? 40}%+BE-lock → T2 ${cfg?.tp2ClosePct ?? 40}% → runner ${cfg?.runnerPct ?? 20}%` : 'off'}) · {cfg?.maxTradesPerDay ?? 3} trades/day · time-exit · {view.state.tickSec ?? 30}s server loop{cfg?.manageManualPositions === false ? '' : ' · 🛡 trend-flip guards manual positions too'}
             </div>
-            {/* v19.0 USER SPEC: auto-trading desk scope — CoinDCX auto
-                entries SIRF Global Futures (USDT margin) + Equity SIM
-                (USDC) me. SPOT auto OFF (manual spot trading + existing
-                spot position management unaffected). */}
+            {/* v19.0 USER SPEC → v21.0.5: auto-trading desk scope —
+                CoinDCX auto entries SIRF Global Futures (USDT margin) +
+                Equity SIM (USDC) me. The SPOT desk itself is REMOVED
+                from the tab (v21.0.5) — its scope chip went with it. */}
             <div className="flex items-center gap-1.5 mt-1 flex-wrap">
               <span className="text-[9px] text-slate-500 font-mono font-bold">AUTO SCOPE:</span>
               <span className={`px-1.5 py-0.5 rounded text-[9px] font-black font-mono border ${cfg?.desks?.futures !== false ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-600/20 text-slate-500 border-slate-600/30'}`} title="CoinDCX margin futures — USDT-margined perps">
@@ -629,14 +629,17 @@ export const AgentPanel = memo(function AgentPanel({ notify }: { notify: (ok: bo
               <span className={`px-1.5 py-0.5 rounded text-[9px] font-black font-mono border ${cfg?.desks?.global !== false ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40' : 'bg-slate-600/20 text-slate-500 border-slate-600/30'}`} title="Global equity futures SIM desk — USDC paper margin (Apple/Google/NVIDIA/SPACEX perps)">
                 EQUITY SIM · USDC {cfg?.desks?.global !== false ? 'ON' : 'OFF'}
               </span>
-              <span className={`px-1.5 py-0.5 rounded text-[9px] font-black font-mono border ${cfg?.desks?.spot ? 'bg-amber-500/15 text-amber-300 border-amber-500/40' : 'bg-slate-600/20 text-slate-500 border-slate-600/30'}`} title="v19.0 user spec: SPOT auto-entry OFF — manual spot trading abhi bhi full chalta hai">
-                SPOT {cfg?.desks?.spot ? 'AUTO ON (user-enabled)' : 'AUTO OFF'}
-              </span>
               <span className={`px-1.5 py-0.5 rounded text-[9px] font-black font-mono border ${cfg?.desks?.india !== false ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40' : 'bg-slate-600/20 text-slate-500 border-slate-600/30'}`} title="NSE India desk (Dhan/paper) — CoinDCX se alag desk">
                 INDIA {cfg?.desks?.india !== false ? 'ON' : 'OFF'}
               </span>
-              {cfg?.desks?.spot === false && (
-                <span className="text-[9px] text-slate-500 font-mono">· v19.0: spot auto-entry band — manual trades safe</span>
+              {/* v21.0.5: SPOT desk tab se REMOVE — ye chip sirf tabhi dikhe
+                  jab kisi purane saved config ne spot explicitly ON rakha
+                  ho (server ki v19.0 migration naye configs me default
+                  OFF hi rakhti hai; chip honest disclosure hai). */}
+              {cfg?.desks?.spot === true && (
+                <span className="px-1.5 py-0.5 rounded text-[9px] font-black font-mono border bg-slate-600/20 text-slate-500 border-slate-600/30" title="v21.0.5: SPOT desk CoinDCX tab se REMOVE ho chuka hai — ye chip sirf purane saved-config disclosure ke liye hai">
+                  SPOT DESK REMOVED (v21.0.5)
+                </span>
               )}
             </div>
           </div>
@@ -822,7 +825,10 @@ export const AgentPanel = memo(function AgentPanel({ notify }: { notify: (ok: bo
           <TodayTrades trades={view.today.trades} />
           <PickStrip title="🇮🇳 INDIA INTRADAY PICKS (agent watch)" picks={view.picks.INDIA} accent="text-orange-300" />
           <PickStrip title="⚡ FUTURES PICKS (auto-trade desk)" picks={view.picks.FUTURES} accent="text-amber-300" />
-          <PickStrip title="₿ SPOT PICKS" picks={view.picks.CRYPTO} accent="text-cyan-300" />
+          {/* v21.0.5: SPOT desk removed — the third strip now shows the
+              EQUITY SIM auto-trade picks (GLOBALFUTURES), which were
+              previously invisible although the agent auto-trades them. */}
+          <PickStrip title="🌍 EQUITY SIM PICKS (auto-trade desk)" picks={view.picks.GLOBALFUTURES} accent="text-sky-300" />
         </div>
       </div>
 

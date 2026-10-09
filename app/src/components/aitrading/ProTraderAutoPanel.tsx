@@ -343,12 +343,14 @@ export const ProTraderAutoPanel = memo(function ProTraderAutoPanel({ notify }: {
                 </button>
               );
             })}
-            {/* v19.0 user spec: crypto desk product — FUTURES (B-{SYM}_USDT, USDT margin) default; SPOT = legacy opt-in */}
-            <button onClick={() => setCfgEd({ ...cfgEd, cryptoProduct: (cfgEd.cryptoProduct || 'futures') === 'futures' ? 'spot' : 'futures' } as Record<string, unknown>)}
-              className={`px-2 py-0.5 rounded text-[9px] font-black font-mono border ${(cfgEd.cryptoProduct || 'futures') === 'futures' ? 'bg-violet-500/15 text-violet-300 border-violet-500/40' : 'bg-amber-500/15 text-amber-300 border-amber-500/40'}`}
-              title="v19.0 user spec — auto trading sirf Global Futures (USDT margin) me. SPOT = legacy flow (khud enable karna hoga).">
-              {(cfgEd.cryptoProduct || 'futures') === 'futures' ? 'CRYPTO = FUTURES · USDT' : 'CRYPTO = SPOT · INR (legacy)'}
-            </button>
+            {/* v19.0 user spec → v21.0.5: crypto desk product — FUTURES
+                (B-{SYM}_USDT, USDT margin) LOCKED. The SPOT desk is
+                REMOVED from the CoinDCX tab, so the legacy spot product
+                toggle is gone with it. */}
+            <span className="px-2 py-0.5 rounded text-[9px] font-black font-mono border bg-violet-500/15 text-violet-300 border-violet-500/40"
+              title="v21.0.5: SPOT desk CoinDCX tab se REMOVE ho chuka hai — auto trading sirf Global Futures (USDT margin) me hota hai.">
+              CRYPTO = FUTURES · USDT
+            </span>
             <span className="text-[9px] text-slate-500 font-mono self-center">India product: {String(cfg.indiaProduct || 'MTF')} (leverage = MTF)</span>
           </div>
         </div>

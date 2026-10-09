@@ -2,18 +2,22 @@
 // src/components/tabs/CoinDcxTab.tsx — v6.10 COINDCX DESK
 // ------------------------------------------------------------
 // The CoinDCX half of the old AI Trading tab, now a SELF-CONTAINED
-// desk — nothing NSE on this screen:
+// desk — nothing NSE on this screen. v21.0.5 USER SPEC: the SPOT desk
+// is COMPLETELY REMOVED — ab sirf do desks hain: ⚡ GLOBAL FUTURES
+// (USDT perps) + 🌍 EQUITY SIM (USDC):
 //   ┌ COMMAND BAR      BTC regime · engine status · refresh
-//   ├ DESK SWITCHER    ₿ SPOT (INR pairs)  |  ⚡ GLOBAL FUTURES (USDT perps)
+//   ├ DESK SWITCHER    ⚡ GLOBAL FUTURES (USDT)  |  🌍 EQUITY SIM
 //   ├ QUICK NAV        sticky section jump chips
-//   ├ 📊 DESK STATS    v6.10 one-glance strip of the active desk
+//   ├ 📊 DESK STATS    one-glance strip of the active desk
 //   ├ 00 AUTO-AGENT    superintelligence auto entry/exit (3 trades/day)
 //   ├ 📱 WALLET        spot + futures + equity — "wallet me kitna hai"
 //   ├ 🏆 TOP 5 PICKS   composite ranking of the active desk's universe
 //   ├ 01 SIGNAL BOARD  10-model consensus cards · trade tickets
-//   ├ 01b MORNING BRIEF · 02b SWING+WHALES+ORDERBOOK
-//   ├ 03 EXECUTION     spot+futures positions · leverage · risk gates
-//   └ 04 BACKTEST · 05 ALERTS · 06 MODELS · 07 LEDGER
+//   ├ 01b MORNING BRIEF · 01r RECHECK · 02e MY TRADES · 02f REVERSAL
+//   ├ 03 EXECUTION     futures positions · leverage · risk gates
+//   └ 04 MESH OPS · 05 ALERTS · 06 MODELS · 07 LEDGER · 07b TRUST
+// (02b Swing/Whales/Orderbook + 04 Backtest/ModelPerf were spot-crypto
+//  analytics — removed with the desk. See docs/CHANGES.md v21.0.5.)
 // ============================================================
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAITrading } from '../aitrading/useAITrading';
@@ -32,8 +36,6 @@ import { ManualTradeMonitor } from '../aitrading/ManualTradeMonitor';
 // v12.8 SUPERINTELLIGENCE REVERSAL RECOVERY — ₹-cycle board (self-contained fetch)
 import { ReversalPanel } from '../aitrading/ReversalPanel';
 import { ModelRegistry } from '../aitrading/ModelRegistry';
-import { BacktestPanel } from '../aitrading/BacktestPanel';
-import { ModelPerformancePanel } from '../aitrading/ModelPerformancePanel';
 // v11.6 → v11.7 FIX: the MCP mesh ops view was originally wired only into the
 // DEAD tabs/AITradingTab.tsx (unreachable from App.tsx since the v6.9 desk
 // split) — users could never see it. Re-wired here onto the LIVE crypto desk
@@ -45,7 +47,7 @@ import { AgentPanel } from '../aitrading/AgentPanel';
 // (file gone). To re-mount: recreate the component from git history
 // (commit before v20.6.3) and add the JSX block back here.
 import { ProTraderAutoPanel } from '../aitrading/ProTraderAutoPanel';
-import { MorningBriefPanel, SwingDeskPanel, WhaleRadarPanel, SignalLedgerPanel, OrderbookPanel, TrustLayerPanel, PerfAnalyticsPanel, CorrelationPanel } from '../aitrading/ProPanels';
+import { MorningBriefPanel, SignalLedgerPanel, TrustLayerPanel, PerfAnalyticsPanel, CorrelationPanel } from '../aitrading/ProPanels';
 // v10.1: the crypto desk conversational AI (mirror of the intraday ProTrader panel)
 import { CryptoAgentPanel } from '../aitrading/CryptoAgentPanel';
 // v12.0 PRO TRADER UPGRADE — the perp positioning intelligence view
@@ -88,9 +90,7 @@ const NAV = [
   { id: 'cx-manual', label: 'MY TRADES', emoji: '✍️', pro: false },
   { id: 'cx-execute', label: 'EXECUTE', emoji: '⚙️', pro: false },
   { id: 'cx-brief', label: 'BRIEF', emoji: '📰', pro: true },
-  { id: 'cx-whales', label: 'WHALES', emoji: '🐋', pro: true },
   { id: 'cx-corr', label: 'CORR', emoji: '📊', pro: true },
-  { id: 'cx-backtest', label: 'BACKTEST', emoji: '🧪', pro: true },
   { id: 'cx-alerts', label: 'ALERTS', emoji: '🔔', pro: true },
   { id: 'cx-models', label: 'MODELS', emoji: '🧠', pro: true },
   { id: 'cx-ledger', label: 'LEDGER', emoji: '🔗', pro: true },
@@ -112,6 +112,11 @@ const NAV_FUTURES = [{ id: 'cx-perp', label: 'PERP', emoji: '🛰️', pro: fals
 const CX_DHAN_CONNECT_STUB = async () => ({ ok: false, error: 'India desk me jao (🇮🇳 India tab)' });
 const CX_DHAN_DISCONNECT_STUB = async () => ({ ok: false, error: 'n/a' });
 const CX_DHAN_REFRESH_STUB = () => {};
+
+// v21.0.5: SPOT desk removed — the SSE live-price hook still takes a
+// spot-symbols slot (shared server contract), so a STABLE empty list
+// rides in (identity-stable = no re-subscribe churn on re-renders).
+const NO_SPOT_SYMS: string[] = [];
 
 /** v6.9: prominent wallet card — spot INR + USDT, futures margin, equity.
  *  The "wallet me kitna hai / kitna bacha hai" answer at the top of the
@@ -224,25 +229,28 @@ const WalletCard = memo(function WalletCard() {
 });
 
 export default memo(function CoinDcxTab() {
-  // v6.9: CoinDCX-scoped loading — spot + futures boards only.
-  // v10.4: + GLOBAL equity futures SIM board (AAPL/GOOGL/NVDA/…/SPACEX).
-  const t = useAITrading(true, { markets: ['CRYPTO', 'FUTURES', 'GLOBALFUTURES'] });
-  const { crypto, futures, globalFut, state, positions, entries, loading, busy, refresh, refreshPositions, executeSignal, executeFutures, executeGlobal, updateConfig, closePos, fetchDeep, boardError, positionsLive, rescan, rescanning } = t;
-  const { runBacktest, runStrategyLab, fetchAlertsStatus, saveAlertsConfig, testAlert } = t;
-  const [desk, setDesk] = useState<'CRYPTO' | 'FUTURES' | 'GLOBAL'>('CRYPTO');
+  // v6.9: CoinDCX-scoped loading. v10.4: + GLOBAL equity futures SIM
+  // board (AAPL/GOOGL/NVDA/…/SPACEX). v21.0.5 USER SPEC: SPOT (CRYPTO)
+  // board fetch REMOVED — sirf Futures USDT + Equity SIM boards.
+  const t = useAITrading(true, { markets: ['FUTURES', 'GLOBALFUTURES'] });
+  const { futures, globalFut, state, positions, entries, loading, busy, refresh, refreshPositions, executeFutures, executeGlobal, updateConfig, closePos, fetchDeep, boardError, positionsLive, rescan, rescanning } = t;
+  const { fetchAlertsStatus, saveAlertsConfig, testAlert } = t;
+  // v21.0.5 USER SPEC: SPOT desk COMPLETELY REMOVED — sirf GLOBAL
+  // FUTURES (USDT perps) + EQUITY SIM (USDC) desks. Default: FUTURES.
+  const [desk, setDesk] = useState<'FUTURES' | 'GLOBAL'>('FUTURES');
   const [toast, setToast] = useState<{ ok: boolean; text: string } | null>(null);
   const [filter, setFilter] = useState<BoardFilter>('ALL');
   // BUG 6 fix: reset filter when desk changes — avoids stale empty-board
-  // when e.g. STRONG filter active on SPOT but 0 STRONG on FUTURES.
+  // when e.g. STRONG filter active on FUTURES but 0 STRONG on EQUITY SIM.
   // v18.6.4: desk switch pe deep modal bhi band — purane desk ka analysis
   // naye desk ke upar overlay tha.
-  const switchDesk = useCallback((d: 'CRYPTO' | 'FUTURES' | 'GLOBAL') => { setDesk(d); setFilter('ALL'); setDeep(null); }, []);
+  const switchDesk = useCallback((d: 'FUTURES' | 'GLOBAL') => { setDesk(d); setFilter('ALL'); setDeep(null); }, []);
   // v6.13: SIMPLE (trade-flow only) / PRO (poora desk) — persist hota hai
   const [viewMode, setViewMode] = useDeskViewMode();
   const simple = viewMode === 'simple';
   const [deep, setDeep] = useState<DeepModalState | null>(null);
 
-  const board: SignalBoard | null = desk === 'FUTURES' ? futures : desk === 'GLOBAL' ? globalFut : crypto;
+  const board: SignalBoard | null = desk === 'FUTURES' ? futures : globalFut;
   // v20.7.12 [M-6]: models fallback chain SPOT desk ka registry GLOBAL desk
   // pe dikha deti thi jab tak globalFut load nahi hota (galat desk ka "bus
   // chal raha hai" signal). Ab sirf ACTIVE desk ka registry — loading me
@@ -251,17 +259,17 @@ export default memo(function CoinDcxTab() {
   const canLive = state?.config?.mode === 'live' && !state?.blocked?.notConnected;
 
   // -----------------------------------------------------------------
-  // v10.10 DIRECT COINDCX ULTRA-FAST RT — the fix for "SPOT / Global
-  // Futures / Equity SIM me realtime prices fetch nahi ho rahe, isliye
-  // wrong call / signal show ho rahe hai". ONE EventSource carries all
-  // three desks' symbols (crypto= spot INR · fut= USDT perps · glob=
-  // USDC equity perps), server polls CoinDCX DIRECT every 2s and pushes
-  // ticks; the cards overlay the live LTP with the snapshot as fallback.
+  // v10.10 DIRECT COINDCX ULTRA-FAST RT — the fix for "Futures / Equity
+  // SIM me realtime prices fetch nahi ho rahe, isliye wrong call /
+  // signal show ho rahe hai". ONE EventSource carries both desks'
+  // symbols (fut= USDT perps · glob= USDC equity perps), server polls
+  // CoinDCX DIRECT every 2s and pushes ticks; the cards overlay the
+  // live LTP with the snapshot as fallback. v21.0.5: SPOT symbols ki
+  // subscription khatam (desk hi nahi hai) — stable empty list.
   // -----------------------------------------------------------------
-  const spotSyms = useMemo(() => (crypto?.signals || []).map(s => s.symbol), [crypto]);
   const futSyms = useMemo(() => (futures?.signals || []).map(s => s.symbol), [futures]);
   const globSyms = useMemo(() => (globalFut?.signals || []).map(s => s.symbol), [globalFut]);
-  const cxLive = useCxLivePrices(true, spotSyms, futSyms, globSyms);
+  const cxLive = useCxLivePrices(true, NO_SPOT_SYMS, futSyms, globSyms);
   const liveFor = cxLive.forSignal;
   // v20.7.12 [H2-1]: STABLE CALLBACK PROPS — pehle Expert/TopPicks/OrderConsole
   // ko inline arrow props milte the jo har render pe NAYI identity lete the —
@@ -281,21 +289,16 @@ export default memo(function CoinDcxTab() {
   const wsH = cxLive.wsHealth;
   const wsCoolMin = wsH?.cooldownActive ? Math.max(1, Math.round(wsH.cooldownRemainMs / 60_000)) : 0;
   const bnH = wsH?.binanceFut;
-  // v18.10: the OFFICIAL spot socket tier — servable book = direct
-  // sub-2s INR pushes are live ("SPOT·WS"). Missing on older frames →
-  // silent (REST 2s anchor still honest).
-  const spH = wsH?.spotWs;
-  const spotWsNote = !spH ? '' : spH.servable
-    ? ' · SPOT·WS⚡'
-    : spH.cooling ? ` · SPOT·WS cooling ${Math.max(1, Math.round((spH.ageMs ?? 0) / 60_000))}m`
-      : '';
+  // v21.0.5: the SPOT·WS tier note is gone with the spot desk (no spot
+  // symbols are subscribed anymore). FUT/GLOB + Binance accelerator
+  // tiers remain.
   const wsNote = !wsH ? '' : wsH.cooldownActive
     ? (wsH.cooldownReason === 'glob-quiet'
       ? ` · GLOB quiet — cooling ${wsCoolMin}m${bnH?.healthy ? ' · FUT Binance·WS⚡' : ''}`
       : wsH.cooldownReason === 'silent-contract'
         ? ` · WS silent — cooling ${wsCoolMin}m${bnH?.healthy ? ' · FUT Binance·WS⚡' : ''}`
         : ` · WS reconnecting ${wsCoolMin}m${bnH?.healthy ? ' · FUT Binance·WS⚡' : ''}`)
-    : `${spotWsNote}${wsH.healthy ? ' · FUT/GLOB·WS⚡' : ''}${bnH?.healthy ? ' · FUT Binance·WS⚡' : ''}`;
+    : `${wsH.healthy ? ' · FUT/GLOB·WS⚡' : ''}${bnH?.healthy ? ' · FUT Binance·WS⚡' : ''}`;
 
   // Track which ACTIONABLE symbols were NOT in the previous board → flash them.
   // v18.5 FIX: render-phase ref mutation (queueMicrotask inside useMemo)
@@ -323,24 +326,9 @@ export default memo(function CoinDcxTab() {
   }, []);
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
-  const onExecute = useCallback(async (signal: AISignal, mode: 'paper' | 'live' | 'notify', opts?: { qtyINR?: number; leverage?: number }) => {
-    const r = await executeSignal(signal, mode, opts);
-    if (r.ok) {
-      // v7.0.2: notify-mode is NOT a paper trade — honest branch + guarded
-      // fills (the old toast rendered "qty undefined @ ₹undefined").
-      if (mode === 'notify') {
-        notify(true, `🔔 Notify-only — ${r.note || 'gauntlet chala, alert + journal audit likha. Koi order/position NAHI bana.'}`);
-        return r;
-      }
-      const levTag = r.filled?.leverage ? ` · ${r.filled.leverage}x margin (₹${Math.round(r.filled.marginINR ?? 0)})` : '';
-      notify(true, mode === 'live'
-        ? `✅ LIVE order placed — ${signal.symbol} ${signal.side} · qty ${r.filled?.qty ?? '—'} @ ₹${r.filled?.price ?? '—'}${levTag}${r.fitted ? ` · ⚙️ ${r.fitted}` : ''}`
-        : `🧪 Paper trade opened — ${signal.symbol} ${signal.side} · qty ${r.filled?.qty ?? '—'} @ ₹${r.filled?.price ?? '—'}${levTag}${r.fitted ? ` · ⚙️ ${r.fitted}` : ''}`);
-    } else {
-      notify(false, `⛔ ${r.error || 'execution failed'}`);
-    }
-    return r; // v7.0.2: the ticket's own banner awaits this honest result
-  }, [executeSignal, notify]);
+  // v21.0.5: the spot-desk execute handler (executeSignal) is REMOVED
+  // with the SPOT desk — futures + equity-sim handlers below are the
+  // only execution paths on this tab now.
 
   // v6.8: GLOBAL FUTURES gauntlet (USDT perpetuals) — same handler shape.
   const onExecuteFutures = useCallback(async (signal: AISignal, mode: 'paper' | 'live' | 'notify', opts?: { qtyINR?: number; marginUSDT?: number; leverage?: number }) => {
@@ -424,7 +412,7 @@ export default memo(function CoinDcxTab() {
   // every-15-sec ask applied to the analysis they are reading) — grade /
   // side / confidence drift becomes a VISIBLE transition log instead of
   // silent stale numbers.
-  const deepMarket = (deep?.signal?.market || (desk === 'FUTURES' ? 'FUTURES' : desk === 'GLOBAL' ? 'GLOBALFUTURES' : 'CRYPTO')) as 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES';
+  const deepMarket = (deep?.signal?.market || (desk === 'FUTURES' ? 'FUTURES' : 'GLOBALFUTURES')) as 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES';
   const deepAuto = useDeepAutoRecheck(deep, setDeep, fetchDeep, deepReq, deepMarket);
 
   // v20.7.12 [H3-3]: EXECUTE ROUTING — modal ka 🚀 TRADE button pehle HAMESHA
@@ -475,13 +463,13 @@ export default memo(function CoinDcxTab() {
               <span className="quantum-badge">v12.0 PRO</span>
             </div>
             <p className="text-[10px] text-slate-500 mt-0.5">
-              SPOT (INR) + ⚡ GLOBAL FUTURES (USDT perps) · wallet · leverage · auto-agent
+              ⚡ GLOBAL FUTURES (USDT perps) + 🌍 EQUITY SIM · wallet · leverage · auto-agent
               {canLive && <span className="text-red-400 font-black"> · LIVE EXECUTION ARMED</span>}
               <span className="text-amber-400/80 font-bold"> · India/NSE alag tab me (🇮🇳 India)</span>
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2 flex-wrap">
-            <RegimeChips board={board} market="CRYPTO" />
+            <RegimeChips board={board} market="FUTURES" />
             {/* v10.10: the direct-CoinDCX feed honesty chip — LIVE (2s direct
                 poll) / connecting / down / parked, plus the newest tick's age.
                 v18.6.3: 'parked' (tab background ≥30s — OUR bandwidth choice)
@@ -494,7 +482,7 @@ export default memo(function CoinDcxTab() {
                 : cxLive.status === 'parked'
                   ? 'bg-slate-600/20 text-slate-400 border-slate-600/30'
                   : 'bg-slate-600/20 text-slate-400 border-slate-600/30'}`}
-              title="Spot INR (official CoinDCX spot-WS direct push + 2s anchor + ~1s Binance WS) · USDT perps (2s direct CoinDCX RT + WS accelerator) · USDC equity perps (2s direct RT + Yahoo fallback) — ek hi SSE connection, teeno desks live, 24x7. WS cooldown = socket benched, REST 2s abhi bhi chal raha hai. Paused = tab background me tha (bandwidth park) — tab pe wapas aate hi instant live.">
+              title="USDT perps (2s direct CoinDCX RT + WS accelerator) · USDC equity perps (2s direct RT + Yahoo fallback) — ek hi SSE connection, dono desks live, 24x7. WS cooldown = socket benched, REST 2s abhi bhi chal raha hai. Paused = tab background me tha (bandwidth park) — tab pe wapas aate hi instant live.">
               {cxLive.status === 'live' ? `⚡ DIRECT COINDCX WS${liveAgeS != null ? ` · ${liveAgeS}s ago` : ''}${wsNote}` : cxLive.status === 'down' ? '⚡ live feed down — retrying (≤5s)' : cxLive.status === 'parked' ? '⚡ live feed paused — tab background me tha' : '⚡ live feed connecting…'}
             </span>
             <FreshnessBadge board={board} />
@@ -519,14 +507,10 @@ export default memo(function CoinDcxTab() {
           </div>
         </div>
         <div className="mt-3">
-          {/* Desk switcher: SPOT vs GLOBAL FUTURES (dono CoinDCX ke hain —
-              isliye ye tab ke ANDAR hai; India alag top-level tab hai). */}
+          {/* Desk switcher (dono CoinDCX ke hain — isliye ye tab ke ANDAR
+              hai; India alag top-level tab hai). v21.0.5 USER SPEC: SPOT
+              desk COMPLETELY REMOVED — ab sirf ye do desks hain. */}
           <div className="flex gap-1 quantum-panel p-1 rounded-2xl w-full sm:w-auto" role="tablist" aria-label="CoinDCX desk">
-            <button onClick={() => switchDesk('CRYPTO')} role="tab" aria-pressed={desk === 'CRYPTO'}
-              className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-black transition-colors flex items-center gap-2 ${desk === 'CRYPTO' ? 'bg-gradient-to-r from-amber-600 to-yellow-600 text-white shadow-lg shadow-amber-500/20' : 'text-slate-400 hover:text-slate-200'}`}>
-              ₿ SPOT
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-emerald-500/20 text-emerald-300">INR · 24/7</span>
-            </button>
             <button onClick={() => switchDesk('FUTURES')} role="tab" aria-pressed={desk === 'FUTURES'}
               className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-black transition-colors flex items-center gap-2 ${desk === 'FUTURES' ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-lg shadow-violet-500/20' : 'text-slate-400 hover:text-slate-200'}`}>
               ⚡ GLOBAL FUTURES
@@ -548,7 +532,7 @@ export default memo(function CoinDcxTab() {
       <QuickNav items={simple ? NAV_SIMPLE : desk === 'FUTURES' ? NAV_FUTURES : NAV} />
 
       {/* ============ 📊 DESK STATS (v6.10 — active desk one-glance) ============ */}
-      <DeskStatsStrip board={board} deskLabel={desk === 'FUTURES' ? '⚡ FUTURES DESK SNAPSHOT' : desk === 'GLOBAL' ? '🌍 EQUITY SIM DESK SNAPSHOT' : '₿ SPOT DESK SNAPSHOT'} />
+      <DeskStatsStrip board={board} deskLabel={desk === 'FUTURES' ? '⚡ FUTURES DESK SNAPSHOT' : '🌍 EQUITY SIM DESK SNAPSHOT'} />
 
       {/* ============ v21.0.3 LOCAL LLM (OLLAMA) MODEL STRIP ============
           India tab jaisa hi — "konsa local ollama model use ho raha hai"
@@ -562,7 +546,7 @@ export default memo(function CoinDcxTab() {
 
       {/* ============ 00 · SUPERINTELLIGENCE AUTO-AGENT ============ */}
       <div id="cx-agent">
-        <SectionLabel num="00" title="Superintelligence Auto-Agent" sub="wallet-fetch · auto entry/exit · daily 3 trades · SL-based sizing — v19.0 auto scope: GLOBAL FUTURES (USDT margin) + EQUITY SIM (USDC) hi auto-trade hote hain, SPOT auto-entry OFF (manual trading full chalta hai) — sab gauntlet-gated" />
+        <SectionLabel num="00" title="Superintelligence Auto-Agent" sub="wallet-fetch · auto entry/exit · daily 3 trades · SL-based sizing — auto scope: GLOBAL FUTURES (USDT margin) + EQUITY SIM (USDC) hi auto-trade hote hain — sab gauntlet-gated" />
         <div className="mt-2.5">
           <AgentPanel notify={notify} />
         </div>
@@ -618,7 +602,7 @@ export default memo(function CoinDcxTab() {
 
       {/* ============ 🏆 TOP 5 PICKS (v6.9) ============ */}
       <div id="cx-top5">
-        <TopPicksPanel picks={board?.topFive} market={desk === 'GLOBAL' ? 'GLOBALFUTURES' : desk} deskLabel={desk === 'GLOBAL' ? '🌍 GLOBAL EQUITY FUTURES · USD (SIM desk)' : desk === 'FUTURES' ? '⚡ COINDCX GLOBAL FUTURES · USDT' : '₿ COINDCX SPOT · INR'} scanned={board?.scanned} loading={loading} onDeep={onDeep}
+        <TopPicksPanel picks={board?.topFive} market={desk === 'GLOBAL' ? 'GLOBALFUTURES' : desk} deskLabel={desk === 'GLOBAL' ? '🌍 GLOBAL EQUITY FUTURES · USD (SIM desk)' : '⚡ COINDCX GLOBAL FUTURES · USDT'} scanned={board?.scanned} loading={loading} onDeep={onDeep}
           liveLtpFor={liveLtpFor}
           liveSrcFor={liveSrcFor} />
       </div>
@@ -631,9 +615,7 @@ export default memo(function CoinDcxTab() {
         <div className="flex items-end justify-between flex-wrap gap-2">
           <SectionLabel num="01" title="Superintelligence Signal Board" sub={`${desk === 'FUTURES'
             ? 'CoinDCX GLOBAL FUTURES — poora dynamic perp universe scan (RT USDT prices)'
-            : desk === 'GLOBAL'
-              ? '🌍 GLOBAL EQUITY FUTURES SIM — AAPL/MSFT/GOOGL/AMZN/NVDA/TSLA/META (real Yahoo quotes + 1h candles) + SPACEX (deterministic synthetic, labeled SIM) → same 10-model committee → signals REAL data par, execution PAPER/NOTIFY only'
-              : 'CoinDCX SPOT — poora dynamic INR universe scan'} → 10-model consensus + 7-factor expert engine → AI SCORE (80+ = STRONG, 85+ = ELITE) + calibrated WIN PROBABILITY (P(win) vs R:R breakeven + EV in R) + full trade blueprint`} />
+            : '🌍 GLOBAL EQUITY FUTURES SIM — AAPL/MSFT/GOOGL/AMZN/NVDA/TSLA/META (real Yahoo quotes + 1h candles) + SPACEX (deterministic synthetic, labeled SIM) → same 10-model committee → signals REAL data par, execution PAPER/NOTIFY only'} → 10-model consensus + 7-factor expert engine → AI SCORE (80+ = STRONG, 85+ = ELITE) + calibrated WIN PROBABILITY (P(win) vs R:R breakeven + EV in R) + full trade blueprint`} />
           <BoardSummary board={board} />
         </div>
         <div className="mt-2.5 flex items-center justify-between flex-wrap gap-2">
@@ -654,7 +636,7 @@ export default memo(function CoinDcxTab() {
           {loading && (!board || board.signals.length === 0) && (
             <div className="quantum-panel rounded-2xl p-10 text-center col-span-full">
               <div className="text-4xl mb-3 animate-float">🧠</div>
-              <div className="text-sm text-slate-400 font-medium">Ensemble scanning {desk === 'FUTURES' ? 'the futures universe' : desk === 'GLOBAL' ? 'the global equity desk (Yahoo feed)' : 'crypto majors'}…</div>
+              <div className="text-sm text-slate-400 font-medium">Ensemble scanning {desk === 'FUTURES' ? 'the futures universe' : 'the global equity desk (Yahoo feed)'}…</div>
             </div>
           )}
           {board && !board.ok && (
@@ -681,7 +663,6 @@ export default memo(function CoinDcxTab() {
               <SignalCard key={`${s.market}-${s.symbol}`} signal={s} busy={busy}
                 liveLtp={t?.price ?? null}
                 liveSrc={t?.src ?? null}
-                onExecute={desk === 'CRYPTO' ? onExecute : undefined}
                 onExecuteFutures={desk === 'FUTURES' ? onExecuteFutures : undefined}
                 onExecuteGlobal={desk === 'GLOBAL' ? onExecuteGlobal : undefined}
                 onDeep={onDeep}
@@ -722,19 +703,15 @@ export default memo(function CoinDcxTab() {
         </div>
       )}
 
-      {/* ============ 02b · SWING DESK + WHALE RADAR + ORDERBOOK (PRO) ============ */}
-      {!simple && (
-        <div id="cx-whales">
-          <SectionLabel num="02b" title="Swing Desk + Whale Radar + Orderbook" sub="multi-day crypto setups · volume-spike footprints · live book imbalance" />
-          <div className="mt-2.5 grid gap-3 xl:grid-cols-2">
-            <SwingDeskPanel market="CRYPTO" />
-            <div className="space-y-3">
-              <WhaleRadarPanel market="CRYPTO" />
-              <OrderbookPanel />
-            </div>
-          </div>
-        </div>
-      )}
+      {/* ============ 02b · SWING DESK + WHALE RADAR + ORDERBOOK — REMOVED v21.0.5 ============
+          The user asked for the SPOT section to be COMPLETELY removed
+          (sirf Futures USDT + Equity SIM). These three panels were
+          crypto-SPOT-market analytics (INR-pair multi-day setups · spot
+          whale footprints · spot orderbook) with no futures
+          equivalents — removed with the desk. The panel components stay
+          in ProPanels.tsx (other markets unharmed). See
+          app/docs/CHANGES.md v21.0.5.
+      ==================================================================== */}
 
       {/* ============ 02c · CROSS-ASSET CORRELATIONS (v6.11 · PRO) ============ */}
       {!simple && (
@@ -774,20 +751,16 @@ export default memo(function CoinDcxTab() {
         </div>
       </div>
 
-      {/* ============ 04 · BACKTEST LAB (crypto · PRO) ============ */}
+      {/* ============ 04 · BACKTEST LAB — SPOT-CRYPTO PANELS REMOVED v21.0.5 ============
+          BacktestPanel (market=CRYPTO) + ModelPerformancePanel (desk=CRYPTO)
+          replayed the 10-model ensemble on crypto SPOT history — the spot
+          desk is gone, so both panels went with it (futures backtests are
+          not wired in these panels). The MESH STATUS panel below is shared
+          infra (10 data agents feeding BOTH desks' T3 seats) and stays.
+      ==================================================================== */}
       {!simple && (
-        <div id="cx-backtest">
-          <SectionLabel num="04" title="Backtest Lab" sub="the SAME 10-model ensemble replayed on crypto history — win rate · avg R · equity curve · learned gates" />
-          <div className="mt-2.5">
-            <BacktestPanel market="CRYPTO" runBacktest={runBacktest} runStrategyLab={runStrategyLab} />
-          </div>
-          {/* v10.6 Pro Upgrade #5: the walk-forward dashboard — per-model
-              30/90d win-rates + calibration chart + regime tilt state. */}
-          <div className="mt-2.5">
-            <ModelPerformancePanel desk="CRYPTO" />
-          </div>
-          {/* v11.6 MCP mesh ops — 10 data agents' health, free-tier budgets
-              and the mesh-backed ensemble seats (shadow/voting state). */}
+        <div id="cx-mesh">
+          <SectionLabel num="04" title="MCP Mesh Ops" sub="10 data agents ka health · free-tier budgets · mesh-backed ensemble seats (shadow/voting state) — dono desks ke T3 seats isi mesh se feed hote hain" />
           <div className="mt-2.5">
             <MeshStatusPanel />
           </div>
@@ -837,7 +810,7 @@ export default memo(function CoinDcxTab() {
 
       {/* ============ v6.13: SIMPLE-mode me PRO sections ka pointer ============ */}
       {simple && (
-        <ProSectionsNote names="Brief · Swing/Whales · Correlations · Backtest · Alerts · Models · Ledger · Trust" />
+        <ProSectionsNote names="Brief · Correlations · Alerts · Models · Ledger · Trust · Mesh" />
       )}
 
       {/* ============ DEEP ANALYSIS MODAL ============ */}
@@ -914,7 +887,6 @@ export default memo(function CoinDcxTab() {
                   <SignalCard signal={deepCardSig}
                     liveLtp={deepCardTick?.price ?? null}
                     liveSrc={deepCardTick?.src ?? null}
-                    onExecute={deepCardCanExec && deepExecSig!.market === 'CRYPTO' ? onExecute : undefined}
                     onExecuteFutures={deepCardCanExec && deepExecSig!.market === 'FUTURES' ? onExecuteFutures : undefined}
                     onExecuteGlobal={deepCardCanExec && deepExecSig!.market === 'GLOBALFUTURES' ? onExecuteGlobal : undefined}
                     onDeep={onDeep}

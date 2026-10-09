@@ -180,6 +180,15 @@ export function loadProTraderConfig() {
   } else if (!cfg.__migrations?.v20_8_5) {
     cfg.__migrations = { ...(cfg.__migrations || {}), v20_8_5: true };
   }
+  // v21.0.5 migration (USER SPEC, spot desk removed): the SPOT desk is
+  // GONE from the CoinDCX tab and the UI toggle with it — a legacy saved
+  // 'spot' product would keep SAPTA on an invisible desk forever. One
+  // time, any explicit 'spot' rises to 'futures' (v19.0 stamp add kiya
+  // tha sirf null ke liye; ye stamp naye hai — dono idempotent hain).
+  if (cfg.cryptoProduct === 'spot' && !cfg.__migrations?.v21_0_5) {
+    cfg.cryptoProduct = 'futures';
+    cfg.__migrations = { ...(cfg.__migrations || {}), v21_0_5: true };
+  }
   if (cfg.cryptoProduct !== 'spot') cfg.cryptoProduct = 'futures';
   cfg.enabled = Boolean(cfg.enabled);
   cfg.desks = { ...PROTRADER_DEFAULTS.desks, ...(cfg.desks || {}) };

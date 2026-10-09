@@ -29,25 +29,31 @@ const IV_FLOOR = 0.10, IV_CAP = 0.60;
 
 // ------------------------------------------------------------
 // v11.1 NSE+SENSEX ADDENDUM — source honesty for model chains.
-// Two fundamentally different "bs-model" cases existed under ONE
+// Two fundamentally different "bs-model" cases exist under ONE
 // label:
-//   'bs-model-nifty-fallback' — NIFTY/BANKNIFTY/… when NSE is
-//       TEMPORARILY blocked from this host (recoverable: the next
-//       successful NSE fetch restores live premiums).
-//   'bs-model-sensex-always' — SENSEX on BSE, which blocks
-//       datacenter IPs STRUCTURALLY (research-spike-verified live:
-//       bseindia.com + api.bseindia.com both 403 Akamai, even from
-//       hosts that CAN reach NSE). Not an outage — a permanent
-//       limitation. SENSEX premiums are therefore ALWAYS model
-//       estimates here, and its signal cards carry an additional
-//       STRUCTURAL confidence discount (no live-market cross-check
-//       is ever possible for this underlying).
+//   'bs-model-nifty-fallback' — NIFTY/BANKNIFTY/… when BOTH live NSE
+//       paths (direct NSE + the Groww public NIFTY mirror, v21.0.5)
+//       are TEMPORARILY blocked from this host (recoverable: the next
+//       successful fetch restores live premiums). Direct NSE serves
+//       the richest feed (volume + all expiries); the mirror is the
+//       datacenter-proof relay. BANKNIFTY-family indices still ride
+//       direct NSE alone (their groww pages are client-side rendered).
+//   'bs-model-sensex-always' — SENSEX when BOTH live SENSEX paths
+//       (Groww public mirror + direct BSE) are unreachable from this
+//       host. v21.0.4: the mirror is datacenter-friendly and verified
+//       live, so this is now the RARE case (mirror down AND direct
+//       blocked) — but while it holds, SENSEX premiums are model
+//       estimates and its signal cards carry an additional STRUCTURAL
+//       confidence discount (no live-market cross-check possible).
 // ------------------------------------------------------------
 export const SENSEX_MODEL_SOURCE = 'bs-model-sensex-always';
 export const NIFTY_MODEL_SOURCE = 'bs-model-nifty-fallback';
 /** The persistent (non-dismissible) banner text the SENSEX desk and
- *  its option cards must ALWAYS carry in model mode. */
-export const SENSEX_MODEL_BANNER = 'SENSEX premiums are model-estimated — BSE does not expose a public real-time option feed usable from this server. For live SENSEX option prices, cross-check your broker.';
+ *  its option cards must ALWAYS carry in model mode. v21.0.4: the
+ *  desk first tries the REAL BSE chain (Groww public mirror → direct
+ *  BSE) — this banner now fires only when BOTH live paths are
+ *  unreachable from this server. */
+export const SENSEX_MODEL_BANNER = 'SENSEX premiums are model-estimated — live BSE quotes (direct + Groww public mirror) are unreachable from this server right now; auto-retry chalu rehta hai. For live SENSEX option prices, cross-check your broker.';
 /** Structural AI-score discount for SENSEX model cards (no live
  *  cross-check possible — beyond the model-uncertainty handling). */
 export function sensexStructuralDiscount() {
@@ -390,7 +396,7 @@ export async function getOptionsDesk(symbol = 'NIFTY') {
       || nextWeeklyExpiryFor(sym);
     const rows = chain.rows.filter(r => r.expiry === exp);
     if (rows.length > 5) {
-      outChain = { symbol: sym, spot: r2(spot), expiry: exp, rows, source: chain.source, fetchedAt: chain.fetchedAt };
+      outChain = { symbol: sym, spot: r2(spot), expiry: exp, rows, source: chain.source, via: chain.via || null, lotSize: Number(chain.lotSize) || null, fetchedAt: chain.fetchedAt };
       analytics = analyzeChain(outChain, spot);
       // IV percentile approximated from ATM IV vs VIX level.
       if (analytics?.atmIV != null && vix) {
@@ -412,7 +418,7 @@ export async function getOptionsDesk(symbol = 'NIFTY') {
     if (outChain) {
       syntheticNote = isBseIndex
         ? `${SENSEX_MODEL_BANNER} Premiums below are Black-Scholes estimates (IV anchored to India VIX ${vix ? r1(vix) : 'n/a'} + India put-skew) — OI/PCR/GEX unavailable in model mode.`
-        : `NSE chain temporarily unreachable from this server — showing a Black-Scholes model chain (IV anchored to India VIX ${vix ? r1(vix) : 'n/a'} + India put-skew). Premiums are model estimates, NOT live quotes; OI/PCR unavailable in model mode. NSE usually serves this host — the next successful fetch restores live data.`;
+        : `NSE chain temporarily unreachable from this server (direct NSE + Groww public mirror dono tried; auto-retry chalu hai) — showing a Black-Scholes model chain (IV anchored to India VIX ${vix ? r1(vix) : 'n/a'} + India put-skew). Premiums are model estimates, NOT live quotes; OI/PCR unavailable in model mode. The next successful fetch restores live data.`;
       analytics = null; // honest: no real OI → no PCR/max-pain
     }
   }
@@ -431,14 +437,16 @@ export async function getOptionsDesk(symbol = 'NIFTY') {
     ok: true,
     symbol: sym,
     spot: outChain.spot,
-    spotChangePct: r2(quotes[sym]?.changePct ?? null),
+    spotChangePct: r2(chain?.spotChangePct ?? quotes[sym]?.changePct ?? null),
     vix: r1(vix),
     expiry: outChain.expiry,
     // v6.13: days-to-expiry (0 = expiry-day) for the ticket UI
     dte: daysToExpiry(outChain.expiry),
     source: outChain.source,
+    // v21.0.4: which live relay served the chain ('groww' mirror vs direct)
+    sourceVia: outChain.via || null,
     syntheticNote,
-    lotSize: LOT_SIZES[sym] || 1,
+    lotSize: outChain.lotSize || LOT_SIZES[sym] || 1,
     analytics,
     optionsCtx,
     // ATM ± 6 strikes for the UI table.

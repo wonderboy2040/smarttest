@@ -333,7 +333,7 @@ export function IndiaHowToTrade() {
         </div>
       </div>
       <p className="text-[10px] text-slate-500 mt-2">
-        Crypto/CoinDCX ab apna alag tab hai (₿ CoinDCX) — wahan wallet + SPOT + GLOBAL FUTURES + Auto-Agent sab ek jagah. Intraday rules: square-off 15:15 IST (LIVE par watcher + broker dono enforce karte hain), opening 15 min avoid karo — LIVE entries 09:30–15:00 tak hi open hoti hain.
+        Crypto/CoinDCX ab apna alag tab hai (₿ CoinDCX) — wahan wallet + GLOBAL FUTURES (USDT) + EQUITY SIM + Auto-Agent sab ek jagah (v21.0.5: SPOT desk remove ho chuka hai). Intraday rules: square-off 15:15 IST (LIVE par watcher + broker dono enforce karte hain), opening 15 min avoid karo — LIVE entries 09:30–15:00 tak hi open hoti hain.
       </p>
     </div>
   );

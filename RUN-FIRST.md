@@ -4,6 +4,52 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.0.5 — NIFTY REALTIME FIX + COINDCX SPOT DESK HATA DIYA
+
+**1) NIFTY options ab laptop + server dono pe REAL data:**
+SENSEX wala fix (v21.0.4) ab NIFTY pe bhi lag gaya hai. Aapke laptop pe
+jahan NSE seedha chalta hai wahan **`LIVE NSE CHAIN`** (volume + saari
+expiries ke saath) pehle jaisa hi milega. Jahan NSE block karta hai
+(VPS/Render/cloud) wahan app **Groww public mirror** se REAL NIFTY chain
+serve karega — chip **`LIVE NSE CHAIN · GROWW`** (emerald). Dono paths
+fail hone par hi model chain + amber banner (rare, auto-retry chalu).
+BANKNIFTY/FINNIFTY waise hi sirf direct NSE pe hain.
+
+**2) CoinDCX tab me ab sirf 2 desks:**
+User spec ke hisaab se **₿ SPOT desk poori tarah remove** ho gaya hai —
+desk switcher me ab sirf **⚡ GLOBAL FUTURES (USDT)** aur **🌍 EQUITY SIM**
+hain (default: FUTURES). Crypto-spot wali analytics sections (Swing Desk,
+Whale Radar, Orderbook, crypto Backtest/ModelPerf) bhi hata di gayi hain.
+Wallet card, Execution Console, Auto-Agent, Reversal, Mesh — sab intact.
+Auto-agent me ab **🌍 EQUITY SIM PICKS** strip bhi dikhti hai (agent us
+desk pe bhi auto-trade karta hai).
+
+---
+
+## 🎯 v21.0.4 — SENSEX OPTIONS AB REAL LIVE DATA (bada fix)
+
+**1) "SENSEX premiums are model-estimated" warning khatam — ab REAL chain:**
+Pehle SENSEX options ke liye koi public live feed available nahi tha (BSE
+apne datacenter IPs ko block karta hai), isliye app Black-Scholes MODEL
+premiums dikha raha tha. **v21.0.4 me Groww ka public page mirror lag
+gaya** — ab SENSEX desk pe:
+- Chip **`LIVE BSE CHAIN · GROWW`** (teal) = real BSE premiums
+- Real **LTP / OI / IV / Greeks / PCR / Max Pain / Gamma walls** (model nahi!)
+- Real weekly expiry list (Thursday) + lot size 20
+- Ye **datacenter/VPS pe bhi kaam karta hai** (Render/cloud deploy included)
+
+**2) SENSEX pe warning kabhi dikhe to (rare case):**
+Agar Groww mirror AUR direct BSE dono down ho jayein, tabhi honest model
+chain dikhega with rose banner "auto-retry chalu rehta hai" — kuch minutes
+me khud wapas live ho jata hai. Isko bina refresh ke ignore kar sakte ho.
+
+**3) NIFTY/BANKNIFTY pe raat/weekend ko "BS MODEL" chip:**
+NSE band hone pe (09:15–15:30 IST ke bahar) NIFTY-family model chain
+dikhti hai (honest amber label) — market khulte hi **LIVE NSE CHAIN**
+wapas. SENSEX/Groww bhi market hours me sabse fresh data deta hai.
+
+---
+
 ## 🎯 v21.0.3 — OPTIONS + PAPER DESK + OLLAMA MODEL (kya fix hua)
 
 **1) Options Trading abhi bhi galat dikhe to:**

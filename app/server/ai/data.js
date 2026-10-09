@@ -469,6 +469,17 @@ const NSE_HEADERS = {
 };
 let _nseCookie = null, _nseCookieAt = 0;
 const NSE_COOKIE_TTL = 8 * 60 * 1000;
+// v21.0.5: when DIRECT NSE refuses this host (datacenter IP / bot
+// detection — spike-verified: the sandbox gets 403 from both
+// nseindia.com endpoints), skip the dead probe for 10 minutes so the
+// desk stays fast while the Groww mirror serves the REAL chain. A
+// residential host (the user's laptop) never arms this — direct NSE
+// keeps serving the richest feed (per-contract volume + ALL expiries
+// in one payload).
+const NSE_DIRECT_NEG_MS = 10 * 60 * 1000;
+let _nseDirectNegUntil = 0;
+
+export function __nseNegForTests() { return { directNegUntil: _nseDirectNegUntil }; }
 
 async function nseBootstrapCookies() {
   if (_nseCookie && Date.now() - _nseCookieAt < NSE_COOKIE_TTL) return _nseCookie;
@@ -516,9 +527,15 @@ export function _expiryNormISO(s) {
 }
 
 /**
- * REAL NSE option chain for an index. Returns null when NSE blocks
- * the request (datacenter IP / Cloudflare) — the options desk then
- * falls back to the clearly-labeled Black-Scholes synthetic chain.
+ * REAL NSE option chain for an index. v21.0.5 LADDER:
+ *   1. DIRECT NSE (richest: per-contract volume + every expiry in one
+ *      payload — the residential-host path, cookie-bootstrapped)
+ *   2. Groww public NIFTY mirror (the same verified relay that fixed
+ *      SENSEX in v21.0.4 — datacenter-friendly, live LTP/OI/IV/spot;
+ *      NIFTY alone: bank-nifty/fin-nifty pages are client-side
+ *      rendered, their HTML carries no chain data)
+ * Returns null when BOTH paths fail — the options desk then falls
+ * back to the clearly-labeled Black-Scholes synthetic chain.
  * v21.0.3: ALL expiries are normalized to ISO by _expiryNormISO at
  * this boundary — the desk, Greeks, GEX and paper trades can keep
  * their all-ISO contract.
@@ -528,44 +545,60 @@ export async function fetchNSEOptionChain(symbol) {
   const path = ['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50'].includes(sym)
     ? `/api/option-chain-indices?symbol=${encodeURIComponent(sym)}`
     : `/api/option-chain-equities?symbol=${encodeURIComponent(sym)}`;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const cookie = await nseBootstrapCookies();
-      if (!cookie && attempt === 0) continue;
-      const r = await fetch(`https://www.nseindia.com${path}`, {
-        headers: { ...NSE_HEADERS, ...(cookie ? { Cookie: cookie } : {}) },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!r.ok) continue;
-      const j = await r.json();
-      const rows = j?.records?.data;
-      if (!Array.isArray(rows) || rows.length === 0) continue;
-      // v21.0.3: normalize EVERY expiry to ISO at the source (see
-      // _expiryNormISO header). Unparseable dates are dropped from the
-      // list / fall back to the raw string so the desk's own fallback
-      // (nextWeeklyExpiryFor) still has a path.
-      return {
-        symbol: sym,
-        spot: Number(j?.records?.underlyingValue) || null,
-        expiryDates: (j?.records?.expiryDates || []).map(_expiryNormISO).filter(Boolean),
-        rows: rows.map(x => ({
-          strike: Number(x.strikePrice),
-          expiry: _expiryNormISO(x.expiryDate) || String(x.expiryDate || ''),
-          callOI: Number(x.CE?.openInterest) || 0,
-          callOIChange: Number(x.CE?.changeinOpenInterest) || 0,
-          callIV: Number(x.CE?.impliedVolatility) || null,
-          callLTP: Number(x.CE?.lastPrice) || 0,
-          callVolume: Number(x.CE?.totalTradedVolume) || 0,
-          putOI: Number(x.PE?.openInterest) || 0,
-          putOIChange: Number(x.PE?.changeinOpenInterest) || 0,
-          putIV: Number(x.PE?.impliedVolatility) || null,
-          putLTP: Number(x.PE?.lastPrice) || 0,
-          putVolume: Number(x.PE?.totalTradedVolume) || 0,
-        })),
-        source: 'nse',
-        fetchedAt: Date.now(),
-      };
-    } catch { /* retry once more */ }
+  // Step 1 — DIRECT NSE (skipped inside the 10-min negative hold after
+  // a failed probe cycle; one cheap re-probe per window heals it).
+  if (Date.now() >= _nseDirectNegUntil) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const cookie = await nseBootstrapCookies();
+        if (!cookie && attempt === 0) continue;
+        const r = await fetch(`https://www.nseindia.com${path}`, {
+          headers: { ...NSE_HEADERS, ...(cookie ? { Cookie: cookie } : {}) },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) continue;
+        const j = await r.json();
+        const rows = j?.records?.data;
+        if (!Array.isArray(rows) || rows.length === 0) continue;
+        // v21.0.3: normalize EVERY expiry to ISO at the source (see
+        // _expiryNormISO header). Unparseable dates are dropped from the
+        // list / fall back to the raw string so the desk's own fallback
+        // (nextWeeklyExpiryFor) still has a path.
+        _nseDirectNegUntil = 0; // live direct feed confirmed — never hold
+        return {
+          symbol: sym,
+          spot: Number(j?.records?.underlyingValue) || null,
+          expiryDates: (j?.records?.expiryDates || []).map(_expiryNormISO).filter(Boolean),
+          rows: rows.map(x => ({
+            strike: Number(x.strikePrice),
+            expiry: _expiryNormISO(x.expiryDate) || String(x.expiryDate || ''),
+            callOI: Number(x.CE?.openInterest) || 0,
+            callOIChange: Number(x.CE?.changeinOpenInterest) || 0,
+            callIV: Number(x.CE?.impliedVolatility) || null,
+            callLTP: Number(x.CE?.lastPrice) || 0,
+            callVolume: Number(x.CE?.totalTradedVolume) || 0,
+            putOI: Number(x.PE?.openInterest) || 0,
+            putOIChange: Number(x.PE?.changeinOpenInterest) || 0,
+            putIV: Number(x.PE?.impliedVolatility) || null,
+            putLTP: Number(x.PE?.lastPrice) || 0,
+            putVolume: Number(x.PE?.totalTradedVolume) || 0,
+          })),
+          source: 'nse',
+          fetchedAt: Date.now(),
+        };
+      } catch { /* retry once more */ }
+    }
+    // Direct NSE refused this host — hold the dead probe for 10 min
+    // (mirror serves the desk meanwhile; the hold self-clears on the
+    // next successful direct cycle after it expires).
+    _nseDirectNegUntil = Date.now() + NSE_DIRECT_NEG_MS;
+  }
+  // Step 2 — Groww public NIFTY mirror (verified REAL NSE chain relay,
+  // datacenter-friendly). NIFTY only — the other index pages on groww
+  // are client-side rendered and carry no chain data in the HTML.
+  if (sym === 'NIFTY') {
+    const mirror = await fetchGrowwIndexChain('NIFTY').catch(() => null);
+    if (mirror) return mirror;
   }
   return null;
 }
@@ -577,13 +610,19 @@ export async function fetchNSEOptionChain(symbol) {
 // CAN reach NSE's chain but NOT BSE's, so a Render deployment has no
 // path either. The block is STRUCTURAL, not a transient outage.
 //
-// This fetch still exists (NSE pattern: cookie bootstrap + direct
-// JSON GET, tolerant parsing) so SENSEX gets FULL parity the day it
-// becomes reachable (different host/IP, CDN posture change). A
-// negative cache (10 min after each failed probe cycle) keeps the
-// dead probe nearly free; optionsDesk labels the SENSEX fallback
-// 'bs-model-sensex-always' (permanent limitation) instead of the
-// recoverable 'bs-model-nifty-fallback' framing — honesty by design.
+// v21.0.4 UPDATE (9 Oct 2026 live re-probe): a WORKING public relay
+// was found — groww.in's option-chain page (/options/sp-bse-sensex)
+// server-renders the REAL BSE SENSEX chain (real LTPs, OI/prevOI,
+// exchange Greeks + IV, weekly expiry list, lot size, live spot)
+// inside <script id="__NEXT_DATA__">, and it is datacenter-IP
+// friendly (the very sandbox that gets Akamai-403 from BSE fetches
+// groww.in 200 OK). The mirror is tried FIRST; the direct BSE
+// candidates below stay wired so a future CDN posture change (or a
+// residential host, e.g. the user's own laptop) gets the pure-BSE
+// feed with full parity. A negative cache (10 min after each failed
+// probe cycle) keeps the dead probe nearly free; optionsDesk labels
+// the SENSEX fallback 'bs-model-sensex-always' only when BOTH paths
+// are unreachable — honesty by design.
 const BSE_HEADERS = {
   'User-Agent': UA,
   'Accept': 'application/json, text/plain, */*',
@@ -625,18 +664,22 @@ function _bseExpiryNorm(s) {
 }
 
 /**
- * REAL BSE option chain for SENSEX — best-effort attempt following the
- * exact fetchNSEOptionChain pattern. Returns null when BSE blocks the
- * request (the documented datacenter case) or the payload doesn't
- * sanity-check. Callers MUST treat null as the expected outcome on
- * cloud hosts and label the fallback honestly (bs-model-sensex-always).
+ * REAL BSE option chain for SENSEX — v21.0.4 LADDER:
+ *   1. Groww public mirror (verified real BSE relay, datacenter-friendly)
+ *   2. Direct BSE candidates (the future residential/CDN-change path)
+ * Returns null when BOTH paths fail (the documented datacenter case) —
+ * callers MUST label the fallback honestly (bs-model-sensex-always).
  */
 export async function fetchBSEOptionChain(symbol = 'SENSEX') {
   const sym = String(symbol || 'SENSEX').toUpperCase();
   if (sym !== 'SENSEX') return null; // only the BSE flagship index is wired
-  if (Date.now() < _bseNegUntil) return null; // blocked recently — hold
-  // Two candidate endpoints (community-known shapes). Neither is
-  // verifiable from a datacenter IP today — both are attempted once.
+  if (Date.now() < _bseNegUntil) return null; // whole ladder blocked recently — hold
+  // Step 1 — Groww public mirror: the verified-reachable REAL chain.
+  const mirror = await fetchGrowwIndexChain('SENSEX').catch(() => null);
+  if (mirror) { _bseNegUntil = 0; return mirror; }
+  // Step 2 — direct BSE (two candidate endpoints, community-known
+  // shapes). Neither is verifiable from a datacenter IP today — both
+  // are attempted once (cheap: same fetch count as the old code).
   const paths = [
     `https://www.bseindia.com/OptionChain/GetOptionChain?symbol=${encodeURIComponent(sym)}`,
     `https://api.bseindia.com/BseIndiaAPI/api/OptionChain?symbol=${encodeURIComponent(sym)}`,
@@ -692,7 +735,7 @@ export async function fetchBSEOptionChain(symbol = 'SENSEX') {
       };
     } catch { /* next candidate */ }
   }
-  // Structurally blocked (the documented datacenter case) — hold off
+  // Both paths failed (the documented datacenter case) — hold off
   // for 10 minutes so SENSEX desks stay fast while the probe heals
   // itself the day BSE becomes reachable.
   _bseNegUntil = Date.now() + BSE_NEG_CACHE_MS;
@@ -700,7 +743,141 @@ export async function fetchBSEOptionChain(symbol = 'SENSEX') {
 }
 
 export function __bseNegForTests() { return { negUntil: _bseNegUntil, cookie: _bseCookie }; }
-export function __resetBseForTests() { _bseNegUntil = 0; _bseCookie = null; _bseCookieAt = 0; }
+export function __resetBseForTests() { _bseNegUntil = 0; _bseCookie = null; _bseCookieAt = 0; _growwChainState.clear(); _nseDirectNegUntil = 0; }
+
+// ---------------- Groww public index-chain mirrors (v21.0.4/v21.0.5) ----------------
+// See the BSE research-spike note above. groww.in server-renders the
+// REAL option chain (live LTP/OI/prevOI, exchange Greeks + IV, expiry
+// list, lot size, live spot) into __NEXT_DATA__ for BOTH flagship
+// indices:
+//   • /options/sp-bse-sensex → the BSE SENSEX chain (v21.0.4)
+//   • /options/nifty         → the NSE NIFTY chain (v21.0.5)
+// Live re-probe (9 Oct 2026): bank-nifty / fin-nifty / midcp-nifty
+// pages exist par ssrError=true — client-side render only, chain data
+// never reaches the HTML — so the mirror ladder stays wired for the
+// two flagship indices alone. Both pages are datacenter-IP friendly
+// (the very sandbox that gets Akamai-403 from BSE / Cloudflare-403
+// from NSE fetches groww.in 200 OK). One HTML GET per cache window,
+// browser headers — exactly the posture of the NSE chain fetch (a
+// public browser page, not a protected API). Payload ~1MB → parsed
+// once, cached 90s PER INDEX.
+const GROWW_INDEX_PAGES = {
+  SENSEX: 'https://groww.in/options/sp-bse-sensex',
+  NIFTY: 'https://groww.in/options/nifty',
+};
+const GROWW_CHAIN_TTL = 90 * 1000;      // re-fetch at most every 90s
+const GROWW_NEG_MS = 5 * 60 * 1000;     // back off 5 min after a failure
+const GROWW_HEADERS = {
+  'User-Agent': UA,
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Referer': 'https://groww.in/options',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'same-origin',
+  'Upgrade-Insecure-Requests': '1',
+};
+// per-index mirror state: { chain, at, negUntil }
+const _growwChainState = new Map();
+
+function _growwSt(index) {
+  let s = _growwChainState.get(index);
+  if (!s) { s = { chain: null, at: 0, negUntil: 0 }; _growwChainState.set(index, s); }
+  return s;
+}
+
+export function __growwStateForTests(index = 'SENSEX') {
+  const s = _growwChainState.get(index) || {};
+  return { negUntil: s.negUntil || 0, cachedAt: s.at || 0, hasChain: !!s.chain };
+}
+
+/**
+ * Parse groww's __NEXT_DATA__ payload into the NSE-normalized chain
+ * shape (all-ISO expiries, rupee strikes, oi/prevOI → OI-change).
+ * Exported for unit tests. Returns null on any sanity failure.
+ * v21.0.5: meta { symbol, source, defaultLot } parameterizes the SAME
+ * parser for both mirrors (SENSEX→bse, NIFTY→nse) — the page shape is
+ * identical (optionContracts with paise strikes + liveData + greeks,
+ * aggregatedDetails expiry list, company.liveData spot).
+ */
+export function _growwParseNextData(next, meta = {}) {
+  const symbol = meta.symbol || 'SENSEX';
+  const source = meta.source || 'bse';
+  const defaultLot = meta.defaultLot || (symbol === 'NIFTY' ? 75 : 20);
+  const pageData = next?.props?.pageProps?.data;
+  const oc = pageData?.optionChain;
+  const company = pageData?.company;
+  const contracts = Array.isArray(oc?.optionContracts) ? oc.optionContracts : null;
+  const agg = oc?.aggregatedDetails || {};
+  const expiry = /^\d{4}-\d{2}-\d{2}$/.test(String(agg.currentExpiry || '')) ? agg.currentExpiry : null;
+  if (!contracts || contracts.length < 5 || !expiry) return null;
+  const spot = Number(company?.liveData?.ltp);
+  const rows = [];
+  for (const c of contracts) {
+    const strike = Number(c?.strikePrice) / 100; // groww sends PAISE
+    if (!Number.isFinite(strike) || strike <= 0) continue;
+    const ceL = c?.ce?.liveData || {}, peL = c?.pe?.liveData || {};
+    const ceG = c?.ce?.greeks || {}, peG = c?.pe?.greeks || {};
+    rows.push({
+      strike, expiry,
+      callOI: Number(ceL.oi) || 0,
+      callOIChange: Math.max(0, (Number(ceL.oi) || 0) - (Number(ceL.prevOI) || 0)),
+      callIV: Number(ceG.iv) || null,
+      callLTP: Number(ceL.ltp) || 0,
+      callVolume: 0, // public payload carries no per-contract volume
+      putOI: Number(peL.oi) || 0,
+      putOIChange: Math.max(0, (Number(peL.oi) || 0) - (Number(peL.prevOI) || 0)),
+      putIV: Number(peG.iv) || null,
+      putLTP: Number(peL.ltp) || 0,
+      putVolume: 0,
+    });
+  }
+  const clean = rows.filter(r => r.strike > 0 && /^\d{4}-\d{2}-\d{2}$/.test(r.expiry));
+  if (clean.length < 5) return null;
+  const expiryDates = [...new Set((Array.isArray(agg.expiryDates) ? agg.expiryDates : [])
+    .map(d => _expiryNormISO(d)).filter(d => d && d >= expiry))].sort();
+  return {
+    symbol,
+    spot: Number.isFinite(spot) && spot > 0 ? spot : null,
+    spotChangePct: Number(company?.liveData?.dayChangePerc) || null,
+    expiryDates: expiryDates.length ? expiryDates : [expiry],
+    rows: clean,
+    source,
+    via: 'groww',
+    lotSize: Number(agg.lotSize) || defaultLot,
+    fetchedAt: Date.now(),
+  };
+}
+
+/** Fetch the REAL index chain via groww's public page (SENSEX→bse,
+ *  NIFTY→nse). 90s cache + 5-min negative backoff, per index. */
+async function fetchGrowwIndexChain(index) {
+  const url = GROWW_INDEX_PAGES[index];
+  if (!url) return null;
+  const st = _growwSt(index);
+  if (Date.now() < st.negUntil) return null;
+  if (st.chain && Date.now() - st.at < GROWW_CHAIN_TTL) return st.chain;
+  try {
+    const r = await fetch(url, { headers: GROWW_HEADERS, signal: AbortSignal.timeout(12000) });
+    if (!r.ok) throw new Error('groww HTTP ' + r.status);
+    const html = await r.text();
+    const i = html.indexOf('<script id="__NEXT_DATA__"');
+    if (i < 0) throw new Error('groww page has no __NEXT_DATA__');
+    const s = html.indexOf('>', i) + 1;
+    const e = html.indexOf('</script>', s);
+    if (e < 0) throw new Error('groww __NEXT_DATA__ truncated');
+    const chain = _growwParseNextData(JSON.parse(html.slice(s, e)), {
+      symbol: index,
+      source: index === 'SENSEX' ? 'bse' : 'nse',
+    });
+    if (!chain) throw new Error('groww chain failed sanity checks');
+    st.chain = chain; st.at = Date.now(); st.negUntil = 0;
+    return chain;
+  } catch {
+    st.negUntil = Date.now() + GROWW_NEG_MS; // short hold — mirror usually recovers
+    return null;
+  }
+}
 
 // ---------------- time / market-hours (IST) ----------------
 export function istNow(now = new Date()) {
