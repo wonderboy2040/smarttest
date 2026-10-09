@@ -368,7 +368,7 @@ export const ExpertPicksPanel = memo(function ExpertPicksPanel({ active, market,
           <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 text-[9px] font-black border border-emerald-500/30">{deskLabel}</span>
         </div>
         <span className="text-[10px] text-slate-500 font-mono">
-          {view?.scanned != null ? `${view.scanned}/${view.universeSize ?? '?'} coins scanned${view.priceSource ? ` · ${view.priceSource}` : ''} · 120s refresh` : 'Advance Pro Trader Engine'}
+          {view?.scanned != null ? `${view.scanned}/${view.universeSize ?? '?'} coins scanned${view.priceSource ? ` · ${view.priceSource}` : ''} · 30s refresh` : 'Advance Pro Trader Engine'}
         </span>
       </div>
 
@@ -383,7 +383,7 @@ export const ExpertPicksPanel = memo(function ExpertPicksPanel({ active, market,
         <div className="py-8 text-center">
           <div className="text-3xl mb-2">📡</div>
           <div className="text-xs text-red-400 font-bold">Expert engine tak connect nahi ho pa raha</div>
-          <div className="text-[10px] text-slate-500 mt-1">120s me auto-retry + server background scan jaari hai</div>
+          <div className="text-[10px] text-slate-500 mt-1">30s me auto-retry + server background scan jaari hai</div>
           <button onClick={() => { setLoading(true); load(); }} className="mt-3 px-3 py-1.5 rounded-lg text-[10px] font-black quantum-btn-ghost">↻ Retry now</button>
         </div>
       )}
@@ -399,7 +399,7 @@ export const ExpertPicksPanel = memo(function ExpertPicksPanel({ active, market,
         <div className="py-8 text-center">
           <div className="text-3xl mb-2">😌</div>
           <div className="text-xs text-slate-400 font-bold">Abhi koi {minScore}+ score setup nahi</div>
-          <div className="text-[10px] text-slate-500 mt-1">Engine {view.scanned ?? 0} coins scan kar chuka hai — patience hi edge hai. 120s me rescan.</div>
+          <div className="text-[10px] text-slate-500 mt-1">Engine {view.scanned ?? 0} coins scan kar chuka hai — patience hi edge hai. 30s me rescan.</div>
         </div>
       )}
 

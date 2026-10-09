@@ -1125,10 +1125,29 @@ const fetchIndexSpot = async (sym) => {
   try { return await fetchYahooQuote(toYahooSymbol(sym, 'IN')); } catch { return null; }
 };
 
+// v21.0.6 [audit B1] — LIVE option-chain ladder for open OPTION paper
+// trades: the SAME fetchers the options desk displays (direct NSE →
+// Groww mirror / BSE Groww mirror), so paper exits (SL/T1/T2/BE/EOD)
+// act on the premium the user actually sees — BS model sirf fallback.
+// Watcher 5s cadence pe paperTrading ka apna 30s per-underlying cache
+// rate-limits karta hai (data.js Groww mirror ka 90s cache bhi saath hai).
+const fetchOptionChainFor = async (underlying) => {
+  const u = String(underlying || '').toUpperCase();
+  try {
+    if (u === 'SENSEX') {
+      const { fetchBSEOptionChain } = await import('./ai/data.js');
+      return await fetchBSEOptionChain('SENSEX');
+    }
+    const { fetchNSEOptionChain } = await import('./ai/data.js');
+    return await fetchNSEOptionChain(u);
+  } catch { return null; }
+};
+
 registerIntradayRoutes(app, {
   fetchGrowwNseQuote,
   fetchCoinDcxTickers,
   fetchIndexSpot,
+  fetchOptionChainFor,
   KEYS,
   OPENAI_COMPAT,
   TG,

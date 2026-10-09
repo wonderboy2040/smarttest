@@ -1,11 +1,11 @@
 // ============================================
 // ADVANCE PRO INTELLIGENCE — CONFIGURATION
-// Version 18.0 — Multi-Engine Smart Router + Quant Brain
+// Version 21.0.6 — Multi-Engine Smart Router + Quant Brain (app v21.0.6 ke saath synced)
 // ============================================
 
 // Unified branding constant (single source of truth)
 export const BOT_NAME = 'Advance Pro Intelligence';
-export const BOT_VERSION = 'v18.0';
+export const BOT_VERSION = 'v21.0.6';
 export const BOT_TAGLINE = 'Multi-Engine AI + Quant Brain + Real-time Market Intelligence';
 export const FUNDAMENTALS_API_URL = process.env.FUNDAMENTALS_API_URL || process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 8080}`;
 

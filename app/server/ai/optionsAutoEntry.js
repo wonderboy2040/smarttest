@@ -32,6 +32,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isNseMarketOpen, freshEntriesAllowedFor } from '../intraday/time.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '..', 'data');
@@ -48,10 +49,8 @@ const DEFAULT_CFG = {
 
 const DEFAULT_STATE = { day: null, count: 0, perUnderlying: {}, lastEntryAt: {}, lastEntry: null };
 
-// ---- NSE clock (intraday/time.js se — same source of truth) ----
-async function _time() {
-  try { return await import('../intraday/time.js'); } catch { return null; }
-}
+// ---- NSE clock (intraday/time.js se — same source of truth; static
+// import v21.0.6: status view ko bhi holiday-aware window chahiye) ----
 
 function _nowISTMinutes() {
   const d = new Date(Date.now() + (5.5 * 3600_000));
@@ -89,8 +88,13 @@ function _saveState(s) { _writeJson(STATE_FILE, s); }
 export function optionsAutoStatus() {
   const cfg = loadOptionsAutoCfg();
   const s = _loadState();
+  // v21.0.6 [audit]: holiday-AWARE window (isNseMarketOpen calendar +
+  // fresh-entry cutoff 15:00) — pehle holiday-blind 09:15–15:00 clock
+  // tha jo AUTO ON ko holiday pe bhi "window open" bata deta tha.
   const m = _nowISTMinutes();
-  const nseOpen = m >= 555 && m < 900; // 09:15–15:00 IST approx window (holiday/hours gate tick me lagta hai)
+  const nseOpen = (() => {
+    try { return isNseMarketOpen() && m >= 555 && m < 900; } catch { return m >= 555 && m < 900; }
+  })();
   return {
     ok: true,
     enabled: !!cfg.enabled,
@@ -117,20 +121,25 @@ export function setOptionsAutoEnabled(enabled) {
 }
 
 // ---- the tick (30s loop se call hota hai) ----
+let _tickBusy = false; // v21.0.6 [audit]: re-entrancy guard — overlapping ticks double-open se bachaate hain
 export async function optionsAutoTick(deps, sendTelegram) {
+  if (_tickBusy) return { ok: true, idle: 'busy' };
+  _tickBusy = true;
+  try {
+    return await _optionsAutoTickInner(deps, sendTelegram);
+  } finally {
+    _tickBusy = false;
+  }
+}
+
+async function _optionsAutoTickInner(deps, sendTelegram) {
   const cfg = loadOptionsAutoCfg();
   if (!cfg.enabled) return { ok: true, idle: 'disabled' };
 
   // NSE session gate — same rules jo manual paper entry route lagata hai
   // (09:15–15:00 fresh entries; holidays honored by time.js).
-  const T = await _time();
-  if (T?.isNseMarketOpen && !T.isNseMarketOpen()) return { ok: true, idle: 'nse-closed' };
-  if (T?.freshEntriesAllowedFor && !T.freshEntriesAllowedFor('INDIA')) return { ok: true, idle: 'past-fresh-entry-window' };
-  if (T?.isNseMarketOpen === undefined) {
-    // time module unavailable — conservative clock fallback
-    const m = _nowISTMinutes();
-    if (m < 555 || m >= 900) return { ok: true, idle: 'nse-closed-fallback' };
-  }
+  if (!isNseMarketOpen()) return { ok: true, idle: 'nse-closed' };
+  if (!freshEntriesAllowedFor('INDIA')) return { ok: true, idle: 'past-fresh-entry-window' };
 
   // kill switch (shared trading config — India agent jaisa)
   try {
@@ -143,9 +152,6 @@ export async function optionsAutoTick(deps, sendTelegram) {
   const s = _loadState();
   if (Number(s.count || 0) >= Number(cfg.quotaPerDay)) return { ok: true, idle: 'quota-done' };
   const now = Date.now();
-  for (const [u, at] of Object.entries(s.lastEntryAt || {})) {
-    if (now - Number(at) < Number(cfg.cooldownMin) * 60000) return { ok: true, idle: `cooldown-${u}` };
-  }
 
   // option signal cards
   let view;
@@ -165,13 +171,29 @@ export async function optionsAutoTick(deps, sendTelegram) {
   } catch { /* summary unavailable — openPaperTrade khud guard karega */ }
 
   // best tradeable card (view already AI-score sorted)
-  const pick = view.cards.find(c =>
-    c?.tradeable
+  // v21.0.6 [audit B3]: cooldown ab PER-UNDERLYING hai — pehle GLOBAL 20m
+  // tha (koi bhi underlying enter kare to NIFTY+SENSEX dono 20m ke liye
+  // stall) jabki config spec "same underlying pe agli entry itne min
+  // baad" hai. Quota 3/day ke saath global cooldown ek underlying ko
+  // pura starve kar sakta tha. Idle-reason priority: pehle qualifying
+  // cards check (warna cooling underlying bhi "no-qualifying-card" jaisa
+  // hi sach hai), phir cooldown filter.
+  const inCooldownFor = (u) => {
+    const at = Number((s.lastEntryAt || {})[String(u || '').toUpperCase()] || 0);
+    return at > 0 && (now - at) < Number(cfg.cooldownMin) * 60000;
+  };
+  const qualifies = (c) => c?.tradeable
     && Number(c.aiScore ?? 0) >= Number(cfg.minAiScore)
     && Number(c.entry) > 0 && Number(c.stopLoss) > 0 && Number(c.target) > Number(c.entry)
     && Number((s.perUnderlying || {})[String(c.symbol || '').toUpperCase()] || 0) < Number(cfg.maxPerUnderlyingPerDay)
-    && !openSyms.has(String(`${c.symbol}${Math.round(c.strike)}${c.type}`).toUpperCase()));
-  if (!pick) return { ok: true, idle: 'no-qualifying-card' };
+    && !openSyms.has(String(`${c.symbol}${Math.round(c.strike)}${c.type}`).toUpperCase());
+  const qualifying = view.cards.filter(qualifies);
+  if (qualifying.length === 0) return { ok: true, idle: 'no-qualifying-card' };
+  const pick = qualifying.find(c => !inCooldownFor(c.symbol));
+  if (!pick) {
+    const cooling = [...new Set(qualifying.filter(c => inCooldownFor(c.symbol)).map(c => c.symbol))];
+    return { ok: true, idle: `cooldown-${cooling.join('+')}` };
+  }
 
   // ---- OPEN the paper trade (card plan ke EXACT displayed levels) ----
   const entry = Number(pick.entry);
@@ -204,7 +226,7 @@ export async function optionsAutoTick(deps, sendTelegram) {
   _saveState(s);
 
   const line = `🪜 <b>OPTIONS AUTO-ENTRY (paper)</b> — ${pick.name}\n` +
-    `Entry ₹${entry} · SL ₹${sl} · T1 ₹${t1} (50% book) · T2 ₹${t2}\n` +
+    `Entry ₹${entry} · SL ₹${sl} · T1 ₹${t1} (SL→breakeven) · T2 ₹${t2}\n` +
     `AI ${pick.aiScore}/100 · lot ${pick.lotSize} · quota ${s.count}/${cfg.quotaPerDay}`;
   try { if (sendTelegram) await sendTelegram(line); } catch { /* notify best-effort */ }
   return { ok: true, opened: s.lastEntry };

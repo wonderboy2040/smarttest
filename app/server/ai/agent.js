@@ -1496,7 +1496,7 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
 
   // ---- candidates (boards already scanned above) ----
   if (cfg.desks.futures && !futuresViable && coindcxConnected()) {
-    maybeLogSkip('futures_margin', `futures wallet margin < 2 USDT — futures candidates skip, sirf spot scan (${cfg.desks.spot ? 'spot ON' : 'spot OFF — kuch trade nahi hoga'})`);
+    maybeLogSkip('futures_margin', `futures wallet margin < 2 USDT — LIVE futures entries wallet top-up ka intezaar karenge${cfg.mode === 'live' ? ' (mode LIVE)' : ` (mode ${String(cfg.mode).toUpperCase()} — paper sizing practice equity pe, ye gate sirf LIVE ko roka hai)`}`);
   }
   let candidates = [];
   // v10.8 NEAR-MISS AUTO-TRADE: signals that MISS the full bar but sit
@@ -1638,9 +1638,9 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
         );
         log('skip', `scan: 0 candidates — near-misses: ${lines.join(' · ')}${cfg.nearMissAutoTrade === false ? ' (near-miss auto-trade OFF)' : nmUsedToday >= Number(cfg.nearMissMaxPerDay) ? ` (near-miss budget ${nmUsedToday}/${cfg.nearMissMaxPerDay} used)` : ' (none met the near-miss gate: gap/conf/quorum)'}`);
       } else {
-        log('skip', `scan: 0 candidates ≥ ${cfg.minAiScore} AI score / ${cfg.minConfidence}% conf + ${Math.round(cfg.minAgreement * 100)}% agreement${cfg.desks.futures && !futuresViable ? (cfg.desks.spot ? ' (futures margin ke karan sirf spot scope)' : ' (futures margin down + SPOT auto OFF — v19.0: sirf FUT/USDT + EQ-SIM/USDC scope me futures margin chahiye)') : ''}`);
+        log('skip', `scan: 0 candidates ≥ ${cfg.minAiScore} AI score / ${cfg.minConfidence}% conf + ${Math.round(cfg.minAgreement * 100)}% agreement${cfg.desks.futures && !futuresViable ? ' (futures LIVE margin ke karan sirf equity-sim scope — paper mode me ye gate nahi lagta)' : ''}`);
       }
-      maybeLogSkip('no_candidates', `scan: 0 candidates ≥ ${cfg.minAiScore} AI score${cfg.desks.futures && !futuresViable ? (cfg.desks.spot ? ' (futures margin ke karan sirf spot scope)' : ' (futures margin down + spot auto OFF)') : ''}${cfg.desks.spot === false ? ' · v19.0 scope: FUTURES(USDT) + EQ-SIM(USDC) only' : ''}`);
+      maybeLogSkip('no_candidates', `scan: 0 candidates ≥ ${cfg.minAiScore} AI score${cfg.desks.futures && !futuresViable ? ' (futures LIVE margin down — paper mode me futures abhi bhi practice sizing pe trade karta hai)' : ''} · v21.0.5 scope: FUTURES(USDT) + EQ-SIM(USDC) only`);
       persistState(); return;
     }
     candidates.sort((a, b) => (signalOf(b) - signalOf(a)) || (b.confidence - a.confidence));
@@ -1869,7 +1869,17 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
   const riskPct = (kelly?.mode === 'kelly' && kelly.pct > 0 ? kelly.pct : cfg.riskPerTradePct) * eventSizeMul * grMul * stratMul;
   if (eventSizeMul < 1) log('info', `EVENT GUARD SIZING ${best.symbol}: risk ×${eventSizeMul} → ${Math.round(riskPct * 100) / 100}% (${eg.reason})`);
   if (grMul < 1) log('info', `GLOBAL RISK-OFF SIZING ${best.symbol}: risk ×${grMul} → ${Math.round(riskPct * 100) / 100}% (VIX spike + BTC breakdown regime)`);
-  const riskINR = equityINR * (riskPct / 100);
+  // v21.0.6 [audit M1]: PAPER/NOTIFY sizing ab PRACTICE-equity baseline
+  // (₹10,000) pe chalti hai — connected CHHOTA real wallet bhi futures
+  // desk ko starve nahi karega. Ye wahi intent tha jo v21.0.2 comment
+ // me likha tha, par deployable tab bhi equityINR (real wallet when
+  // connected) use karta tha — ₹280-560 wallet pe paper-futures har baar
+  // "margin too small" se skip hota tha jabki sim (floor 1) fire karta
+  // rehta tha ("sirf equity sim ka auto trade lagta hai" complaint ka
+  // aakhri residue). LIVE mode combined real wallet margin hi authoritative.
+  const PRACTICE_EQUITY_INR = 10_000;
+  const sizingEquityINR = cfg.mode === 'live' ? equityINR : Math.max(equityINR, PRACTICE_EQUITY_INR);
+  const riskINR = sizingEquityINR * (riskPct / 100);
   const wantFutures = best.market === 'FUTURES';
   // v7.0: the sizing math is LOGGED transparently before execution —
   // the user can audit "₹X risk → Y qty → Z margin at Lx" in the feed
@@ -1878,7 +1888,7 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
     if ((wantFutures || best.market === 'GLOBALFUTURES') && stopDist > 0) {
       const lev = Math.max(1, Math.min(cfg.maxLeverage, Math.floor(95 / (best.plan.riskPct || 5))));
       const q = riskINR / usdInr / stopDist;
-      log('info', `SIZING ${best.symbol}: ₹${r2(riskINR)} risk (${riskPct}% of ₹${r2(equityINR)}${kelly?.mode === 'kelly' ? ' · kelly-capped' : ''}) → ${Math.round(q * 1e4) / 1e4} qty → ${r2((q * best.plan.entry) / lev)} USDT margin at ${lev}x`);
+      log('info', `SIZING ${best.symbol}: ₹${r2(riskINR)} risk (${riskPct}% of ₹${r2(sizingEquityINR)}${cfg.mode !== 'live' ? ' · practice' : ''}${kelly?.mode === 'kelly' ? ' · kelly-capped' : ''}) → ${Math.round(q * 1e4) / 1e4} qty → ${r2((q * best.plan.entry) / lev)} USDT margin at ${lev}x`);
     } else {
       const budget = Math.min(
         trading.maxOrderINR || 1000,
@@ -1927,16 +1937,22 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
     // sizes hota hai (sim desk jaisa) — warna wallet me 0.5-2 USDT hone par
     // cap usi pe lagti thi aur har paper futures entry "margin too small"
     // se skip ho jati thi. LIVE me combined wallet margin hi authoritative.
+    // v21.0.6 [audit M1]: sizingEquityINR (practice baseline) ab dono
+    // paper desks ko govern karta hai — deployable + floor dono parity.
     const deployable = isGlobal
-      ? (equityINR * 0.5 / usdInr)
+      ? (sizingEquityINR * 0.5 / usdInr)
       : (cfg.mode === 'live'
         ? (combinedFutDeployableUSDT(wallet) || (equityINR * 0.5 / usdInr))
-        : (equityINR * 0.5 / usdInr));
+        : (sizingEquityINR * 0.5 / usdInr));
     const capUSDT = deployable * 0.6;
     if (marginUSDT > capUSDT) marginUSDT = capUSDT;
     marginUSDT = Math.round(marginUSDT * 1000) / 1000;
-    if (marginUSDT < (isGlobal ? 1 : 2)) {
-      maybeLogSkip('margin too small', `${isGlobal ? 'global SIM' : 'futures'} margin ${marginUSDT} USDT < ${isGlobal ? 1 : 2} — equity ₹${r2(equityINR)} / risk ${riskPct}% too small for this stop`);
+    // v21.0.6 [audit M1]: margin floor ab MODE-AWARE — paper/notify me
+    // futures floor 1 USDT (sim parity); 2-USDT floor sirf LIVE (jahan
+    // real wallet margin genuine constraint hai).
+    const floorUSDT = isGlobal ? 1 : (cfg.mode === 'live' ? 2 : 1);
+    if (marginUSDT < floorUSDT) {
+      maybeLogSkip('margin too small', `${isGlobal ? 'global SIM' : 'futures'} margin ${marginUSDT} USDT < ${floorUSDT} — sizing equity ₹${r2(sizingEquityINR)}${cfg.mode !== 'live' ? ' (practice)' : ''} / risk ${riskPct}% too small for this stop`);
       persistState(); return;
     }
     // v10.6: the depth walk runs on the POSITION NOTIONAL in the book's
@@ -2348,12 +2364,15 @@ export async function agentStatus(deps) {
       const futReadErr = _state.lastWallet?.futuresError || null;
       if (futReadErr) {
         blockers.push({ key: 'futures_wallet_read', text: `⚡ Futures wallet READ FAILED — ${String(futReadErr).slice(0, 260)}` });
-      } else if (combinedFutDeployableUSDT(_state.lastWallet || {}) < 2) {
+      } else if (combinedFutDeployableUSDT(_state.lastWallet || {}) < 2 && cfg.mode === 'live') {
         // v20.9.4 FIX (M): combined legs (USDT + INR/fx) — tick viability
         // v20.9.1 se combined use karti hai; strip abhi bhi sirf USDT leg
         // dekh rahi thi → INR-margined wallet pe FALSE blocker "margin < 2
         // USDT" dikhta tha jabki agent futures trade karta rehta hai.
-        blockers.push({ key: 'futures_margin', soft: true, text: '⚡ Futures margin < 2 USDT-equivalent (USDT+INR combined) — sirf SPOT desk se entry hoga' });
+        // v21.0.6 [audit M2]: sirf LIVE mode me fire hota hai — paper mode
+        // me futures practice-equity sizing pe trade KARTA hai (spot desk
+        // remove ho chuka hai — "sirf SPOT desk se entry hoga" galat tha).
+        blockers.push({ key: 'futures_margin', soft: true, text: '⚡ LIVE futures margin < 2 USDT-equivalent (USDT+INR combined) — wallet top-up chahiye (paper mode me futures practice sizing pe chalta hai)' });
       }
     }
     // soft: latest wait reason (usually "no qualifying signal") — info, not a fault

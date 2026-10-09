@@ -1,5 +1,41 @@
 # Changelog
 
+## v21.0.6 — ADVANCE-PRO FULL-SITE AUDIT (2026-10-09)
+
+**User report: "full site code deep Advance pro level Sabhi Agents se check karo har ek work flow ko check karo sab accurately kaam kar raha hai kya aur issues fix kardo"**
+
+4 parallel deep-audit agents (India options workflow / CoinDCX futures / server infra / AI-Ollama stack) ne 8 MAJOR + 4 MEDIUM + ~20 minor findings diye. Sab major+medium fixed + regression-locked. Suite 3464/3464 (183 files, +11 naye tests).
+
+### MAJOR — India options engine
+- **B1: paper option EXITS ab LIVE chain premium pe** (`paperTrading.js injectOptionPaperQuotes`): desk live Groww/NSE/BSE premium dikhata tha par SL/T1/T2/BE-trail/EOD BS-model premium pe act karte the — SL model pe hit ho sakta tha jab live chain ne chhua nahi. Ab live-chain LTP first (30s per-underlying cache; `fetchOptionChainFor` stream wiring index.js→routes.js→stream.js), BS sirf honest fallback. `RISK_FREE` 0.065→0.069 align bhi.
+- **B2: 1-lot option trades T1 pe 100% close ho jate the** (`evaluatePaper`): `half=Math.ceil(1/2)=1` = remaining → advertised "T1 50% book → trail / T2" kabhi run nahi hota tha (track record +0.5R capped). Ab un-splittable runner T1 pe SL→breakeven (`PAPER_T1_BE` event), T2/BE tak ride karta hai.
+- **B3: options auto-entry cooldown GLOBAL tha, per-underlying hona chahiye** (`optionsAutoEntry.js`): NIFTY entry poore desk ko 20 min stall karti thi. Ab sirf usi underlying pe; idle-reason priority bhi honest (no-qualifying-card vs cooldown); re-entrancy guard + holiday-aware `windowOpen`.
+
+### MAJOR — CoinDCX
+- **M1: paper-mode futures sizing-floor asymmetry** (`agent.js`): connected ₹280-560 wallet + paper mode me futures "margin too small" se skip, sim (floor 1) fire — v21.0.2 comment ka stated intent (practice equity) ab sach me implement: `sizingEquityINR = max(equityINR, 10_000)` paper/notify me (risk + deployable dono), futures floor 2 USDT sirf LIVE (paper = 1, sim parity).
+- **M2: stale "sirf SPOT desk se entry hoga" messaging**: 4 jagah reworded (spot desk v21.0.5 me removed tha); `futures_margin` blocker ab sirf LIVE mode me fire hota hai.
+
+### MAJOR — AI stack
+- **AI-B1: deep-path debate OLLAMA_DEEP_MODEL bypass** (`signals.js aiCouncilDebate`): default debate=ON me 🔬 deep modal ka council qwen3:8b pe chalta tha (chip "↗R1·14B" promise karta tha). `opts.deep` ab teeno debate calls me threaded → `councilAskDeep`.
+- **AI-B2: vision failures shared ollama breaker arm karte the** (`llmChain.js councilAskVision`): 2 weak-JSON vision calls board scan seat ko 30s+ park karti thi. Isolated `ollama-vision` breaker (UI me invisible — SENTINEL_PROVIDERS me nahi).
+- **AI-E1: vision cache timeframe-blind**: 15m verdict 1d chart pe serve ho sakta tha. Client ab `tf` bhejta hai (CandleChart), cache key `${mkt}:${symbol}:${side}:${tf}`.
+
+### MEDIUM
+- Groww mirror OI-change clamp ≥0 hata — real OI-unwinding (negative) ab preserve (direct-NSE parity); missing oi/prevOI → 0.
+- BSE whole-ladder 10-min hold ab sirf direct probes ko block karta hai (mirror apne 5-min backoff se govern, success pe hold clear).
+- Restore-path symbol cap 15→20 (openPaperTrade parity — BANKNIFTY16char restore-drop fix).
+- Options card `lotSize` ab chain lotSize first (LOT_SIZES fallback).
+
+### MINOR (selected)
+- `optionsAutoStatus.windowOpen` holiday-aware; optionsDesk `callWall` no-op ternary removed; SIMPL-view PAPER nav chip; SAPTA manual 'spot' cryptoProduct normalize; EngineHealthStrip `QWEN3VL` family + deep-ctx tooltip; ExpertPicks 30s copy; seatCorrelation dead `pairKeys`/`CORE_SEAT_IDS` + header drift; vision 503 unreachable honest + 413 wording; CandleChart 8x comment; telegram-bot version drift v18.0→v21.0.6.
+
+## v21.0.2–v21.0.5 (2026-10-09, prior batch — pehle README/RUN-FIRST me hi the)
+
+- **v21.0.5**: NIFTY real chain via Groww mirror ladder (direct-NSE-first); CoinDCX SPOT desk completely removed (Futures USDT + Equity SIM only).
+- **v21.0.4**: SENSEX real BSE chain via Groww public mirror (`__NEXT_DATA__` parse, 90s cache, 5-min backoff) — "model-estimated" warning root-fixed.
+- **v21.0.3**: NSE DD-Mmm-YYYY expiry ISO normalization (options accuracy + paper-trade reject root cause); Paper Desk SIMPLE view; Ollama scan+deep chips; deep modal real model name.
+- **v21.0.2**: options auto-entry engine (30s loop, quota/cooldown/one-per-contract); exit-plan match T1=+0.5R/T2=+1.0R; expiry-day 14:30 sqoff; futuresViable mode-aware + GLOBALFUTURES quota separation + desk-fairness pick.
+
 ## v20.9.3 — 5TH-PASS FULL-SITE WORKING-FLOW RECHECK (2026-10-07)
 
 **User report: "latest github repo ko pull karo aur full site code recheck karo sabhi working flow accurately perfect hai kya aur issues fix kardo"**

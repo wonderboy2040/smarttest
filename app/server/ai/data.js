@@ -673,10 +673,16 @@ function _bseExpiryNorm(s) {
 export async function fetchBSEOptionChain(symbol = 'SENSEX') {
   const sym = String(symbol || 'SENSEX').toUpperCase();
   if (sym !== 'SENSEX') return null; // only the BSE flagship index is wired
-  if (Date.now() < _bseNegUntil) return null; // whole ladder blocked recently — hold
-  // Step 1 — Groww public mirror: the verified-reachable REAL chain.
+  // Step 1 — Groww public mirror FIRST (verified-reachable REAL chain).
+  // v21.0.6 [audit]: mirror ka APNA 5-min negative backoff usse govern
+  // karta hai — whole-ladder 10-min hold ab SIRF direct-BSE probes ko
+  // block karta hai. Pehle hold mirror ko bhi 10 min ke liye block karta
+  // tha jabki mirror apne 5-min backoff ke baad recover ho sakta tha
+  // (har outage pe 5 min extra model-chain SENSEX). Mirror success
+  // kisi bhi stale hold ko clear kar deta hai.
   const mirror = await fetchGrowwIndexChain('SENSEX').catch(() => null);
   if (mirror) { _bseNegUntil = 0; return mirror; }
+  if (Date.now() < _bseNegUntil) return null; // hold governs DIRECT probes only
   // Step 2 — direct BSE (two candidate endpoints, community-known
   // shapes). Neither is verifiable from a datacenter IP today — both
   // are attempted once (cheap: same fetch count as the old code).
@@ -818,15 +824,24 @@ export function _growwParseNextData(next, meta = {}) {
     if (!Number.isFinite(strike) || strike <= 0) continue;
     const ceL = c?.ce?.liveData || {}, peL = c?.pe?.liveData || {};
     const ceG = c?.ce?.greeks || {}, peG = c?.pe?.greeks || {};
+    // v21.0.6 [audit]: OI-change ab REAL diff hai (unwinding NEGATIVE
+    // allowed — direct NSE ka changeinOpenInterest bhi negative hota hai
+    // aur downstream oiSkew/oiLean usi ko expect karta hai). Pehle
+    // Math.max(0, oi−prevOI) clamp OI-unwinding signal ko erase kar deta
+    // tha. Missing oi/prevOI fields → 0 (fabricated negative nahi).
+    const _oiChg = (l) => {
+      const oi = Number(l?.oi), prev = Number(l?.prevOI);
+      return Number.isFinite(oi) && Number.isFinite(prev) ? (oi - prev) : 0;
+    };
     rows.push({
       strike, expiry,
       callOI: Number(ceL.oi) || 0,
-      callOIChange: Math.max(0, (Number(ceL.oi) || 0) - (Number(ceL.prevOI) || 0)),
+      callOIChange: _oiChg(ceL),
       callIV: Number(ceG.iv) || null,
       callLTP: Number(ceL.ltp) || 0,
       callVolume: 0, // public payload carries no per-contract volume
       putOI: Number(peL.oi) || 0,
-      putOIChange: Math.max(0, (Number(peL.oi) || 0) - (Number(peL.prevOI) || 0)),
+      putOIChange: _oiChg(peL),
       putIV: Number(peG.iv) || null,
       putLTP: Number(peL.ltp) || 0,
       putVolume: 0,

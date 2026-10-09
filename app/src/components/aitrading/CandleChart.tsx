@@ -172,7 +172,7 @@ export const CandleChart = memo(function CandleChart({
         img.onerror = () => rej(new Error('svg raster fail'));
         img.src = svgUrl;
       });
-      const scale = 4; // viewBox chhota hai (100×~210) — 4x se readable
+      const scale = 4; // viewBox chhota hai (100×~210) — canvas 8x effective (scale × min-floor ×2)
       const cv = document.createElement('canvas');
       cv.width = Math.max(600, Math.round((svgEl.viewBox.baseVal.width || 100) * scale * 2));
       cv.height = Math.max(400, Math.round((svgEl.viewBox.baseVal.height || 210) * scale * 2));
@@ -182,10 +182,12 @@ export const CandleChart = memo(function CandleChart({
       ctx.fillRect(0, 0, cv.width, cv.height);
       ctx.drawImage(img, 0, 0, cv.width, cv.height);
       const dataUrl = cv.toDataURL('image/png');
+      // v21.0.6 [audit E1]: active tf POST body me — server cache key
+      // tf-aware hai, warna 15m verdict 1d chart pe serve ho sakta tha.
       const r = await apiFetch('/api/ai/vision-check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, market, side: sideNorm || undefined, image: dataUrl }),
+        body: JSON.stringify({ symbol, market, side: sideNorm || undefined, tf, image: dataUrl }),
         signal: AbortSignal.timeout(120_000),
       });
       const j: VisionVerdict = await r.json().catch(() => ({ ok: false, error: 'bad response' }));
@@ -195,7 +197,7 @@ export const CandleChart = memo(function CandleChart({
     } finally {
       setVisionBusy(false);
     }
-  }, [symbol, market, sideNorm, visionBusy]);
+  }, [symbol, market, sideNorm, tf, visionBusy]);
 
   // X labels: 4 sparse time marks along the series.
   // v20.7.3 FIX: pin the label timezone to IST — 'en-IN' only sets the

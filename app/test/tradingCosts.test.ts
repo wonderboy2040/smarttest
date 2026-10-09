@@ -250,8 +250,11 @@ describe('paperTrading — net-of-costs book-keeping', () => {
   });
 
   it('option paper trades cost on the OPTIONS schedule (STT 0.1% of sell premium)', () => {
+    // v21.0.6: qty=2 — 1-lot trades ab T1 pe book NAHI hote (BE-protect
+    // runner — audit B2 fix); 2 lots pe T1 half-book = same 1-lot booking
+    // jiske cost-math assertions (1762.5 gross / 8.25 STT) lock hain.
     const open = openPaperTrade({
-      symbol: 'NIFTY24400CE', direction: 'LONG', entry: 86.5, qty: 1,
+      symbol: 'NIFTY24400CE', direction: 'LONG', entry: 86.5, qty: 2,
       stopLoss: 77, target1: 110, target2: 130, market: 'INDIA',
       assetKind: 'OPTION', underlying: 'NIFTY', strike: 24400, optType: 'CE',
       expiry: '2026-09-22', iv: 13, lotSize: 75, label: 'Nifty50 22Sep 24400 CE',

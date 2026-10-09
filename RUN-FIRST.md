@@ -4,6 +4,41 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.0.6 — ADVANCE-PRO FULL AUDIT FIXES (8 major + 4 medium)
+
+**1) Options paper trading ab aur bhi ACCURATE:**
+- Paper option trades ke exits (SL/T1/T2/BE/15:10) ab **wahi LIVE premium use
+  karte hain jo Options Desk pe dikhta hai** — pehle ye Black-Scholes model
+  premium pe chalte the. Ab jab tak live chain (NSE/BSE/Groww) available hai,
+  trade usi ke LTP pe manage hoga — desk aur engine me koi difference nahi.
+- **1 lot ka trade ab T1 pe poora band NAHI hota**: pehle 1-lot trade T1 chhote
+  hi 100% close ho jata tha (T2/breakeven-trail kabhi run nahi hote the).
+  Ab T1 aane par SL **entry (breakeven)** pe shift ho jata hai aur runner
+  T2 tak ride karta hai — jaisa card advertise karta hai.
+- Auto-entry cooldown ab **per-underlying** hai (NIFTY entry se SENSEX 20 min
+  nhi rukta), aur holiday pe "window open" jhooth nahi bolta.
+
+**2) CoinDCX tab — FUTURES USDT auto-trade ab chhote wallet pe bhi:**
+Paper mode me connected wallet chhota ho (₹300-500) to pehle futures entries
+"margin too small" se skip ho jati thi jabki equity-sim chalta rehta tha.
+Ab **paper mode me futures bhi practice equity (₹10,000) pe size hota hai** —
+dono desks fair. LIVE mode me pehle jaisa wallet-floor (safety untouched).
+"Sirf SPOT desk se entry hoga" wala purana message bhi hata (spot desk to
+v21.0.5 me hi remove ho gaya tha).
+
+**3) AI engines:**
+- 🔬 Deep Advance Pro modal ka council ab **sach me deep model
+  (deepseek-r1:14b)** pe chalta hai (pehle chip dikhata R1 tha par debate
+  scan model qwen3:8b pe chalta tha).
+- 👁 Vision AI failures ab board ke scan seat ko cooldown me nahi daalte.
+- Vision cache ab chart-timeframe aware (15m ka verdict 1d pe serve nahi hota).
+
+**Update kaise karein**: purane folder pe ye naya zip extract karo →
+`Start-SmartAI-Watchdog.bat` chalao → browser me **Ctrl+Shift+R** (service
+worker cache clear). Login badge pe **v21.0.6** dikhna chahiye.
+
+---
+
 ## 🎯 v21.0.5 — NIFTY REALTIME FIX + COINDCX SPOT DESK HATA DIYA
 
 **1) NIFTY options ab laptop + server dono pe REAL data:**

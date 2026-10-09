@@ -152,7 +152,7 @@ export async function runIntradayAgentForExternal(messages) {
 
 export function registerIntradayRoutes(app, deps) {
   const {
-    fetchGrowwNseQuote, fetchCoinDcxTickers, fetchIndexSpot, KEYS, OPENAI_COMPAT, TG, escapeHtml, jsonError,
+    fetchGrowwNseQuote, fetchCoinDcxTickers, fetchIndexSpot, fetchOptionChainFor, KEYS, OPENAI_COMPAT, TG, escapeHtml, jsonError,
   } = deps;
 
   // Telegram raw sender — v21.0 UNIFIED (telegram fix T3): pehle ye
@@ -172,7 +172,7 @@ export function registerIntradayRoutes(app, deps) {
   // crypto symbols 24/7.
   initTrackRecord();
   initPaperTrading();
-  initIntradayStream({ fetchGrowwNseQuote, fetchCoinDcxTickers, fetchIndexSpot, sendTelegramRaw, escapeHtml, dispatchOutcomeAlert });
+  initIntradayStream({ fetchGrowwNseQuote, fetchCoinDcxTickers, fetchIndexSpot, fetchOptionChainFor, sendTelegramRaw, escapeHtml, dispatchOutcomeAlert });
   initJournal();
 
   // ----------------------------------------------------------

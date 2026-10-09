@@ -161,3 +161,34 @@ describe('aiCouncilVerify — debate-first with legacy fallback', () => {
     expect(_calls.length).toBe(0);
   });
 });
+
+// ============================================================
+// v21.0.6 [audit B1/G1] — DEEP-path debate model swap contract.
+// The 🔬 deep path (getDeepSignal, opts.deep=true) ab teeno debate
+// calls councilAskDeep (OLLAMA_DEEP_MODEL, e.g. deepseek-r1:14b) pe
+// route karta hai — pehle sirf legacy single-shot deep honor karta
+// tha, isliye default debate=ON config me deep modal ka council
+// HAMESHA scan model (qwen3:8b) pe chalta tha jabki chip "↗R1·14B"
+// promise karta tha. Cloud legs ke liye deep flag no-op hai —
+// yahan source-contract lock kiya gaya hai (cloud path behavior
+// councilAskDeep == councilAsk, sirf local ollama leg swap hota hai).
+// ============================================================
+describe('v21.0.6 — deep-path debate model swap (source contract)', () => {
+  it('aiCouncilDebate routes its 3 calls via councilAskDeep when opts.deep', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const src = fs.readFileSync(
+      path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../server/ai/signals.js'),
+      'utf8',
+    );
+    // the debate picks its asker by the deep flag…
+    expect(src).toMatch(/const ask = opts\.deep \? councilAskDeep : councilAsk;/);
+    // …and all three steps use it
+    const debateBody = src.slice(src.indexOf('export async function aiCouncilDebate'), src.indexOf('export async function aiCouncilVerify'));
+    expect((debateBody.match(/await ask\(/g) || []).length).toBe(3);
+    expect(debateBody).not.toMatch(/await councilAsk\(/); // no un-routed direct calls
+    // the caller threads opts through
+    expect(src).toMatch(/aiCouncilDebate\(candidates, deps, market, opts\)/);
+  });
+});

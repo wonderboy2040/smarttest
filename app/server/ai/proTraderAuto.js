@@ -209,7 +209,13 @@ export function updateProTraderConfig(patch = {}) {
     if (typeof PROTRADER_DEFAULTS[k] === 'boolean') next[k] = Boolean(v);
     else if (typeof PROTRADER_DEFAULTS[k] === 'number') { const n = Number(v); if (Number.isFinite(n)) next[k] = n; }
     else if (k === 'desks' || k === 'indiaProduct') next[k] = v;
-    else if (k === 'cryptoProduct' && (v === 'futures' || v === 'spot')) next[k] = v; // v19.0 — explicit values only
+    else if (k === 'cryptoProduct') {
+      // v21.0.6 [audit m3]: SPOT desk v21.0.5 me REMOVE ho chuka hai —
+      // manual config API se bhi 'spot' accept nahi hota (SAPTA mara hua
+      // desk pe phase na ho). Legacy saved 'spot' v21_0_5 migration me
+      // 'futures' ban chuka hai; yahan explicit 'spot' → 'futures' normalize.
+      next[k] = 'futures';
+    }
   }
   const CEIL = clampCeilings();
   for (const [k, [lo, hi]] of Object.entries(CLAMPS)) {

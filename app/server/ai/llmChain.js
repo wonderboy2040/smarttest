@@ -331,6 +331,12 @@ export async function councilAskVision(prompt, images, deps = null, opts = {}) {
   if (!visionModel) return { json: null, model: null };
   const reachable = await ollamaProbe().catch(() => false);
   if (!reachable) return { json: null, model: null };
+  // v21.0.6 [audit B2]: vision failures apna ALAG circuit breaker
+  // ('ollama-vision') arm karte hain — pehle shared 'ollama' breaker
+  // arm hota tha, isliye 2 weak-JSON vision calls board ke scan seat
+  // (councilAsk ollama leg) ko 30s+ ke liye park kar deti thi.
+  // engineSnapshot sirf SENTINEL_PROVIDERS dikhata hai, isliye
+  // 'ollama-vision' breaker UI me nahi aata (sirf isolation ka kaam).
   try {
     const json = await askOllamaNative(prompt, {
       model: visionModel,
@@ -338,11 +344,11 @@ export async function councilAskVision(prompt, images, deps = null, opts = {}) {
       system: 'You are an elite technical analyst reading a trading chart screenshot. Respond with STRICT JSON only.',
       timeoutMs: opts.timeoutMs || OLLAMA_TIMEOUT_MS,
     });
-    if (json) { engineOk('ollama'); return { json, model: `ollama:${visionModel}` }; }
-    engineTrack('ollama', new Error('ollama-vision no-json response'));
+    if (json) { engineOk('ollama-vision'); return { json, model: `ollama:${visionModel}` }; }
+    engineTrack('ollama-vision', new Error('ollama-vision no-json response'));
     return { json: null, model: null };
   } catch (e) {
-    engineTrack('ollama', e);
+    engineTrack('ollama-vision', e);
     return { json: null, model: null };
   }
 }

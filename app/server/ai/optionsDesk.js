@@ -312,7 +312,7 @@ export function computeGex(chain, spot, atmIVFallback) {
   return {
     perStrike: per,
     gammaFlip,
-    callWall: gammaFlip != null && callWall != null && callWall < gammaFlip ? callWall : callWall,
+    callWall, // v21.0.6 [audit]: dead no-op ternary removed (cond ? callWall : callWall)
     putWall,
     totalNetGex: Math.round(totalNet),
     expectedMove,
@@ -977,7 +977,9 @@ export function buildOptionSignalCards(desk, deep) {
   const T = yearsToExpiry(`${desk.expiry}T15:30:00+05:30`);
   if (!(T > 0)) return []; // expiry-day post-15:30 — nothing honest to price
 
-  const lotSize = LOT_SIZES[symbol] || 1;
+  // v21.0.6 [audit]: chain lotSize FIRST (live feed authoritative —
+  // exchange revision pakad leta hai), hardcoded LOT_SIZES sirf fallback.
+  const lotSize = Number(desk.lotSize) > 0 ? Math.floor(Number(desk.lotSize)) : (LOT_SIZES[symbol] || 1);
   const step = STRIKE_STEPS[symbol] || 50;
   const plan = sig?.plan && Number.isFinite(sig.plan.target1) && Number.isFinite(sig.plan.stopLoss)
     ? sig.plan : null;

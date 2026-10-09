@@ -18,8 +18,9 @@
 //     me kaun "primary" hai (apna unique context zyada): trend >
 //     tape (ADX/Supertrend context), momentum > tape (Stoch/ROC),
 //     smc > structure (SMC = structure authority v21.0 me).
-//   • PAIRWISE FULL-MATRIX mode — naye/judge-nahi-kiye pairs bhi
-//     ledger se pakde jaate hain (koi hardcode limit nahi).
+//   • v21.0.6 [audit]: STATIC known-pair set hi evaluate hota hai
+//     (CORE_DEDUP_PAIRS) — advertised "pairwise full-matrix" mode
+//     kabhi implement nahi hua tha; comment ab code se match karta hai.
 //   • PURE functions — test-friendly, no fetches, no clock reads.
 //   • Vote-path gate `applyCoreCorrelationDiscounts()` returns a
 //     COPY (input votes kabhi mutate nahi hote).
@@ -48,10 +49,8 @@ export const CORE_DEDUP_PAIRS = [
 ];
 
 // Core quant seats (mesh/shadow seats alag se gate hote hain).
-const CORE_SEAT_IDS = [
-  'trend', 'momentum', 'volatility', 'volume', 'pattern', 'sr',
-  'options', 'regime', 'smc', 'structure', 'tape', 'tape-mtf', 'aicouncil',
-];
+// v21.0.6 [audit]: CORE_SEAT_IDS unused tha (view sirf CORE_DEDUP_PAIRS
+// chalata hai) — dead code removed.
 
 function _pearsonDirs(pairs) {
   const n = pairs.length;
@@ -88,11 +87,9 @@ function _pairsBetween(entries, seatA, seatB) {
 export function coreSeatCorrelationView({ entries = null } = {}) {
   const ents = Array.isArray(entries) ? entries : (__ledgerRaw()?.entries || []);
   const settled = ents.filter(e => e && e.votes && e.outcome);
-  const pairKeys = new Set();
-  for (const [p, r] of CORE_DEDUP_PAIRS) pairKeys.add([p, r].sort().join('|'));
   const out = {};
 
-  // Static pairs first (known overlaps), then any pair with enough data.
+  // Static known-overlap pairs (the evaluated set).
   const seen = new Set();
   for (const [primary, redundant] of CORE_DEDUP_PAIRS) {
     const key = [primary, redundant].sort().join('|');

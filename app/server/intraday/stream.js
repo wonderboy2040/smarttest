@@ -289,11 +289,15 @@ async function _tick() {
       if (typeof _timer.unref === 'function') _timer.unref();
     }
 
-    // v9.5 F&O: re-price open OPTION paper trades (BS model on the live
-    // underlying spot) and inject their premiums into this tick's quotes
-    // BEFORE the latest-quotes merge + evaluation — SL/T1/T2/EOD, P&L and
-    // manual close (getLatestQuotes) then see them like any equity LTP.
-    try { await injectOptionPaperQuotes(quotes, _deps.fetchIndexSpot); } catch (e) { console.warn('[intraday-stream] option reprice:', e?.message); }
+    // v9.5 F&O: re-price open OPTION paper trades and inject their premiums
+    // into this tick's quotes BEFORE the latest-quotes merge + evaluation —
+    // SL/T1/T2/EOD, P&L and manual close (getLatestQuotes) then see them
+    // like any equity LTP.
+    // v21.0.6 [audit B1]: LIVE chain LTP FIRST (the SAME data.js ladder the
+    // options desk displays — direct NSE / Groww mirror / BSE), BS model
+    // sirf fallback (chain down / row missing). Exits ab desk-parity
+    // premium pe act karte hain.
+    try { await injectOptionPaperQuotes(quotes, _deps.fetchIndexSpot, _deps.fetchOptionChainFor); } catch (e) { console.warn('[intraday-stream] option reprice:', e?.message); }
 
     // 2026 perf audit (M2): reset at the IST day boundary (NSE session) AND
     // the UTC day boundary (crypto session) — each market starts its own

@@ -108,7 +108,7 @@ const NAV = [
   { id: 'in-options', label: 'OPTIONS', emoji: '📊', pro: false },
   { id: 'in-manual', label: 'MY TRADES', emoji: '✍️', pro: false },
   { id: 'in-execute', label: 'EXECUTE', emoji: '⚙️', pro: false },
-  { id: 'in-paper-desk', label: 'PAPER', emoji: '📋', pro: true },
+  { id: 'in-paper-desk', label: 'PAPER', emoji: '📋', pro: false }, // v21.0.6 [audit]: SIMPLE view me bhi reachable (v21.0.3 me section render hua tha, nav chip piche reh gaya tha)
   { id: 'in-brief', label: 'BRIEF', emoji: '📰', pro: true },
   { id: 'in-sectors', label: 'SECTORS', emoji: '🗺️', pro: true },
   { id: 'in-swing', label: 'SWING', emoji: '🗂️', pro: true },

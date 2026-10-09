@@ -739,12 +739,20 @@ export function councilDebateEnabled() {
 
 /**
  * The 3-step debate. PURE-ish (network only via councilAsk).
+ * v21.0.6 [audit B1/G1]: opts.deep = true → teeno debate calls
+ * councilAskDeep (OLLAMA_DEEP_MODEL, e.g. deepseek-r1:14b) pe jati hain.
+ * Pehle sirf legacy single-shot fallback deep model use karta tha —
+ * default debate=ON hone ki wajah se 🔬 deep modal ka council HAMESHA
+ * scan model (qwen3:8b) pe chalta tha, jabki chip "↗R1·14B" ka
+ * promise deep path ko tha. Cloud legs ke liye deep flag no-op hai
+ * (sirf local ollama leg swap hota hai).
  * @returns {Promise<{verdicts:object, model:string, online:true,
  *                     debate:{bull:object, bear:object}}|null>}
  */
-export async function aiCouncilDebate(candidates, deps, market) {
+export async function aiCouncilDebate(candidates, deps, market, opts = {}) {
   const compact = compactCouncilCandidates(candidates);
   if (compact.length === 0) return null;
+  const ask = opts.deep ? councilAskDeep : councilAsk;
   const venue = market === 'CRYPTO'
     ? 'CoinDCX spot (INR pairs, 24/7)'
     : market === 'FUTURES'
@@ -759,7 +767,7 @@ export async function aiCouncilDebate(candidates, deps, market) {
   const sentLines = sentCtx ? `\n${sentCtx}` : '';
 
   // ---- STEP 1: BULL ADVOCATE ----
-  const bull = await councilAsk(`You are the BULL ADVOCATE on an institutional investment committee for a ${venue} desk.
+  const bull = await ask(`You are the BULL ADVOCATE on an institutional investment committee for a ${venue} desk.
 Below are pre-scored consensus candidates from a 14-model quant ensemble. Your ONE job: build the strongest HONEST LONG case for EACH symbol using ONLY the numbers given (RSI/ADX/relVol/VWAP distance/ATR%/plan levels/votes). Never invent data; if a long case is weak, say so honestly and score it low.
 
 ${data}
@@ -768,7 +776,7 @@ Respond STRICT JSON only: {"cases":{"SYMBOL":{"case":"2 sentences: the strongest
   if (!bull?.json?.cases || typeof bull.json.cases !== 'object') return null;
 
   // ---- STEP 2: BEAR ADVOCATE ----
-  const bear = await councilAsk(`You are the BEAR ADVOCATE on an institutional investment committee for a ${venue} desk.
+  const bear = await ask(`You are the BEAR ADVOCATE on an institutional investment committee for a ${venue} desk.
 Below are the SAME pre-scored consensus candidates. Your ONE job: build the strongest HONEST SHORT case for EACH symbol using ONLY the numbers given (overbought RSI, exhaustion, thin volume, counter-regime, funding/crowding, stop placement risk). Never invent data; if a short case is weak, say so honestly and score it low.
 
 ${data}
@@ -777,7 +785,7 @@ Respond STRICT JSON only: {"cases":{"SYMBOL":{"case":"2 sentences: the strongest
   if (!bear?.json?.cases || typeof bear.json.cases !== 'object') return null;
 
   // ---- STEP 3: PM VERDICT (must cite the disagreement) ----
-  const pm = await councilAsk(`You are the PORTFOLIO MANAGER — the final verification layer of a superintelligence ensemble for a ${venue} desk.
+  const pm = await ask(`You are the PORTFOLIO MANAGER — the final verification layer of a superintelligence ensemble for a ${venue} desk.
 Your bull and bear advocates have argued over these candidates. For EACH symbol you MUST (a) name where the two cases DISAGREE (which numbers each side leans on), and (b) state WHY you side one way. Then issue the verdict. Be strict: an edge must be confluence-driven, not single-factor. Penalize extreme 24h moves, thin books, counter-BTC-regime calls${market === 'GLOBALFUTURES' ? ', and remember these are USDC-margined equity perps' : ''}.
 
 CANDIDATE DATA:
@@ -820,7 +828,7 @@ export async function aiCouncilVerify(candidates, deps, market, opts = {}) {
   // engines offline" message dies with an Ollama on the machine).
   if (!candidates?.length || !(aiKeysPresent(deps?.KEYS) || !!(await ollamaProbe().catch(() => false)))) return { verdicts: {}, model: null, online: false };
   if (councilDebateEnabled()) {
-    const debated = await aiCouncilDebate(candidates, deps, market).catch(() => null);
+    const debated = await aiCouncilDebate(candidates, deps, market, opts).catch(() => null);
     if (debated && debated.online) return debated;
   }
   const norm = candidates.map(toCouncilCandidate).filter(c => c && c.symbol);

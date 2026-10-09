@@ -97,8 +97,9 @@ describe('v9.5 — injectOptionPaperQuotes: BS re-pricing from the index spot', 
       return { price: spot };
     });
     // SAME T formula as the engine — exact expectation, no drift.
+    // v21.0.6: RISK_FREE aligned to optionsDesk.js (0.069).
     const T = Math.max(0, yearsToExpiry(`${nextWeek}T15:30:00+05:30`, new Date(NOW_MS)));
-    const expected = +Math.max(0.05, bsPrice(spot, 23400, T, 0.065, 13 / 100, 'CE')).toFixed(2);
+    const expected = +Math.max(0.05, bsPrice(spot, 23400, T, 0.069, 13 / 100, 'CE')).toFixed(2);
     expect(quotes.NIFTY23400CE).toBeDefined();
     expect(quotes.NIFTY23400CE.price).toBeCloseTo(expected, 2);
   });
@@ -126,7 +127,7 @@ describe('v9.5 — injectOptionPaperQuotes: BS re-pricing from the index spot', 
     const quotes: Record<string, { price: number }> = {};
     await injectOptionPaperQuotes(quotes, async () => ({ price: 79500 }));
     const T = Math.max(0, yearsToExpiry(`${nextWeek}T15:30:00+05:30`, new Date(NOW_MS)));
-    const expected = +Math.max(0.05, bsPrice(79500, 80000, T, 0.065, 13 / 100, 'PE')).toFixed(2);
+    const expected = +Math.max(0.05, bsPrice(79500, 80000, T, 0.069, 13 / 100, 'PE')).toFixed(2);
     expect(quotes.SENSEX80000PE.price).toBeCloseTo(expected, 2);
   });
 
@@ -165,6 +166,121 @@ describe('v9.5 — option P&L uses the lot multiplier', () => {
     evaluatePaper({ NIFTY23400CE: { price: 86.5 } }, events);
     const t2 = getPaperSummary().open[0];
     expect(t2).toBeUndefined(); // fully closed now
+  });
+});
+
+// ============================================================
+// v21.0.6 [audit B1] — LIVE-CHAIN premium re-pricing (desk parity).
+// Paper exits (SL/T1/T2/BE/EOD) ab VAHI premium use karte hain jo
+// options desk dikhata hai (fetchChain = data.js ladder). BS model
+// sirf fallback (chain down / contract row missing).
+// ============================================================
+const LIVE_CHAIN = {
+  symbol: 'NIFTY', source: 'nse', via: 'groww', lotSize: 75, spot: 23460,
+  expiryDates: [nextWeek],
+  rows: [
+    { strike: 23350, expiry: nextWeek, callLTP: 141.2, putLTP: 30.1, callOI: 100, putOI: 100 },
+    { strike: 23400, expiry: nextWeek, callLTP: 99.25, putLTP: 51.4, callOI: 200, putOI: 200 },
+    { strike: 23450, expiry: nextWeek, callLTP: 64.8, putLTP: 83.2, callOI: 300, putOI: 300 },
+    { strike: 23500, expiry: nextWeek, callLTP: 38.9, putLTP: 122.6, callOI: 400, putOI: 400 },
+    { strike: 23550, expiry: nextWeek, callLTP: 21.5, putLTP: 170.3, callOI: 500, putOI: 500 },
+  ],
+};
+
+describe('v21.0.6 — injectOptionPaperQuotes: LIVE chain first, BS fallback', () => {
+  it('live chain LTP wins (desk parity) — BS math not used when the row exists', async () => {
+    openPaperTrade(OPTION_BODY);
+    const quotes: Record<string, { price: number }> = {};
+    const spot = 23460; // same spot the BS path would use
+    await injectOptionPaperQuotes(quotes, async () => ({ price: spot }), async () => LIVE_CHAIN);
+    expect(quotes.NIFTY23400CE).toBeDefined();
+    expect(quotes.NIFTY23400CE.price).toBe(99.25); // chain callLTP — NOT the BS value
+    const T = Math.max(0, yearsToExpiry(`${nextWeek}T15:30:00+05:30`, new Date(NOW_MS)));
+    const bs = +Math.max(0.05, bsPrice(spot, 23400, T, 0.069, 13 / 100, 'CE')).toFixed(2);
+    expect(bs).not.toBe(99.25); // sanity: the two paths genuinely differ
+  });
+
+  it('chain fetcher absent/null → honest BS fallback (hermetic legacy path)', async () => {
+    openPaperTrade(OPTION_BODY);
+    const quotes: Record<string, { price: number }> = {};
+    const spot = 23460;
+    await injectOptionPaperQuotes(quotes, async () => ({ price: spot }), async () => null);
+    const T = Math.max(0, yearsToExpiry(`${nextWeek}T15:30:00+05:30`, new Date(NOW_MS)));
+    const expected = +Math.max(0.05, bsPrice(spot, 23400, T, 0.069, 13 / 100, 'CE')).toFixed(2);
+    expect(quotes.NIFTY23400CE.price).toBeCloseTo(expected, 2);
+  });
+
+  it('chain up but contract row missing (expiry rolled) → BS fallback for that trade', async () => {
+    openPaperTrade({ ...OPTION_BODY, expiry: '2030-01-01' });
+    const quotes: Record<string, { price: number }> = {};
+    await injectOptionPaperQuotes(quotes, async () => ({ price: 23460 }), async () => LIVE_CHAIN);
+    expect(quotes.NIFTY23400CE).toBeDefined(); // BS re-priced (row for 2030 expiry nahi hai)
+    expect(quotes.NIFTY23400CE.price).toBeGreaterThan(0);
+  });
+
+  it('PE side + SENSEX underlying route through the BSE ladder fetcher', async () => {
+    openPaperTrade({ ...OPTION_BODY, symbol: 'SENSEX80000PE', optType: 'PE', type: 'PE', underlying: 'SENSEX', strike: 80000, lotSize: 20 });
+    const quotes: Record<string, { price: number }> = {};
+    let asked = '';
+    await injectOptionPaperQuotes(quotes, async () => ({ price: 79500 }), async (u: string) => {
+      asked = u;
+      return { ...LIVE_CHAIN, symbol: 'SENSEX', source: 'bse', rows: LIVE_CHAIN.rows.map(r => ({ ...r, strike: r.strike - 23400 + 80000, putLTP: r.strike === 23400 ? 71.4 : r.putLTP })) };
+    });
+    expect(asked).toBe('SENSEX');
+    expect(quotes.SENSEX80000PE.price).toBe(71.4);
+  });
+});
+
+// ============================================================
+// v21.0.6 [audit B2] — 1-lot option trades: T1 no longer closes
+// everything. Un-splittable runner ab T1 pe SL→breakeven le leta
+// hai, T2/BE-trail KABHI reach nahi hote the (track record +0.5R
+// pe structurally capped tha).
+// ============================================================
+describe('v21.0.6 — 1-lot option T1: BE-protect instead of full close', () => {
+  it('qty=1 T1 touch → nothing booked, SL moves to entry, T2 fully closes later', () => {
+    const r = openPaperTrade({ ...OPTION_BODY, qty: 1 });
+    expect(r.ok).toBe(true);
+    const events: any[] = [];
+    // T1 = 110 hit
+    evaluatePaper({ NIFTY23400CE: { price: 111 } }, events);
+    let t = getPaperSummary().open[0];
+    expect(t).toBeDefined();          // NOT closed
+    expect(t.status).toBe('OPEN');     // nothing booked → not even PARTIAL
+    expect(t.t1Hit).toBe(true);
+    expect(t.stopLoss).toBe(86.5);     // SL → breakeven (was 77)
+    expect(t.remainingQty).toBe(1);   // full runner intact
+    expect(events.some(e => e.type === 'PAPER_T1_BE' && /breakeven/i.test(e.note))).toBe(true);
+    // pullback to entry → BE trail exit (was the old SL level 77 — NOT hit)
+    evaluatePaper({ NIFTY23400CE: { price: 86.5 } }, events);
+    t = getPaperSummary().open[0];
+    expect(t).toBeUndefined(); // closed at breakeven via new SL
+  });
+
+  it('qty=1 T1 touch → runner rides to T2 for the full +1.0R', () => {
+    const r = openPaperTrade({ ...OPTION_BODY, qty: 1 });
+    expect(r.ok).toBe(true);
+    const events: any[] = [];
+    evaluatePaper({ NIFTY23400CE: { price: 111 } }, events); // T1 → BE-protect
+    evaluatePaper({ NIFTY23400CE: { price: 146 } }, events); // T2 = 145 hit
+    const ev = events.find(e => e.type === 'PAPER_CLOSE' && e.note?.includes('T2'));
+    expect(ev).toBeTruthy();
+    const t = getPaperSummary().open[0];
+    expect(t).toBeUndefined();
+  });
+});
+
+// v21.0.6 [audit] — restore path symbol cap 15 → 20 (openPaperTrade
+// _validateSym parity; BANKNIFTY51000CE 16-char restore pe drop hota tha).
+describe('v21.0.6 — 16-char F&O symbol survives the restore round-trip', () => {
+  it('BANKNIFTY51000CE restores with option identity intact', () => {
+    openPaperTrade({ ...OPTION_BODY, symbol: 'BANKNIFTY51000CE', underlying: 'BANKNIFTY', strike: 51000, lotSize: 35 });
+    const pub = getPaperSummary().open[0];
+    const r = restorePaperTrades({ trades: [{ ...pub, id: pub.id + 2000 }] });
+    expect(r.ok).toBe(true);
+    const restored = (r.summary.open || []).find((t) => t.id === pub.id + 2000);
+    expect(restored?.symbol).toBe('BANKNIFTY51000CE');
+    expect(restored?.assetKind).toBe('OPTION');
   });
 });
 

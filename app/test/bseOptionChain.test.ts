@@ -190,8 +190,12 @@ describe('v21.0.4 Groww public mirror — parser + ladder', () => {
     // null IVs stay null (illiquid greeks) — never coerced to 0
     expect(out.rows.find((r: any) => r.strike === 72700).callIV).toBeNull();
     expect(out.rows.find((r: any) => r.strike === 72800).putIV).toBeNull();
-    // zero-OI side change can never go negative (prevOI > oi case)
-    expect(out.rows.find((r: any) => r.strike === 72600).putOIChange).toBe(0);
+    // v21.0.6 [audit]: REAL OI-unwinding passes through — negative
+    // OI-change ab preserve hota hai (direct NSE changeinOpenInterest
+    // parity); missing oi/prevOI fields → 0 (fabricated negative nahi).
+    expect(out.rows.find((r: any) => r.strike === 72600).putOIChange).toBe(15000 - 16000); // −1000 unwind
+    expect(out.rows.find((r: any) => r.strike === 72700).callOIChange).toBe(900 - 950); // −50 unwind
+    expect(out.rows.find((r: any) => r.strike === 72800).callOIChange).toBe(0); // oi:0/prevOI:0 → 0, no fabrication
   });
 
   it('_growwParseNextData: sanity failures return null (no contracts / no expiry / <5 rows)', async () => {

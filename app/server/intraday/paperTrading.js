@@ -125,22 +125,77 @@ function _normExpiryISO(v) {
 //              auto-management + P&L work exactly like equities
 // ------------------------------------------------------------
 const OPTION_UNDERLYINGS = new Set(['NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY', 'NIFTYNXT50', 'SENSEX']);
-const RISK_FREE = 0.065; // matches optionsDesk.js
+const RISK_FREE = 0.069; // matches optionsDesk.js (v21.0.6 audit: aligned 0.065→0.069)
 
 function _isOptionTrade(t) { return t?.assetKind === 'OPTION'; }
 
+// ------------------------------------------------------------
+// v21.0.6 [audit B1] — LIVE-CHAIN premium re-pricing (desk parity).
+// Desk jo chain ladder dikhata hai (direct NSE / Groww mirror / BSE),
+// paper exits (SL/T1/T2/BE-trail/EOD) + P&L bhi VAHI premium use
+// karte hain. Pehle SL/T1 engine sirf BS-model premium pe act karta
+// tha jabki desk live premium dikha raha tha — SL model pe hit ho
+// sakta tha jab live chain ne chhua tak nahi (IV-crush/microstructure
+// invisible). BS model ab SIRF fallback hai (chain down / contract
+// row missing) — wahi pura spot+IV math neeche intact hai.
+// fetchChain(underlying) → NSE-normalized chain {rows:[{strike,
+// expiry, callLTP, putLTP…}], lotSize, source, via} | null — stream.js
+// the real data.js ladder passes karta hai; tests fake ya omit karte
+// hain (hermetic BS fallback path).
+// ------------------------------------------------------------
+const _chainQuoteCache = new Map(); // underlying → { chain, at }
+const OPT_CHAIN_QUOTE_TTL = 30 * 1000; // watcher 5s; chain refresh 30s (desk-rate parity)
+
+async function _chainFor(underlying, fetchChain) {
+  const u = String(underlying || '').toUpperCase();
+  const c = _chainQuoteCache.get(u);
+  if (c && Date.now() - c.at < OPT_CHAIN_QUOTE_TTL) return c.chain;
+  if (typeof fetchChain !== 'function') return c?.chain || null;
+  try {
+    const chain = await fetchChain(u);
+    if (chain && Array.isArray(chain.rows) && chain.rows.length >= 5) {
+      _chainQuoteCache.set(u, { chain, at: Date.now() });
+      return chain;
+    }
+  } catch { /* live path down — stale-cache/BS degrade */ }
+  return c?.chain || null;
+}
+
+function _chainLtpFor(chain, t) {
+  if (!chain) return null;
+  const k = Number(t.strike);
+  const iso = String(t.expiry || '').slice(0, 10);
+  const row = (chain.rows || []).find(r => Number(r.strike) === k && String(r.expiry || '').slice(0, 10) === iso);
+  if (!row) return null;
+  const ltp = t.optType === 'CE' ? Number(row.callLTP) : Number(row.putLTP);
+  return Number.isFinite(ltp) && ltp > 0 ? ltp : null;
+}
+
 /** v9.5 — called by the watcher tick BEFORE evaluatePaper(): for every
- * open OPTION paper trade, fetch the underlying spot (Yahoo map in
- * index.js) and re-price the premium via Black-Scholes (entry IV held
- * fixed — same basis as the card that opened it). Injected into the
- * quotes map, so evaluatePaper()/closePaperTrade() need zero changes. */
-export async function injectOptionPaperQuotes(quotes, fetchIndexSpot) {
-  if (typeof fetchIndexSpot !== 'function') return;
+ * open OPTION paper trade, re-price the premium. v21.0.6 [audit B1]:
+ * LIVE chain LTP first (the SAME ladder the desk displays — stream.js
+ * passes the data.js fetcher); Black-Scholes (entry IV held fixed, spot
+ * via Yahoo ^NSEI/^BSESN — see below) is now the honest FALLBACK when
+ * the live chain is unreachable or the contract row is missing.
+ * Injected into the quotes map, so evaluatePaper()/closePaperTrade()
+ * need zero changes. */
+export async function injectOptionPaperQuotes(quotes, fetchIndexSpot, fetchChain) {
   const open = _state.trades.filter(t => _isOptionTrade(t) && t.status !== 'CLOSED');
   if (open.length === 0) return;
+  const canModel = typeof fetchIndexSpot === 'function';
+  const canLive = typeof fetchChain === 'function';
+  if (!canLive && !canModel) return;
   const spotCache = new Map();
   for (const t of open) {
     try {
+      // v21.0.6: LIVE chain premium FIRST — desk parity (exits + P&L
+      // wahi premium dekhte hain jo card/chain pe dikhta hai).
+      const live = _chainLtpFor(await _chainFor(t.underlying, fetchChain), t);
+      if (live != null) {
+        quotes[t.symbol] = { price: pRound(live), change: 0, ts: Date.now() };
+        continue;
+      }
+      if (!canModel) continue;
       if (!spotCache.has(t.underlying)) {
         const q = await fetchIndexSpot(t.underlying);   // {price} | null
         if (q?.price > 0) spotCache.set(t.underlying, q.price);
@@ -386,9 +441,22 @@ export function evaluatePaper(quotes, events) {
         const half = _marketOfTrade(t) === 'CRYPTO'
           ? +((t.qty / 2).toFixed(4))
           : Math.ceil(t.qty / 2);
-        _closePart(t, half, t.target1, 'T1_BOOK');
-        if (t.status !== 'CLOSED') t.status = 'PARTIAL';
-        events.push({ type: 'PAPER_CLOSE', symbol: t.symbol, direction: t.direction, price: t.target1, pnl: t.realizedPnl, pnlNet: t.netPnl ?? null, note: 'Paper: booked 50% at T1, trail to entry' });
+        // v21.0.6 [audit B2]: a 1-unit position (option cards qty=1 lot)
+        // SPLIT Nahi HO SAKTI — half===remaining poora trade close kar
+        // deta tha, isliye advertised "T1 50% book → trail / T2" KABHI
+        // run nahi hota tha (har option trade flat +0.5R pe khatam —
+        // track record structurally capped). Ab: qty jo split nahi ho
+        // sakti us T1 pe SIRF stopLoss ko entry (breakeven) pe le aata hai
+        // — runner T2/BE tak ride karta hai, wahi discipline jo card
+        // advertise karta hai. Multi-lot (qty≥2) ab bhi 50% book karta hai.
+        if (half > 0 && half < t.remainingQty) {
+          _closePart(t, half, t.target1, 'T1_BOOK');
+          if (t.status !== 'CLOSED') t.status = 'PARTIAL';
+          events.push({ type: 'PAPER_CLOSE', symbol: t.symbol, direction: t.direction, price: t.target1, pnl: t.realizedPnl, pnlNet: t.netPnl ?? null, note: 'Paper: booked 50% at T1, trail to entry' });
+        } else {
+          t.stopLoss = t.entry; // BE-protect the un-splittable runner
+          events.push({ type: 'PAPER_T1_BE', symbol: t.symbol, direction: t.direction, price: t.target1, pnl: 0, pnlNet: null, note: 'Paper: T1 touched — 1 lot split nahi hota, SL breakeven pe shifted (runner T2/BE tak)' });
+        }
         changed = true; continue;
       }
     } else if (t.status === 'PARTIAL') {
@@ -718,7 +786,9 @@ function _sanitizeRestoredTrade(raw) {
   const id = Number.isInteger(raw.id) ? raw.id : parseInt(raw.id, 10);
   if (!Number.isInteger(id) || id < 1 || id > 1e9) return null;
   const symbol = typeof raw.symbol === 'string' ? raw.symbol.trim().toUpperCase() : '';
-  if (!/^[A-Z0-9&-]{2,15}$/.test(symbol)) return null;
+  // v21.0.6 [audit]: 15 → 20 — openPaperTrade _validateSym ke saath align
+  // (BANKNIFTY51000CE 16-char contract restore pe silently drop ho raha tha).
+  if (!/^[A-Z0-9&-]{2,20}$/.test(symbol)) return null;
   const direction = raw.direction === 'SHORT' ? 'SHORT' : 'LONG';
   const market = (['INDIA', 'CRYPTO'].includes(String(raw.market || '').toUpperCase())
     ? String(raw.market).toUpperCase()
@@ -831,4 +901,5 @@ export function _resetForTests(seed) {
   if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
   _state = structuredClone(seed || { trades: [], nextId: 1, dayKey: istDayKey() });
   _circuitAlertAt.clear();
+  _chainQuoteCache.clear(); // v21.0.6: live-chain reprice cache (fake timers me TTL freeze hota hai)
 }

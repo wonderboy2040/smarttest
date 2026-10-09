@@ -741,7 +741,7 @@ export default memo(function CoinDcxTab() {
 
       {/* ============ 03 · EXECUTION CONSOLE (CoinDCX venue) ============ */}
       <div id="cx-execute">
-        <SectionLabel num="03" title="Execution Console" sub="CoinDCX spot + futures positions · leverage · native TP/SL · trailing · portfolio HEAT (total open risk) · risk-gated · audited" />
+        <SectionLabel num="03" title="Execution Console" sub="CoinDCX futures + equity-sim positions (purane spot rows defensive) · leverage · native TP/SL · trailing · portfolio HEAT (total open risk) · risk-gated · audited" />
         <div className="mt-2.5">
           <OrderConsole
             state={state} positions={positions} entries={entries} busy={busy} venue="COINDCX" positionsLive={positionsLive}

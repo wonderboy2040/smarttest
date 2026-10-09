@@ -648,18 +648,22 @@ describe('v9.7 FUTURES-margin viability filter', () => {
     __setConfigForTests({ dailyMaxTrades: 50, dailyMaxLossINR: 1_000_000, maxRiskPct: 5, maxOrderINR: 1_000_000, maxOpenPositions: 50 });
   });
 
-  it('connected wallet with <2 USDT futures margin → futures candidates skipped pre-selection', async () => {
-    // v12.1: a HEALTHY wallet read with genuinely-low margin → the SOFT
-    // futures_margin blocker (spot desk still trades).
+  it('connected wallet with <2 USDT futures margin in PAPER mode → futures STILL trades (v21.0.6 practice sizing)', async () => {
+    // v21.0.6 [audit M1]: the sizing-floor asymmetry fix — pehle connected
+    // chhote wallet (₹280-560) pe paper-futures har cycle "margin too
+    // small" se skip hota tha jabki sim (floor 1) fire karta rehta tha
+    // ("sirf equity sim ka auto trade lagta hai" complaint ka residue).
+    // Ab paper mode me dono desks PRACTICE equity (≥₹10,000 baseline) pe
+    // size hote hain; futures_margin blocker sirf LIVE mode me fire hota hai.
     mockWalletSnapshot.mockResolvedValue({
       ...WALLET, deployableFuturesUSDT: 0, equityINR: 400, deployableSpotINR: 400,
       futures: { ...WALLET.futures, usdt: { free: 0, locked: 0, total: 0, crossUserMargin: 0 }, error: null },
     });
     await agentTick({}, vi.fn());
-    expect(mockExecuteFutures).not.toHaveBeenCalled();
+    expect(mockExecuteFutures).toHaveBeenCalledTimes(1); // practice sizing → fires
     const st = await agentStatus(null);
-    // soft blocker surfaced: sirf SPOT desk se entry hoga
-    expect(st.blockers.some(b => b.key === 'futures_margin' && b.soft)).toBe(true);
+    // paper mode: no futures_margin blocker (sirf LIVE wallet top-up ke liye)
+    expect(st.blockers.some(b => b.key === 'futures_margin')).toBe(false);
     expect(st.blockers.some(b => b.key === 'futures_wallet_read')).toBe(false);
   });
 
@@ -674,7 +678,11 @@ describe('v9.7 FUTURES-margin viability filter', () => {
       futures: { usdt: { free: 0, locked: 0, total: 0, crossUserMargin: 0 }, error: '[401] Invalid credentials · futures-key-scope: MISSING — API key me Global Futures permission nahi hai (derivatives positions auth bhi 401 — same key spot par chalti hai). CoinDCX app → API Dashboard → Futures permission ON karke NAYI key banao → site me CoinDCX reconnect karo [auth-ladder GET-body/ms/num:401 · GET-body/s/num:401 · GET-body/ms/str:401 · GET-s/str:401 · GET-ms/num:401 · GET-s/pgsz:401 · POST:404]' },
     });
     await agentTick({}, vi.fn());
-    expect(mockExecuteFutures).not.toHaveBeenCalled();
+    // v21.0.6: PAPER mode me futures practice-equity sizing pe TRADE KARTA
+    // hai (wallet read fault sirf panel pe surface hota hai — LIVE jaane
+    // se pehle user ko auth fix dikhna chahiye). Pehle ye assertion
+    // sizing-starve (margin<2) ki wajah se pass hota tha.
+    expect(mockExecuteFutures).toHaveBeenCalledTimes(1);
     const st = await agentStatus(null);
     const fault = st.blockers.find(b => b.key === 'futures_wallet_read');
     expect(fault).toBeTruthy();

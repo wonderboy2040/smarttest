@@ -15,7 +15,7 @@
 //   ├ OPEN POSITIONS   exit-stage: ENTRY → T1 → T2 → RUNNER +
 //   │                  booked P&L vs unrealized · time-exit bar
 //   ├ TODAY'S TRADES   fill log with sizes + reasons
-//   ├ TOP PICKS        India intraday + futures + spot STRONG picks
+//   ├ TOP PICKS        India intraday + futures + equity-sim STRONG picks
 //   └ LIVE LOG         every scan decision (entry/skip/exit/error)
 //
 // The agent runs SERVER-SIDE (60s loop). This panel polls /api/ai/agent

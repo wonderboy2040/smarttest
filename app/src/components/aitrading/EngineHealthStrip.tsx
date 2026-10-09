@@ -75,6 +75,7 @@ function modelShort(m?: string | null): string {
   let fam = f.replace(/[^a-zA-Z0-9.]/g, '').toUpperCase();
   if (fam.startsWith('DEEPSEEK')) fam = fam.includes('R1') ? 'R1' : 'DSEEK';
   else if (/^QWEN2\.?5?VL/.test(fam)) fam = 'Q2.5VL';
+  else if (/^QWEN3.?VL/.test(fam)) fam = 'QWEN3VL'; // v21.0.6 [audit]: qwen3-vl:8b → QWEN3VL·8B (slice(6) se 'QWEN3V' ho raha tha)
   else if (fam.length > 6) fam = fam.slice(0, 6);
   return `${fam}·${v.toUpperCase()}`;
 }
@@ -108,7 +109,12 @@ function chipTitle(e: EngineRow, ol?: OllamaInfo | null): string {
       `scan (board/chat/council): ${ol?.model || '?'}`,
       `deep (🔬 deep ensemble): ${ol?.deepModel || 'same as scan'}`,
       ol?.visionModel ? `vision (👁 chart button): ${ol.visionModel}` : 'vision: NOT installed (ollama pull qwen2.5vl:7b)',
-      `ctx ${ol?.numCtx ?? '?'} · keep_alive ${ol?.keepAlive || '5m'}`,
+      // v21.0.6 [audit]: scan vs deep ctx alag-alag dikho jab env ne alag
+      // set kiya ho (OLLAMA_NUM_CTX vs OLLAMA_NUM_CTX_DEEP) — pehle sirf
+      // scan ctx dikhta tha.
+      ol?.numCtxDeep && ol.numCtxDeep !== ol.numCtx
+        ? `ctx ${ol.numCtx ?? '?'} (deep ${ol.numCtxDeep}) · keep_alive ${ol?.keepAlive || '5m'}`
+        : `ctx ${ol?.numCtx ?? '?'} · keep_alive ${ol?.keepAlive || '5m'}`,
       ol?.ramGuard?.ctxClamped ? `RAM guard ON (${ol.ramGuard.sysTotalGb}GB system → ctx clamped)` : undefined,
       ol?.models?.length ? `installed: ${ol.models.slice(0, 6).join(', ')}` : undefined,
       ol?.checkedAgeSec != null ? `probed ${ol.checkedAgeSec.toFixed(0)}s pehle` : undefined,

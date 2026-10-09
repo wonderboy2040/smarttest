@@ -592,15 +592,20 @@ export function registerAITradingRoutes(app, deps) {
   const _visionCache = new Map();
   app.post('/api/ai/vision-check', async (req, res) => {
     try {
-      const { symbol, side, image, market } = req.body || {};
+      const { symbol, side, image, market, tf } = req.body || {};
       if (!symbol || !side || !image || typeof image !== 'string' || !image.startsWith('data:image/')) {
         return res.status(400).json({ ok: false, error: 'symbol, side, aur data:image/... image chahiye' });
       }
       if (image.length > 8_000_000) {
-        return res.status(413).json({ ok: false, error: 'image bahut badi hai (max ~6MB PNG)' });
+        return res.status(413).json({ ok: false, error: 'image bahut badi hai (max ~8M data-URL chars)' });
       }
       const mkt = normMarket(market);
-      const cacheKey = `${mkt}:${symbol}:${side}`;
+      // v21.0.6 [audit E1]: cache key me TIMEFRAME bhi — pehle 15m chart
+      // ka verdict 10-min window me 1d chart ke liye bhi serve ho sakta
+      // tha (client tf bhejta nahi tha). Client ab CandleChart ka active tf
+      // bhejta hai; unknown/absent tf back-compat ke liye '?' placeholder.
+      const tfKey = String(tf || '?').slice(0, 8);
+      const cacheKey = `${mkt}:${symbol}:${side}:${tfKey}`;
       const cached = _visionCache.get(cacheKey);
       if (cached && Date.now() - cached.at < 10 * 60_000) {
         return res.json({ ok: true, ...cached.out, cached: true });
@@ -618,12 +623,19 @@ export function registerAITradingRoutes(app, deps) {
       const { json, model } = await councilAskVision(prompt, [b64]);
       if (!json) {
         const st = ollamaStatus();
+        // v21.0.6 [audit E2]: ollama UNREACHABLE apna honest 503 leta hai
+        // — pehle stale visionModel field ki wajah se misleading 502
+        // ("JSON verdict nahi mila") milta tha jabki asli wajah service
+        // down thi. Model-missing 503 pehle jaisa pull-guidance ke saath.
+        const unreachable = st.reachable === false;
         const noVision = !st.visionModel;
-        return res.status(noVision ? 503 : 502).json({
+        return res.status(unreachable || noVision ? 503 : 502).json({
           ok: false,
-          error: noVision
-            ? 'koi vision model installed nahi (ollama pull qwen2.5vl:7b se install karo)'
-            : 'vision model se JSON verdict nahi mila (thodi der baad try karo)',
+          error: unreachable
+            ? 'ollama service unreachable hai — Ollama chalu karke RECHECK dabao'
+            : noVision
+              ? 'koi vision model installed nahi (ollama pull qwen2.5vl:7b se install karo)'
+              : 'vision model se JSON verdict nahi mila (thodi der baad try karo)',
           ollama: st,
         });
       }
