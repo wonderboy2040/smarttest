@@ -638,6 +638,15 @@ export async function executeGlobalSignal(opts) {
   }
   // --- gate 1: kill switch ---
   if (cfg.killSwitch) return reject('Kill switch ON — execution disabled');
+  // v21.1.1 [audit C12]: per-strategy kill rule parity — SIM desk pe bhi
+  // negative-expectancy strategy pause ho (Phase-4 spec: "har strategy").
+  // LIVE gate 0 pe reject hota hai isliye block sirf paper/notify pe lagta
+  // hai — wahi modes hain jo ledger me settle hote hain.
+  try {
+    const { strategyGuardBlocked } = await import('./strategyGuard.js');
+    const sg = strategyGuardBlocked(source, 'GLOBALFUTURES');
+    if (sg.blocked) return reject(sg.reason, sg.reason);
+  } catch { /* guard unavailable — never break the flow */ }
   // --- gate 2: auto policy ---
   if (wantAuto && !cfg.allowAuto) return { ok: false, error: 'Auto-execution is OFF (enable it in Risk settings)' };
   if (wantAuto && cfg.mode !== 'live') return { ok: false, error: 'Auto-execution only runs in LIVE mode' };

@@ -108,6 +108,17 @@ export function optionsAutoStatus() {
       const left = Number(cfg.cooldownMin) - Math.floor((Date.now() - last) / 60000);
       return Math.max(0, left);
     })(),
+    // v21.1.1 [audit C7]: cooldown ab PER-UNDERLYING map bhi deta hai —
+    // pehle sirf global max dikhta tha: "cooldown 17min" (NIFTY cooling)
+    // padh ke lagta tha SENSEX bhi block hai (jalda free hai).
+    cooldownRemainingByUnderlying: (() => {
+      const out = {};
+      for (const [u, at] of Object.entries(s.lastEntryAt || {})) {
+        const left = Number(cfg.cooldownMin) - Math.floor((Date.now() - Number(at || 0)) / 60000);
+        if (left > 0) out[u] = left;
+      }
+      return out;
+    })(),
     lastEntry: s.lastEntry || null,
     windowOpen: nseOpen,
   };
@@ -197,6 +208,28 @@ async function _optionsAutoTickInner(deps, sendTelegram) {
 
   // ---- OPEN the paper trade (card plan ke EXACT displayed levels) ----
   const entry = Number(pick.entry);
+  // v21.1.1 [audit C5]: LIVE-PREMIUM CROSS-CHECK — card 30s cache + chain
+  // 90s TTL ho sakta hai; fast move pe entry us level pe khulti thi jo
+  // market 1-2 min pehle chhod chuka hai (first watcher tick pe phantom
+  // gain/loss). Same data.js ladder se contract LTP dobara padho —
+  // >5% deviation → skip (agle pass fresh card banegi).
+  try {
+    const u = String(pick.symbol || '').toUpperCase();
+    const { fetchNSEOptionChain, fetchBSEOptionChain } = await import('./data.js');
+    const chain = u === 'SENSEX'
+      ? await fetchBSEOptionChain('SENSEX').catch(() => null)
+      : await fetchNSEOptionChain(u).catch(() => null);
+    const row = (chain?.rows || []).find(r => Number(r.strike) === Math.round(Number(pick.strike))
+      && String(r.expiry || '').slice(0, 10) === String(pick.expiry || '').slice(0, 10));
+    const ltp = row ? Number(pick.type === 'CE' ? row.callLTP : row.putLTP) : null;
+    if (ltp != null && ltp > 0 && entry > 0) {
+      const dev = Math.abs(ltp - entry) / entry;
+      if (dev > 0.05) {
+        const liveR = Math.round(ltp * 100) / 100;
+        return { ok: true, idle: `stale-card-skip — ${pick.symbol}${Math.round(pick.strike)}${pick.type} premium ${Math.round(dev * 100)}% move kar gaya (card ₹${entry} vs live ₹${liveR}); fresh card agle pass` };
+      }
+    }
+  } catch { /* ladder unavailable — card levels hi use karo (paper engine) */ }
   const reward = Number(pick.target) - entry; // R
   const t1 = +(entry + reward * 0.5).toFixed(2);  // card t1 — 50% book halfway
   const t2 = +(entry + reward * 1.0).toFixed(2); // card t2 — full target pe runner

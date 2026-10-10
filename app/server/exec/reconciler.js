@@ -64,6 +64,8 @@ const _state = {
   // re-evaluate karta hai (mismatch → false); canEnterNew() ko 'armed'
   // bhi chahiye isliye exec/enter route production me unaffected.
   _iAmLeader: true,
+  // v21.1.1 [audit B1]: flag-file se restore hua kill isi ko auto-resume karta hai
+  _killFromFlagFile: false,
   // v20.7.12 [H1]: advisory-alert dedupe (pair → last alert ts, 30 min)
   _adoptAlerts: new Map(),
   // v20.7.12 [H1]: engine-ownership cache (journal scan is not free —
@@ -99,8 +101,15 @@ async function _engineOwnedLivePairs() {
         && p?.pair && (Number(p?.openedAt) || 0) >= cutoff) pairs.add(String(p.pair));
     }
     for (const e of (Array.isArray(j?.entries) ? j.entries : [])) {
+      // v21.1.1 [audit B8]: desks ORDER entries me `symbol` likhte hain
+      // (`pair` sirf exec-enter route) — purana `e?.pair` check is fallback
+      // ka intezaam hi kabhi match nahi karta tha (crash-window orphan
+      // safety net dead code). `pair ?? symbol` + REJECTED filter (ek
+      // reject hui order user ki manual same-pair position ko flatten
+      // trigger nahi karni chahiye).
       if (e?.kind === 'ORDER' && String(e?.mode) === 'live' && String(e?.market) === 'FUTURES'
-        && e?.pair && (Number(e?.ts) || 0) >= cutoff) pairs.add(String(e.pair));
+        && !['REJECTED', 'FAILED'].includes(String(e?.status || ''))
+        && (e?.pair || e?.symbol) && (Number(e?.ts) || 0) >= cutoff) pairs.add(String(e.pair || e.symbol));
     }
   } catch { /* journal unavailable → empty set (fail-SAFE: no flatten) */ }
   _state._enginePairs = pairs;
@@ -289,17 +298,32 @@ function _checkKillFlagFile() {
   try {
     const flag = fs.existsSync(_state.killFlagFile);
     if (flag && _state.killLevel === 0) {
-      // external supervisor / UI wrote the kill flag → arm L3
-      _state.killLevel = 3;
-      _state.killReason = 'kill-flag file present (external trigger)';
-      _state.killSetAt = Date.now();
-      _alertCall(`🚨 KILL L3 (external flag): kill-flag file detected at ${_state.killFlagFile}. Engine disabled — flatten all.`);
-    } else if (!flag && _state.killLevel === 3 && _state.killReason === 'kill-flag file present (external trigger)') {
-      // flag cleared → resume
+      // v21.1.1 [audit B1]: persisted LEVEL verbatim restore karo. Pehle yahan
+      // hard-coded L3 tha — restart par apni hi likhi hui {level:1} file bhi L3
+      // (flatten-everything) ban jaati thi. Operator ne L1 (sirf no-new-entries)
+      // set kiya tha, Render redeploy hua, aur engine ne har live position
+      // market-close kar di — real-money mass-close jo kisi ne nahi maanga.
+      // Unparseable/foreign files (external supervisors) fail-safe L3 hi rehte hain.
+      let parsed = null;
+      try { parsed = JSON.parse(fs.readFileSync(_state.killFlagFile, 'utf8') || 'null'); } catch { parsed = null; }
+      const lvl = Number.isInteger(parsed?.level) && parsed.level >= 1 && parsed.level <= 3
+        ? parsed.level
+        : 3;
+      _state.killLevel = lvl;
+      _state.killReason = (parsed && typeof parsed.reason === 'string' && parsed.reason)
+        || 'kill-flag file present (external trigger)';
+      _state.killSetAt = Number(parsed?.at) > 0 ? Number(parsed.at) : Date.now();
+      _state._killFromFlagFile = true;
+      _alertCall(lvl >= 3
+        ? `🚨 KILL L3 (flag file): ${_state.killFlagFile} — engine disabled, flatten all.`
+        : `🛑 KILL L${lvl} RESTORED (restart recovery): ${_state.killReason} — entries blocked, positions managed normally.`);
+    } else if (!flag && _state.killLevel >= 1 && _state._killFromFlagFile) {
+      // flag cleared externally → resume
       _state.killLevel = 0;
       _state.killReason = null;
       _state.killSetAt = 0;
-      _alertCall(`✅ KILL CLEARED (external flag removed). Engine active again.`);
+      _state._killFromFlagFile = false;
+      _alertCall('✅ KILL CLEARED (external flag removed). Engine active again.');
     }
   } catch { /* flag check best-effort */ }
 }

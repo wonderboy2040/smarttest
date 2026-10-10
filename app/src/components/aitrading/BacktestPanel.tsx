@@ -47,7 +47,7 @@ function EquityCurve({ equity }: { equity: NonNullable<BacktestResult['equity']>
 
 interface Props {
   market: 'INDIA' | 'CRYPTO';
-  runBacktest: (market: 'INDIA' | 'CRYPTO', minGrade?: string) => Promise<BacktestResult | null>;
+  runBacktest: (market: 'INDIA' | 'CRYPTO', minGrade?: string, opts?: { walkForward?: boolean }) => Promise<BacktestResult | null>;
   /** v10.8: NL Custom Strategy Lab runner (optional — panel degrades without it) */
   runStrategyLab?: (description: string, market: 'INDIA' | 'CRYPTO') => Promise<StrategyLabResult | null>;
 }
@@ -57,19 +57,25 @@ export const BacktestPanel = memo(function BacktestPanel({ market, runBacktest, 
   const [grade, setGrade] = useState<'ACTION' | 'STRONG' | 'WATCH'>('ACTION');
   const [running, setRunning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // v21.1.1 [audit A5]: walk-forward toggle — 70/30 train/test split,
+  // overfit verdict per symbol (Phase-4 feature pehle API-only tha).
+  const [walkForward, setWalkForward] = useState(false);
 
   const run = useCallback(async () => {
     setRunning(true); setErr(null);
-    const r = await runBacktest(market, grade);
+    const r = await runBacktest(market, grade, { walkForward });
     setRunning(false);
     if (!r || !r.ok) { setErr(r?.disclaimer ? null : 'backtest data unavailable — try again'); setResult(r); return; }
     setResult(r);
-  }, [market, grade, runBacktest]);
+  }, [market, grade, runBacktest, walkForward]);
 
   // auto-run once per market switch (cheap: 10-min server cache)
   useEffect(() => { setResult(null); setErr(null); }, [market]);
 
   const s = result?.stats;
+  const wfVerdictColor = (v?: string) => v === 'CALIBRATED' ? 'text-emerald-300'
+    : v === 'OVERFIT_HIGH' || v === 'HIGH' ? 'text-red-300'
+    : v === 'MODERATE' ? 'text-amber-300' : 'text-slate-300';
 
   return (
     <div className="quantum-panel rounded-2xl p-4 space-y-3" aria-label="Backtest panel">
@@ -83,6 +89,11 @@ export const BacktestPanel = memo(function BacktestPanel({ market, runBacktest, 
             </button>
           ))}
         </div>
+        {/* v21.1.1 [audit A5]: walk-forward mode toggle */}
+        <button onClick={() => setWalkForward(w => !w)} aria-pressed={walkForward} title="70/30 train/test split — out-of-sample overfit verdict per symbol (Phase-4)"
+          className={`px-2 py-0.5 rounded-lg text-[9px] font-black border ${walkForward ? 'bg-violet-500/15 text-violet-300 border-violet-500/40' : 'bg-black/20 text-slate-500 border-slate-700/40'}`}>
+          🔬 WALK-FORWARD {walkForward ? 'ON' : 'OFF'}
+        </button>
         <button onClick={run} disabled={running}
           className="ml-auto px-3 py-1.5 rounded-lg text-[10px] font-black bg-gradient-to-r from-violet-600 to-indigo-600 text-white disabled:opacity-50">
           {running ? '⏳ REPLAYING HISTORY…' : '▶ RUN BACKTEST'}
@@ -108,6 +119,34 @@ export const BacktestPanel = memo(function BacktestPanel({ market, runBacktest, 
           </div>
 
           {result.equity && result.equity.length > 1 && <EquityCurve equity={result.equity} />}
+
+          {/* v21.1.1 [audit A5]: walk-forward verdicts — train vs test expectancy + overfit call */}
+          {result.walkForward && (result.walkForward.summary || (result.walkForward.perSymbol || []).length > 0) && (
+            <div className="rounded-xl p-2.5 border bg-violet-500/5 border-violet-500/25">
+              <div className="flex items-center gap-2 flex-wrap mb-1.5">
+                <span className="text-[10px] font-black text-violet-300 tracking-wider">🔬 WALK-FORWARD — out-of-sample check</span>
+                {result.walkForward.summary ? (
+                  <>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-black bg-black/30 text-emerald-300">CALIBRATED × {result.walkForward.summary.calibrated}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-black bg-black/30 text-amber-300">MODERATE × {result.walkForward.summary.moderate}</span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-black bg-black/30 text-red-300">HIGH × {result.walkForward.summary.high}</span>
+                  </>
+                ) : null}
+              </div>
+              <div className="space-y-0.5 max-h-28 overflow-y-auto">
+                {(result.walkForward.perSymbol || []).map(w => (
+                  <div key={w.symbol} className="flex items-center gap-2 text-[10px] font-mono">
+                    <span className="text-slate-300 w-20 truncate">{w.symbol}</span>
+                    <span className="text-slate-500">train {(w.train?.atLearnedBar?.avgR ?? 0) >= 0 ? '+' : ''}{w.train?.atLearnedBar?.avgR ?? '—'}R</span>
+                    <span className="text-slate-500">test {(w.test?.learnedBar?.avgR ?? 0) >= 0 ? '+' : ''}{w.test?.learnedBar?.avgR ?? '—'}R</span>
+                    <span className="text-slate-600 hidden sm:inline">{w.verdict?.comparisonBasis === 'learned-bar' ? '' : '· base-split'}</span>
+                    <span className={`ml-auto font-black ${wfVerdictColor(w.verdict?.overfit)}`}>{w.verdict?.overfit ?? '—'}{w.verdict?.degradationPct != null ? ` (−${w.verdict.degradationPct}%)` : ''}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="text-[9px] text-slate-600 mt-1">Train (pehle 70%) pe seekhe gaye gates ko test (aakhri 30%) pe validate karta hai — HIGH verdict = gates sirf history pe kaam karte hain (overfit).</div>
+            </div>
+          )}
 
           {/* v6.7: learned gate recommendation */}
           {result.learned && (

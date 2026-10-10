@@ -300,6 +300,9 @@ export function PaperTradePanel({ livePrices, refreshKey, onOpenSymbolsChange }:
   const [expanded, setExpanded] = useState(true);
   const [restoredNote, setRestoredNote] = useState<string | null>(null);
   const syncingRef = useRef(false);
+  // v21.1.1 [audit D7]: restored-note timer ref — unmount pe clear (codebase
+  // ka toast discipline; React 18+ me warning nahi hoti par cleanup sahi hai).
+  const restoredNoteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // v9.1: report the open-symbol set upward (dedup'd via a ref so the
   // 15s/60s pollers don't spam the parent with fresh-but-equal Sets).
   const lastSymbolsRef = useRef<Set<string> | null>(null);
@@ -338,7 +341,8 @@ export function PaperTradePanel({ livePrices, refreshKey, onOpenSymbolsChange }:
           if (h2) setHistory(h2);
           if (s2) reportSymbols(s2);
           setRestoredNote('history device-backup se recover hui');
-          setTimeout(() => setRestoredNote(null), 8000);
+          if (restoredNoteTimerRef.current) clearTimeout(restoredNoteTimerRef.current);
+          restoredNoteTimerRef.current = setTimeout(() => setRestoredNote(null), 8000);
         }
       }
     } finally {
@@ -352,6 +356,8 @@ export function PaperTradePanel({ livePrices, refreshKey, onOpenSymbolsChange }:
   }, [reportSymbols]);
 
   useEffect(() => { loadHistory(); }, [loadHistory, refreshKey]);
+  // v21.1.1 [audit D7]: unmount pe pending restored-note timer clear
+  useEffect(() => () => { if (restoredNoteTimerRef.current) clearTimeout(restoredNoteTimerRef.current); }, []);
 
   // Periodic refresh (open trades' server-side auto-management).
   useEffect(() => {

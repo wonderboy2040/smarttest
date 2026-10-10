@@ -78,6 +78,31 @@ describe('server/security/pinAuth.js — v21.1.0 auth split contract', () => {
     } finally { await stopApp(t); }
   });
 
+  it('v21.1.1 [audit A15]: 8 RAPID SUCCESSFUL logins → koi 429 NAHI (sirf failures count hote hain)', async () => {
+    // Pehle successful logins bhi window me ginte the — rapid re-login burst
+    // (SSE reconnect storm waghera) 429 de deta tha. Ab fail-only counting.
+    const mod = await loadPinAuth('TestPin12345');
+    const t = await startApp(mod);
+    try {
+      for (let i = 0; i < 8; i++) {
+        const r = await fetch(`${t.base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-ip': '8.8.8.8' }, body: JSON.stringify({ pin: 'TestPin12345' }) });
+        expect(r.status).toBe(200);
+      }
+    } finally { await stopApp(t); }
+  });
+
+  it('v21.1.1 [audit A15]: 5 failures ke baad sahi PIN bhi per-IP 429 (fail window sustained)', async () => {
+    const mod = await loadPinAuth('TestPin12345');
+    const t = await startApp(mod);
+    try {
+      for (let i = 0; i < 5; i++) {
+        await fetch(`${t.base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-ip': '7.7.7.7' }, body: JSON.stringify({ pin: 'x' }) });
+      }
+      const r = await fetch(`${t.base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-test-ip': '7.7.7.7' }, body: JSON.stringify({ pin: 'TestPin12345' }) });
+      expect(r.status).toBe(429);
+    } finally { await stopApp(t); }
+  });
+
   it('global distributed lockout: 150 rotated-IP failures → even the CORRECT pin gets 429', async () => {
     const mod = await loadPinAuth('TestPin12345');
     const t = await startApp(mod);

@@ -112,7 +112,13 @@ export function useAuthState() {
         setLoginError('Galat PIN — dobara try karein');
         setPinInput('');
       } else {
-        setLoginError(`Login fail (HTTP ${res.status})`);
+        // v21.1.1 [audit D5]: server ka human message surface karo —
+        // 429 (rate-limit / 5-min global lockout) ka reason body me hota
+        // hai; pehle generic "Login fail (HTTP 429)" dikhata tha jabki
+        // asli message "Too many failed attempts..." tha.
+        const body = await res.json().catch(() => ({} as { error?: { message?: string } }));
+        const srvMsg = body?.error?.message;
+        setLoginError(srvMsg ? `${srvMsg}` : `Login fail (HTTP ${res.status})`);
       }
     } catch {
       const base = getProxyBase();

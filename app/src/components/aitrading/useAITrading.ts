@@ -417,9 +417,13 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
   }, [loadPositions, loadState]);
 
   // v6.5: walk-forward backtest (per desk).
-  const runBacktest = useCallback(async (market: 'INDIA' | 'CRYPTO', minGrade = 'ACTION'): Promise<BacktestResult | null> => {
+  const runBacktest = useCallback(async (market: 'INDIA' | 'CRYPTO', minGrade = 'ACTION', opts: { walkForward?: boolean } = {}): Promise<BacktestResult | null> => {
     try {
-      const r = await apiFetch(`${getProxyBase()}/api/ai/backtest?market=${market}&minGrade=${minGrade}&t=${Date.now()}`, {
+      // v21.1.1 [audit A5]: walk-forward toggle — server pe ?walkForward=1
+      // tha par UI se kabhi send nahi hota tha (Phase-4 feature browser
+      // se unreachable tha). BacktestPanel ab toggle deta hai.
+      const wf = opts.walkForward ? '&walkForward=1' : '';
+      const r = await apiFetch(`${getProxyBase()}/api/ai/backtest?market=${market}&minGrade=${minGrade}${wf}&t=${Date.now()}`, {
         signal: AbortSignal.timeout(90000),
       });
       if (!r.ok) return null;

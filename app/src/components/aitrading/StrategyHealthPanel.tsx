@@ -71,11 +71,11 @@ export const StrategyHealthPanel = memo(function StrategyHealthPanel() {
           {gl?.ready ? 'LIVE UNLOCKED' : 'LIVE LOCKED'}
         </span>
         {view.enforced ? (
-          <span className="text-[9px] font-mono text-slate-500" title="executeSignal/executeFuturesSignal LIVE entries inhi criteria se reject hote hain">
-            enforced on both desks
+          <span className="text-[9px] font-mono text-slate-500" title="executeSignal / executeFuturesSignal / executeIndiaSignal — teeno desks ke LIVE entries inhi criteria se reject hote hain (v21.1.1 me India bhi wired)">
+            enforced on all desks
           </span>
         ) : (
-          <span className="text-[9px] font-mono text-slate-600" title="VITEST/test mode — enforcement off (production me ON)">
+          <span className="text-[9px] font-mono text-slate-600" title="VITEST/test mode ya GO_LIVE_ENFORCE=0 — production me default ON">
             not enforced (test mode)
           </span>
         )}

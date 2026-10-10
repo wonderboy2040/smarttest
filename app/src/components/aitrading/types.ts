@@ -1007,6 +1007,13 @@ export interface BacktestResult {
     changed: boolean;
     disclaimer?: string;
   };
+  /** v21.1.1 [audit A5]: walk-forward mode (?walkForward=1) — 70/30
+   * train/test split + overfit verdict per symbol (server shape:
+   * walkForwardSymbol() ka {split, train, test, verdict}). */
+  walkForward?: {
+    perSymbol?: { symbol: string; split?: { trainBars?: number; testBars?: number; trainPct?: number; learnedBar?: number; currentBar?: number }; train?: { atLearnedBar?: BacktestStats | null }; test?: { learnedBar?: BacktestStats | null }; verdict?: { overfit?: string; degradationPct?: number | null; comparisonBasis?: string } }[];
+    summary?: { symbols: number; high: number; moderate: number; calibrated: number } | null;
+  };
   disclaimer?: string;
   generatedAt?: number;
 }

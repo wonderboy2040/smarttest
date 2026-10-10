@@ -228,11 +228,15 @@ if not exist "%TARGET%\dist\index.html" (
   if exist "%SRC%\dist\index.html" goto :verifyfail
   echo        (dist/ absent - watchdog first-boot auto-build karega)
 )
-if exist "%TARGET%\dist\index.html" findstr /C:"SmartAI Pro v20" "%TARGET%\dist\index.html" >nul 2>&1 || goto :verifyfail
+REM v21.1.1 [audit D2]: version-agnostic marker - /C:"SmartAI Pro v20" literal
+REM match tha, v21+ dist pe kabhi match nahi hota = har naya zip
+REM :verifyfail -> :restorebackup se ROLLBACK ho jaata tha (good install
+REM delete). Ab v2[0-9] regex use karta hai.
+if exist "%TARGET%\dist\index.html" findstr /R /C:"SmartAI Pro v2[0-9]" "%TARGET%\dist\index.html" >nul 2>&1 || goto :verifyfail
 > "%TARGET%\VERSION.json" (
-  echo {"version": "20.9.4", "installedAt": "%STAMP%", "layout": "smartai-v20-app"}
+  echo {"version": "see-app-package.json", "installedAt": "%STAMP%", "layout": "smartai-v20-app"}
 )
-echo        verify OK - v20 markers sab mil gaye.
+echo        verify OK - version marker mil gaya (v2x).
 
 REM ---- [8/9] node_modules: OFFLINE payload copy ya npm ----
 if not exist "%TARGET%\node_modules\dotenv" (

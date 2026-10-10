@@ -23,7 +23,7 @@ interface HealthSnap {
   kills?: {
     aiDesk?: { enabled?: boolean };
     exec?: { level?: number; reason?: string | null };
-    botLab?: { globalPause?: boolean; bots?: string[] };
+    botLab?: { globalPause?: boolean }; // v21.1.1 [audit A14]: bots[] unused tha (server objects bhejta tha, string[] typed) — dropped
   };
   bots?: { mode?: string | null; globalPause?: boolean };
   persist?: { execHeartbeat?: { ageSec?: number | null }; dataDirWritable?: boolean };

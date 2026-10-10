@@ -42,7 +42,7 @@ export function desktopNotify(title: string, body: string, opts: { force?: boole
     const n = new Notification(title, {
       body,
       tag: 'smartai-signal',
-      icon: '/favicon.ico',
+      icon: '/icon.svg', // v21.1.1 [audit D10]: favicon.ico exist nahi karta — public/ me icon.svg hai
     });
     // Focus the tab when the user clicks the toast.
     n.onclick = () => { try { window.focus(); n.close(); } catch { /* noop */ } };

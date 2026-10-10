@@ -122,19 +122,27 @@ async function fetchYahooChartCandles(yfSymbol, tf = '1h') {
     }
     // 4h: aggregate 1h bars (Yahoo has no 4h interval)
     if (tf === '4h' && candles.length) {
+      // v21.1.1 [audit C10]: TIME-BUCKETED aggregation — pehle har 4th
+      // INDEX pe chunk hota tha; Yahoo 1h bars me session gaps hote hain
+      // (overnight/weekend) to index-chunk 20h+ span kar leta tha (ek "4h"
+      // candle jo overnight gap ke aar-paar ban jati). Ab calendar-4h
+      // buckets (UTC epoch floor) — gap-adjacent bars kabhi merge nahi hote.
+      const BUCKET = 4 * 3600_000;
       const agg = [];
-      for (let i = 0; i < candles.length; i += 4) {
-        const chunk = candles.slice(i, i + 4);
-        if (!chunk.length) continue;
-        agg.push({
-          time: chunk[0].time,
-          open: chunk[0].open,
-          high: Math.max(...chunk.map(x => x.high)),
-          low: Math.min(...chunk.map(x => x.low)),
-          close: chunk[chunk.length - 1].close,
-          volume: chunk.reduce((s, x) => s + x.volume, 0),
-        });
+      let cur = null;
+      for (const c of candles) {
+        const b = Math.floor(c.time / BUCKET);
+        if (!cur || cur.b !== b) {
+          if (cur) agg.push(cur.bar);
+          cur = { b, bar: { time: b * BUCKET, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume } };
+        } else {
+          cur.bar.high = Math.max(cur.bar.high, c.high);
+          cur.bar.low = Math.min(cur.bar.low, c.low);
+          cur.bar.close = c.close;
+          cur.bar.volume += c.volume;
+        }
       }
+      if (cur) agg.push(cur.bar);
       candles = agg;
     }
     if (candles.length >= 30) { cacheSet(_candleCache, key, candles); return candles; }

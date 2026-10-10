@@ -42,6 +42,10 @@ setInterval(() => {
 // Login rate limiter — 5 attempts per minute per IP (brute-force protection).
 const _loginAttempts = new Map(); // ip → [timestamps]
 export function loginRateCheck(ip) {
+  // v21.1.1 [audit A15]: ab sirf FAILED attempts window me aate hain
+  // (recordLoginFail dekho). Pehle har attempt — successful logins samet —
+  // count hota tha: ek rapid re-login burst (5 quick logins) bhi 429
+  // de deta tha. Check-only ban gaya; recording fail-path me hota hai.
   const now = Date.now();
   // Prune stale IPs so the map cannot grow unbounded on a public endpoint.
   if (_loginAttempts.size > 1000) {
@@ -50,10 +54,15 @@ export function loginRateCheck(ip) {
     }
   }
   const arr = (_loginAttempts.get(ip) || []).filter(t => now - t < 60 * 1000);
-  if (arr.length >= 5) return false;
+  return arr.length < 5;
+}
+
+/** v21.1.1 [audit A15]: ek FAILED login attempt record karo (per-IP 60s window). */
+export function recordLoginFail(ip) {
+  const now = Date.now();
+  const arr = (_loginAttempts.get(ip) || []).filter(t => now - t < 60 * 1000);
   arr.push(now);
   _loginAttempts.set(ip, arr);
-  return true;
 }
 
 // v10.13 SECURITY (deep-recheck M-4): GLOBAL failed-PIN lockout. The per-IP
@@ -242,6 +251,7 @@ export function registerAuthRoutes(app, deps = {}) {
     const b = crypto.createHash('sha256').update(APP_PIN).digest();
     if (!crypto.timingSafeEqual(a, b)) {
       recordPinFail(); // v10.13: feeds the global distributed-brute-force lockout
+      recordLoginFail(ip); // v21.1.1 [audit A15]: per-IP window me sirf failures
       return res.status(401).json({ error: { message: 'Invalid PIN.' } });
     }
 

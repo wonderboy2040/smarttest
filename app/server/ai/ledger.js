@@ -56,6 +56,23 @@ function hashEntry(e) {
 function load() {
   return loadJSON(LEDGER_FILE, { entries: [] });
 }
+/**
+ * v21.1.1 [audit A4]: boot-restore hook — durable.js ledger restore ke baad
+ * call karta hai. Ledger har read pe disk se load() karta hai (module cache
+ * nahi), isliye ye hook sirf ek warm-read + chain-verify hai: restore hui
+ * chain corrupt ho to boot pe hi dikh jaye (silent wrong stats nahi).
+ */
+export function __reloadLedgerForBoot() {
+  try {
+    const l = load();
+    if (Array.isArray(l?.entries) && l.entries.length > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`[ledger] boot-restore: ${l.entries.length} entries hydrated (durable)`);
+    }
+    return true;
+  } catch { /* best-effort */ }
+  return false;
+}
 function save(l) {
   if (l.entries.length > MAX_ENTRIES) {
     l.entries = l.entries.slice(-MAX_ENTRIES);

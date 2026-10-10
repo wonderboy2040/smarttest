@@ -19,12 +19,13 @@ function stampSwVersion() {
       try {
         const sw = 'dist/sw.js';
         const src = readFileSync(sw, 'utf8');
-        if (src.includes("const CACHE_VERSION = 'smartai-pro-v20';")) {
-          writeFileSync(sw, src.replace(
-            "const CACHE_VERSION = 'smartai-pro-v20';",
-            `const CACHE_VERSION = 'smartai-pro-v20-${SW_BUILD_STAMP}';`,
-          ));
-        }
+        // v21.1.1 [audit D8]: regex-based match — literal string pe public/sw.js
+        // me const rename/reformat ho jaye to stamp silently no-op ho jata tha.
+        const stamped = src.replace(
+          /const CACHE_VERSION = 'smartai-pro-v20[^']*';/,
+          `const CACHE_VERSION = 'smartai-pro-v20-${SW_BUILD_STAMP}';`,
+        );
+        if (stamped !== src) writeFileSync(sw, stamped);
       } catch { /* best-effort — dev/preview unaffected */ }
     },
   };

@@ -182,9 +182,17 @@ export class PositionManager {
     // ---- 4. leverage mismatch → close + alert ----
     if (Number(filled.leverage) > 0 && Math.abs(filled.leverage - sizing.leverage) >= 1) {
       log('leverage-mismatch', `planned ${sizing.leverage}x, exchange ${filled.leverage}x → flatten`);
-      await this._port.close({ positionId: filled.id });
-      this._alertCall(`⚠️ LEVERAGE MISMATCH on ${filled.pair}: planned ${sizing.leverage}x, exchange ${filled.leverage}x. Position FLATTENED.`);
-      return { ok: false, stage: 'leverage-mismatch', error: `exchange leverage ${filled.leverage}x ≠ planned ${sizing.leverage}x — flattened` };
+      // v21.1.1 [audit B9]: flatten VERDICT check + retry — pehle close ka
+      // result ignore hota tha aur alert unconditional "FLATTENED" bolta
+      // tha. Close reject/time-out ho to message jhoot bolta tha aur position
+      // naked reh jaati thi. Ab: retry ×2, phir HONEST failure alert.
+      const levFlat = await this._flattenWithRetry(filled);
+      if (levFlat.ok) {
+        this._alertCall(`⚠️ LEVERAGE MISMATCH on ${filled.pair}: planned ${sizing.leverage}x, exchange ${filled.leverage}x. Position FLATTENED.`);
+      } else {
+        this._alertCall(`🚨 LEVERAGE MISMATCH on ${filled.pair}: planned ${sizing.leverage}x, exchange ${filled.leverage}x. FLATTEN FAILED (${levFlat.error}) — MANUAL CLOSE KARO, position abhi bhi khuli hai!`);
+      }
+      return { ok: false, stage: 'leverage-mismatch', error: `exchange leverage ${filled.leverage}x ≠ planned ${sizing.leverage}x — ${levFlat.ok ? 'flattened' : `flatten FAILED: ${levFlat.error}`}` };
     }
 
     // ---- 5. setProtection({sl, tp}) → read-back confirm ----
@@ -196,9 +204,14 @@ export class PositionManager {
     if (!protRes?.ok) {
       // PROTECTION FAILED → flatten immediately (the CORE RULE)
       log('protection-fail', `setProtection failed: ${protRes?.error} → FLATTEN per core rule`);
-      await this._port.close({ positionId: filled.id });
-      this._alertCall(`🚨 PROTECTION MISSING on ${filled.pair}: setProtection failed (${protRes?.error}). Position FLATTENED — no naked leveraged position left open.`);
-      return { ok: false, stage: 'protection-fail', error: `setProtection failed: ${protRes?.error} — flattened` };
+      // v21.1.1 [audit B9]: verdict-checked flatten (upar wale jaisa hi)
+      const protFlat = await this._flattenWithRetry(filled);
+      if (protFlat.ok) {
+        this._alertCall(`🚨 PROTECTION MISSING on ${filled.pair}: setProtection failed (${protRes?.error}). Position FLATTENED — no naked leveraged position left open.`);
+      } else {
+        this._alertCall(`🚨🚨 PROTECTION MISSING on ${filled.pair}: setProtection failed (${protRes?.error}) AUR FLATTEN BHI FAIL (${protFlat.error}) — NAKED LEVERAGED POSITION. MANUAL CLOSE KARO ABHI!`);
+      }
+      return { ok: false, stage: 'protection-fail', error: `setProtection failed: ${protRes?.error} — ${protFlat.ok ? 'flattened' : `flatten FAILED: ${protFlat.error}`}` };
     }
 
     // ---- 6. record state for the exit ladder ----
@@ -432,7 +445,13 @@ export class PositionManager {
         else { actions.push({ id: p.id, kind: 'reversal-close:failed', classes: n, close: res }); this._alertCall(`🚨 REVERSAL close FAILED on ${p.pair}: ${res?.error || 'unknown'} — retry next candle, exchange app check karo!`); }
       } else if (n >= this._cfg.revClassesReduce) {
         // 50% of what is STILL open (T1/T2 may already have trimmed the position)
+        // v21.1.1 [audit B18]: qty>0 guard — sub-precision rounding 0 de sakti
+        // thi (T1/T2 ke baad tiny book) → reduce({qty:0}) invalid call.
         const reduceQty = qtyR((Number(p.qty) > 0 ? Number(p.qty) : st.qty) * 0.5);
+        if (!(reduceQty > 0)) {
+          actions.push({ id: p.id, kind: 'reversal-reduce:skip', classes: n, note: 'reduceQty rounded to 0 (dust book) — SL-tighten hi guard hai' });
+          continue;
+        }
         const res = await this._port.reduce({ positionId: p.id, qty: reduceQty });
         if (res?.ok) { st.qty = Math.max(0, st.qty - reduceQty); actions.push({ id: p.id, kind: 'reversal-reduce', classes: n, reduceQty }); }
         else { actions.push({ id: p.id, kind: 'reversal-reduce:failed', classes: n, reduceQty, close: res }); this._alertCall(`⚠️ REVERSAL reduce FAILED on ${p.pair}: ${res?.error || 'unknown'} — retry next candle.`); }
@@ -451,6 +470,27 @@ export class PositionManager {
   }
 
   // ---- helpers ----
+
+  /**
+   * v21.1.1 [audit B9]: verdict-checked flatten with one retry.
+   * Pehle call-sites `await this._port.close()` ka result ignore karti
+   * thi aur unconditional "FLATTENED" alert bhejti thi. Paper/ApiPort ka
+   * close {ok:false, error} return kar sakta hai (200-wrapped rejection /
+   * timeout) — us case me position naked reh jaati thi aur message jhoot
+   * bolta tha. Retry ×2 (1s gap), phir honest verdict.
+   */
+  async _flattenWithRetry(filled, { retries = 1, log = () => {} } = {}) {
+    let lastErr = 'unknown';
+    for (let i = 0; i <= retries; i++) {
+      try {
+        const res = await this._port.close({ positionId: filled.id });
+        if (res?.ok !== false) return { ok: true, res };
+        lastErr = String(res?.error || 'wrapped rejection');
+      } catch (e) { lastErr = String(e?.message || e); }
+      if (i < retries) await new Promise(r => setTimeout(r, 1000));
+    }
+    return { ok: false, error: lastErr };
+  }
   _tierLeverage(tier, signal) {
     // map signal tier + verifiedScore + regimeAligned + slDistPct + fundingNormal → 5/7/10x
     // (delegates to sizing.js::tierLeverage — static import; the old dynamic

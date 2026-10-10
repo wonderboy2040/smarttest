@@ -19,7 +19,7 @@
 //   └ LIVE LOG         every scan decision (entry/skip/exit/error)
 //
 // The agent runs SERVER-SIDE (60s loop). This panel polls /api/ai/agent
-// every 15s — start/stop are real API calls, not local state.
+// every 30s — start/stop are real API calls, not local state.
 // ============================================================
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { fetchAgentStatus, startAgent, stopAgent, saveAgentConfig } from './useAITrading';
@@ -566,7 +566,7 @@ export const AgentPanel = memo(function AgentPanel({ notify }: { notify: (ok: bo
         <div className="quantum-panel rounded-2xl p-6 text-center border border-amber-500/20">
           <div className="text-3xl mb-2">⚠️</div>
           <div className="text-xs text-amber-300 font-bold">Agent status unavailable</div>
-          <div className="text-[11px] text-slate-500 mt-1">Server jagg raha hai ya network slow hai — har 15s me retry ho raha hai. Pehla response aane ke baad panel ms-level fast ho jata hai.</div>
+          <div className="text-[11px] text-slate-500 mt-1">Server jagg raha hai ya network slow hai — har 30s me retry ho raha hai. Pehla response aane ke baad panel ms-level fast ho jata hai.</div>
           <button onClick={() => { setViewFailed(false); load(); }} className="mt-3 px-3 py-1.5 rounded-lg text-[10px] font-black quantum-btn-ghost">↻ Retry now</button>
         </div>
       );
@@ -599,7 +599,7 @@ export const AgentPanel = memo(function AgentPanel({ notify }: { notify: (ok: bo
       {/* v9.2.1: transient poll failure — old status stays, flagged */}
       {stalePoll && (
         <div className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[10px] text-amber-300 font-semibold">
-          ⚠️ Live status update fail — purana status dikh raha hai, har 15s auto-retry jaari
+          ⚠️ Live status update fail — purana status dikh raha hai, har 30s auto-retry jaari
         </div>
       )}
       {/* header */}

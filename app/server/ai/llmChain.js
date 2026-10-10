@@ -329,6 +329,11 @@ export async function councilAskVision(prompt, images, deps = null, opts = {}) {
   if (!Array.isArray(images) || images.length === 0) return { json: null, model: null };
   const visionModel = ollamaVisionModel();
   if (!visionModel) return { json: null, model: null };
+  // v21.1.1 [audit C3]: isolated breaker ko FAST-FAIL me consult karo —
+  // breaker arm tha par call se PEHLE check nahi hota tha, isliye cooldown
+  // ke dauraan har vision request full 90s timeout tak jalati thi. Ab
+  // cooldown = instant skip (expiry par auto-retry).
+  if (engineSkip('ollama-vision')) return { json: null, model: null };
   const reachable = await ollamaProbe().catch(() => false);
   if (!reachable) return { json: null, model: null };
   // v21.0.6 [audit B2]: vision failures apna ALAG circuit breaker

@@ -158,7 +158,14 @@ async function _chainFor(underlying, fetchChain) {
       return chain;
     }
   } catch { /* live path down — stale-cache/BS degrade */ }
-  return c?.chain || null;
+  // v21.1.1 [audit C1]: stale fallback ab AGE-BOUNDED (5 min). Pehle
+  // whatever-old chain serve hota tha fresh ts stamp ke saath — Groww
+  // outage me SL/T1/T2/EOD exits FROZEN premiums pe evaluate hote the
+  // jabki desk khud BS synthetic pe degrade chuka hota (desk aur paper
+  // engine visibly disagree). 5-min se purani chain ab null return hoti
+  // hai → neeche ka BS honest fallback (fresh Yahoo spot) chalta hai.
+  if (c && Date.now() - c.at < 5 * 60_000) return c.chain;
+  return null;
 }
 
 function _chainLtpFor(chain, t) {
@@ -248,7 +255,7 @@ export function openPaperTrade(input) {
   if (isOption) {
     const u = String(underlying || '').trim().toUpperCase();
     if (!OPTION_UNDERLYINGS.has(u)) {
-      return { error: `Option paper trade: unsupported underlying "${u || '—'}" (NIFTY/SENSEX supported).` };
+      return { error: `Option paper trade: unsupported underlying "${u || '—'}" (supported: NIFTY, SENSEX, BANKNIFTY, FINNIFTY, MIDCPNIFTY, NIFTYNXT50).` };
     }
     const k = Number(strike);
     if (!(Number.isFinite(k) && k > 0)) return { error: 'Option paper trade: valid strike required.' };
@@ -902,4 +909,12 @@ export function _resetForTests(seed) {
   _state = structuredClone(seed || { trades: [], nextId: 1, dayKey: istDayKey() });
   _circuitAlertAt.clear();
   _chainQuoteCache.clear(); // v21.0.6: live-chain reprice cache (fake timers me TTL freeze hota hai)
+}
+
+/** v21.1.1 test hook: chain-cache entries ko X ms "age" karo — stale-bound
+ * behavior (5-min) verify karne ke liye (audit C1 test). */
+export function __ageChainCacheForTests(ms) {
+  for (const [k, v] of _chainQuoteCache.entries()) {
+    _chainQuoteCache.set(k, { chain: v.chain, at: (v.at || Date.now()) - Math.max(0, Number(ms) || 0) });
+  }
 }

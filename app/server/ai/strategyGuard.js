@@ -35,14 +35,28 @@ import { __ledgerRaw } from './ledger.js';
 
 // ---- tunables (env-mappable) ----
 function _numEnv(name, def) {
-  const n = Number(process.env[name]);
-  return Number.isFinite(n) ? n : def;
+  // v21.1.1 [audit A12]: empty string Number('')===0 footgun — stray
+  // `STRATEGY_KILL_WINDOW=` export window 0 kar deta tha (rule silently
+  // disabled). Ab sirf non-empty, finite, POSITIVE values override karte
+  // hain; warna default.
+  const raw = String(process.env[name] ?? '').trim();
+  if (!raw) return def;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : def;
 }
 export const KILL_RULE = {
   window: _numEnv('STRATEGY_KILL_WINDOW', 30),          // rolling trades
   minTrades: _numEnv('STRATEGY_KILL_MIN_TRADES', 30),   // itne settled hone hi chahiye
   maxExpectancy: _numEnv('STRATEGY_KILL_EXPECTANCY', 0), // < ye → paused
 };
+// v21.1.1 [audit A12]: mismatch guard — window < minTrades ho to rule kabhi
+  // trigger hi nahi hota (winR.length >= minTrades unreachable). Clamp karo
+  // aur ek warning line do taaki silent-disable na ho.
+if (KILL_RULE.minTrades > KILL_RULE.window) {
+  // eslint-disable-next-line no-console
+  console.warn(`[strategyGuard] STRATEGY_KILL_MIN_TRADES (${KILL_RULE.minTrades}) > STRATEGY_KILL_WINDOW (${KILL_RULE.window}) — window ko minTrades tak clamp kiya (warna rule silently disabled rehta)`);
+  KILL_RULE.window = KILL_RULE.minTrades;
+}
 export const GO_LIVE = {
   minTrades: _numEnv('GO_LIVE_MIN_TRADES', 100),
   minExpectancyR: _numEnv('GO_LIVE_MIN_EXPECTANCY_R', 0),
@@ -65,7 +79,7 @@ async function _notifyPause(key, reason) {
     _pauseNotifiedAt[key] = now;
     const { sendTelegramMessage, telegramConfig } = await import('./secrets.js');
     const tg = typeof telegramConfig === 'function' ? (telegramConfig() || {}) : {};
-    await sendTelegramMessage(`🛑 STRATEGY PAUSED: ${key} — rolling ${KILL_RULE.window}-trade expectancy negative (${reason}). Naye entries reject ho rahe hain; expectancy recover hone par auto-resume.`, { token: tg.token || process.env.TG_TOKEN || '', chatId: tg.chatId || process.env.TG_CHAT_ID || '' });
+    await sendTelegramMessage(`🛑 STRATEGY PAUSED: ${key} — rolling ${KILL_RULE.window}-trade expectancy negative (${reason}). LIVE entries reject ho rahe hain (paper continue — window refresh hota rahega); expectancy recover hone par auto-resume.`, { token: tg.token || process.env.TG_TOKEN || '', chatId: tg.chatId || process.env.TG_CHAT_ID || '' });
   } catch { /* best-effort */ }
 }
 
@@ -125,7 +139,7 @@ export function strategyGuardBlocked(source, market) {
     if (!row || !row.paused) return { blocked: false };
     return {
       blocked: true,
-      reason: `Strategy ${key} AUTO-PAUSED — rolling ${KILL_RULE.window}-trade expectancy ${row.rolling.expectancyR}R negative (winRate ${row.rolling.winRate}%, n=${row.rolling.n}/${KILL_RULE.minTrades}). Expectancy recover hone par auto-resume.`,
+      reason: `Strategy ${key} AUTO-PAUSED — rolling ${KILL_RULE.window}-trade expectancy ${row.rolling.expectancyR}R negative (winRate ${row.rolling.winRate}%, n=${row.rolling.n}/${KILL_RULE.minTrades}). LIVE entries blocked; paper chalta rahega. Expectancy recover hone par auto-resume.`,
     };
   } catch { return { blocked: false }; } // guard must never break trading flow
 }

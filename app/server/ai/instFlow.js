@@ -271,6 +271,11 @@ export function instFlowStatus() {
     india: _fii ? {
       ageH: Math.round((Date.now() - _fii.at) / 3600000 * 10) / 10,
       asOf: _fii.asOf, fiiNetCr: _fii.fiiNet, diiNetCr: _fii.diiNet, combinedNetCr: _fii.combinedNet,
+      // v21.1.1 [audit C6]: v21.1.0 ka fiiBuyCr/fiiSellCr accumulation fix
+      // parse me sahi hai par status consumer tak pahunchta hi nahi tha
+      // (dead payload). Ab exposed — vote reason/UI me use ho sakta hai.
+      fiiBuyCr: _fii.fiiBuyCr ?? null,
+      fiiSellCr: _fii.fiiSellCr ?? null,
     } : null,
     crypto: {
       booksTracked: Object.keys(books).length,

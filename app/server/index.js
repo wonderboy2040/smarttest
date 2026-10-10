@@ -1299,10 +1299,15 @@ initInStream({ fetchGrowwNseQuote, fetchYahooQuote, toYahooSymbol });
 // bina PaaS pe default-on, bare-metal/local pe default-off. XFF parse
 // LAST-entry leta hai (single-hop proxy ke liye spoof-resistant — client ke
 // fake XFF ke baad appended real IP last me rehta hai).
+// v21.1.1 [audit B15]: explicit override ab 1/true/yes/ON accept karta hai
+// (TRUST_PROXY=true pehle silently OFF rehta tha); PaaS hint me "false"/"0"
+// string-values ab ignore hote hain (RENDER="false" trust enable nahi karega).
 const _TRUST_PROXY_EXPLICIT = process.env.TRUST_PROXY !== undefined;
-const _PAAS_HINT = String(process.env.RENDER || process.env.DYNO || process.env.RAILWAY_ENVIRONMENT || '').length > 0;
+const _TRUST_PROXY_TRUE = ['1', 'true', 'yes', 'on'].includes(String(process.env.TRUST_PROXY || '').trim().toLowerCase());
+const _PAAS_HINT = [process.env.RENDER, process.env.DYNO, process.env.RAILWAY_ENVIRONMENT]
+  .some(v => { const s = String(v || '').trim().toLowerCase(); return s.length > 0 && s !== 'false' && s !== '0' && s !== 'no' && s !== 'off'; });
 const TRUST_PROXY = _TRUST_PROXY_EXPLICIT
-  ? String(process.env.TRUST_PROXY) === '1'
+  ? _TRUST_PROXY_TRUE
   : _PAAS_HINT;
 function _isLoopback(ip) {
   const s = String(ip || '');
@@ -3298,6 +3303,26 @@ try {
 } catch (e) {
   console.warn('[mcp/durable] boot restore error:', e?.message || e);
 }
+
+// ------------------------------------------------------------
+// v21.1.1 [audit B2]: exec-stack RE-HYDRATE after durable restore.
+// Pehle hydrate (exec-arm section) durableBootRestoreAll se PEHLE chalta
+// tha — ephemeral-FS deploys (Render) par journal us waqt khali hota hai,
+// seconds baad durable backup se restore hota hai, aur PM ladder-state
+// kabhi nahi banta. Futures watcher phir un rows ko skip karta tha
+// ("PM manage karta hai" — jo tha hi nahi) → restored live positions ka
+// koi T1/T2/trail/SL-hit management nahi, sirf native exchange SL bachata.
+// hydrateFromJournal idempotent hai (existing ids skip) isliye restore ke
+// baad ek baar aur chalana safe hai.
+// ------------------------------------------------------------
+try {
+  if (_positionManager?.hydrateFromJournal) {
+    const { loadJSON } = await import('./lib/store.js');
+    const j = loadJSON('ai-trading-journal.json', { entries: [], positions: [] });
+    const n = _positionManager.hydrateFromJournal((j?.positions) || []) || 0;
+    if (n > 0) console.log(`[exec-stack] post-restore hydrate: ${n} exec-enter position(s) durable journal se ladder me`);
+  }
+} catch (e) { console.log(`[exec-stack] post-restore hydrate skip: ${String(e?.message || e).slice(0, 80)}`); }
 
 // v10.13 (deep-recheck L-8): capture the server so graceful shutdown can
 // drain in-flight responses before exiting.

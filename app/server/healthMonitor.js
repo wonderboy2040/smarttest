@@ -35,6 +35,8 @@ const _state = { timer: null, inited: false };
 const ALERT_THROTTLE_MS = 15 * 60_000;
 export const FEED_STALE_ALERT_SEC = 90;   // armed feed itna stale → alert
 export const HEARTBEAT_STALE_SEC = 30;   // exec heartbeat stale window
+// v21.1.1 [audit A13]: data-dir probe 60s cache (request-path sync FS off)
+const _probeCache = { at: 0, dataDirs: null };
 
 async function _sendTelegram(text) {
   try {
@@ -73,28 +75,49 @@ export async function healthSnapshot() {
     const { feedAges, feedStatus } = await import('./liveFeed.js');
     const ages = feedAges();
     const booleans = feedStatus();
+    // v21.1.1 [audit A3]: India sources (groww-live/yahoo-delayed) sirf NSE
+    // hours me tick karte hain — market band hone ke baad unka "stale" hona
+    // NORMAL hai, down nahi. Raat/weekend pe false feeds_stale alerts + red
+    // FEEDS chip the. Ab India sources market-closed pe stale-count me nahi
+    // aate (crypto feeds 24/7 hain, wo pehle jaise).
+    let nseOpen = null;
+    try {
+      const { isNseMarketOpen } = await import('./intraday/time.js');
+      nseOpen = isNseMarketOpen();
+    } catch { nseOpen = null; /* time.js unavailable — unfiltered (safe) */ }
+    const INDIA_FEED_SOURCES = new Set(['groww-live', 'yahoo-delayed', 'groww', 'yahoo']);
     let staleArmed = [];
     for (const [src, a] of Object.entries(ages)) {
       out.feeds.sources[src] = { ...a, live: booleans[src] === true };
+      if (INDIA_FEED_SOURCES.has(String(src).toLowerCase()) && nseOpen === false) continue;
       if (a.ageSec > FEED_STALE_ALERT_SEC) staleArmed.push(src);
     }
     out.feeds.staleSources = staleArmed;
   } catch { out.feeds.sources = { error: 'liveFeed unavailable' }; }
 
   // ---- FEEDS: dedicated WS health (futures/spot/binance) ----
+  // v21.1.1 [audit A2]: IDLE-AWARE armed tracking. Ye streams refcounted hain
+  // — koi SSE/browser client nahi to _stopIfIdle() socket band kar deta hai
+  // (healthy:false, ageSec:null = IDLE, DOWN nahi). Headless deploys pe iska
+  // matlab tha: har 15 min "WebSocket down" false alert. Ab armed = active
+  // subscribers (futures/glob domains) ya tier wantOpen.
+  let _cxArmed = false;
   try {
     const { cxRtWsStatus } = await import('./ai/cxRtStream.js');
     const cx = cxRtWsStatus();
+    _cxArmed = cx?.enabled === true && ((cx?.domains?.fut || 0) + (cx?.domains?.glob || 0)) > 0;
     out.feeds.ws.coindcxFutures = {
       healthy: cx?.healthy === true,
       lastTickAt: cx?.lastTickAt ?? null,
       ageSec: cx?.lastTickAt ? Math.max(0, Math.round((now - cx.lastTickAt) / 1000)) : null,
+      armed: _cxArmed, // idle-by-design (no subscribers) = alerting nahi hogi
     };
     if (cx?.spotWs) {
       out.feeds.ws.coindcxSpot = {
         healthy: cx.spotWs.healthy === true,
         lastUpdateAt: cx.spotWs.lastUpdateAt ?? null,
         ageMs: cx.spotWs.ageMs ?? null,
+        armed: _cxArmed,
       };
     }
   } catch { /* cxRtStream not armed */ }
@@ -105,6 +128,7 @@ export async function healthSnapshot() {
       healthy: b?.healthy === true,
       lastTickAt: b?.lastTickAt ?? null,
       ageSec: b?.lastTickAt ? Math.max(0, Math.round((now - b.lastTickAt) / 1000)) : null,
+      armed: b?.enabled === true && b?.wantOpen === true,
     };
   } catch { /* binanceFutWs not armed */ }
 
@@ -150,37 +174,55 @@ export async function healthSnapshot() {
     try {
       const hb = JSON.parse(fs.readFileSync(hbFile, 'utf8'));
       hbAt = Number(hb?.at) || null;
+      // v21.1.1 [audit A9]: 24h+ purani heartbeat = PREVIOUS run ki chhodi
+      // hui file (current boot me reconciler armed nahi hai). Alert nahi —
+      // warna har plain `npm start` boot pe permanent false "reconcile stuck".
+      if (hbAt && now - hbAt > 24 * 3600_000) hbAt = null;
     } catch { /* file nahi hai = reconciler not armed — ageSec null (honest) */ }
     out.persist.execHeartbeat = { at: hbAt, ageSec: hbAt ? Math.max(0, Math.round((now - hbAt) / 1000)) : null };
   } catch { /* heartbeat read best-effort */ }
   try {
     const fs = await import('node:fs');
-    // Dono persist dirs: lib/store.js ka DATA_DIR (env-respecting —
-    // SMARTAI_DATA_DIR override bhi cover) aur app/data (bot lab + exec
-    // heartbeat — reconciler). ReadOnly mount ya disk-full pe pehla write
-    // hi fail hota hai.
-    out.persist.dataDirs = {};
-    let storeDir = path.join(_APP_ROOT, 'server', 'data');
-    try {
-      const { DATA_DIR } = await import('./lib/store.js');
-      if (DATA_DIR) storeDir = DATA_DIR;
-    } catch { /* default path */ }
-    for (const dir of [storeDir, path.join(_APP_ROOT, 'data')]) {
-      const label = path.basename(path.dirname(dir)) === 'app' ? 'app/data' : `server-data(${path.basename(dir)})`;
-      const probe = path.join(dir, `.health-probe-${process.pid}`);
+    // v21.1.1 [audit A13]: probe result 60s cache — pehle HAR /api/health
+    // request (2 strips × 30s poll) + 60s loop pe 2 dirs × (mkdir+write+
+    // unlink) sync FS chalte the. Ab max ek probe/min.
+    if (_probeCache.at && now - _probeCache.at < 60_000) {
+      out.persist.dataDirs = { ..._probeCache.dataDirs };
+    } else {
+      // Dono persist dirs: lib/store.js ka DATA_DIR (env-respecting —
+      // SMARTAI_DATA_DIR override bhi cover) aur app/data (bot lab + exec
+      // heartbeat — reconciler). ReadOnly mount ya disk-full pe pehla write
+      // hi fail hota hai.
+      const dataDirs = {};
+      let storeDir = path.join(_APP_ROOT, 'server', 'data');
       try {
-        fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(probe, String(now));
-        fs.unlinkSync(probe);
-        out.persist.dataDirs[label] = true;
-      } catch { out.persist.dataDirs[label] = false; }
+        const { DATA_DIR } = await import('./lib/store.js');
+        if (DATA_DIR) storeDir = DATA_DIR;
+      } catch { /* default path */ }
+      for (const dir of [storeDir, path.join(_APP_ROOT, 'data')]) {
+        const label = path.basename(path.dirname(dir)) === 'app' ? 'app/data' : `server-data(${path.basename(dir)})`;
+        const probe = path.join(dir, `.health-probe-${process.pid}`);
+        try {
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(probe, String(now));
+          fs.unlinkSync(probe);
+          dataDirs[label] = true;
+        } catch { dataDirs[label] = false; }
+      }
+      _probeCache.at = now;
+      _probeCache.dataDirs = dataDirs;
+      out.persist.dataDirs = { ...dataDirs };
     }
     out.persist.dataDirWritable = Object.values(out.persist.dataDirs).every(Boolean) === true;
   } catch { out.persist.dataDirWritable = false; out.persist.dataDirs = { error: 'probe failed' }; }
 
   // ---- overall ok ----
-  const killActive = out.kills?.aiDesk?.enabled === true || (out.kills?.exec?.level || 0) > 0;
-  out.ok = !killActive;
+  // v21.1.1 [audit A10]: ok ab kills KE SAATH persist-failures + Bot Lab
+  // global pause bhi dekhta hai — read-only disk pe bhi automated monitors
+  // ko red milna chahiye (pehle sirf kills dikhte the).
+  const killActive = out.kills?.aiDesk?.enabled === true || (out.kills?.exec?.level || 0) > 0 || out.kills?.botLab?.globalPause === true;
+  const persistBad = out.persist?.dataDirWritable === false;
+  out.ok = !killActive && !persistBad;
   return out;
 }
 
@@ -195,8 +237,11 @@ async function _healthAlertTick() {
   }
 
   // (2) WS health (futures perp feed is the live-trading critical one)
+  // v21.1.1 [audit A2]: sirf ARMED streams alert hote hain (active
+  // subscribers / wantOpen). Idle-by-design (koi client nahi) = normal.
   const wsStale = [];
   for (const [k, v] of Object.entries(snap.feeds?.ws || {})) {
+    if (v?.armed === false) continue; // idle-by-design — not down
     if (v?.healthy === false && (v.ageSec == null || v.ageSec > FEED_STALE_ALERT_SEC)) wsStale.push(k);
   }
   if (wsStale.length > 0) {
@@ -217,7 +262,8 @@ async function _healthAlertTick() {
 
   // (5) data dir read-only (Render disk full / ephemeral mount gone)
   if (snap.persist?.dataDirWritable === false) {
-    _throttledAlert('disk_ro', '🩺 HEALTH: server/data write FAIL — journal/ledger persist nahi ho rahe! Render disk full ya read-only mount check karo.');
+    const bad = Object.entries(snap.persist?.dataDirs || {}).filter(([, ok]) => ok === false).map(([d]) => d).join(', ') || 'data dirs';
+    _throttledAlert('disk_ro', `🩺 HEALTH: data-dir write FAIL (${bad}) — journal/ledger/bot-state persist nahi ho rahe! Render disk full ya read-only mount check karo.`);
   }
 }
 
@@ -234,4 +280,5 @@ export function initHealthMonitor() {
 /** Tests ke liye — throttle map reset. */
 export function _resetForTests() {
   for (const k of Object.keys(_alertLastAt)) delete _alertLastAt[k];
+  _probeCache.at = 0; _probeCache.dataDirs = null; // v21.1.1 [audit A13]
 }

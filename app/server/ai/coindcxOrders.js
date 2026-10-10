@@ -501,8 +501,14 @@ export async function executeSignal(opts) {
     } catch { /* guard unavailable — never break the flow */ }
   }
   // v21.1.0 (Phase-4): PER-STRATEGY KILL RULE — rolling 30-trade expectancy
-  // negative → us strategy ki naye entries reject (auto-resume on recovery).
-  {
+  // negative → us strategy ki LIVE entries reject (auto-resume on recovery).
+  // v21.1.1 [audit A1]: block ab LIVE-only. Pehle sab modes (paper bhi)
+  // block hote the — par settled trades sirf PASS hone wali entries se hi
+  // window me aate hain, to negative window kabhi update hi nahi hota tha
+  // = PERMANENT deadlock (recovery sirf 400-entry prune ya env override se).
+  // Paper continue karta hai → window refresh → expectancy recover → auto
+  // resume (jaisa UI/reason text ka promise hai).
+  if (wantMode === 'live') {
     try {
       const { strategyGuardBlocked } = await import('./strategyGuard.js');
       const g = strategyGuardBlocked(source, 'CRYPTO');
@@ -989,7 +995,9 @@ export async function watchPositions({ sendTelegram } = {}) {
     // --- reconcile UNKNOWN live positions ---
     for (const p of j.positions) {
       if (p.status !== 'UNKNOWN' || p.mode !== 'live') continue;
-      if (cfg.killSwitch) break; // no exchange calls while killed
+      // v21.1.1 [audit B11]: reconcile READ-ONLY hai (orders/status +
+      // active_orders) — kill switch ke under bhi chalta rahe warna UNKNOWN
+      // rows resolve hi nahi hote (pehle `break` tha — unblock kabhi nahi).
       if (!p.exchangeOrderId) {
         // v7.0.2: live UNKNOWN with NO order id used to be a silent
         // permanent dead zone — never reconciled, never SL/TP-watched,
@@ -1110,22 +1118,24 @@ export async function watchPositions({ sendTelegram } = {}) {
         // the honest journal note (definitive [4xx] rejections keep the
         // 60s retry — those moved no coins).
         if (p.closeRetryAfter && Date.now() < p.closeRetryAfter) continue;
-        // v18.9 KILL-SWITCH — documented contract is "one click → all
-        // auto/execution disabled", but SL/TP/liq closes still fired live
-        // market sells under kill. Now they suspend (once-per-day journal
-        // stamp per position + telegram) — paper simulation continues.
+        // v21.1.1 [audit B11]: KILL = NO NEW ENTRIES — EXITS AB ENFORCED.
+        // v18.9 ka behavior (kill ON → live SL/TP closes suspend, position
+        // manual control me) DANGEROUS inconsistency thi: futures desk kill
+        // ke under bhi SL/TP enforce karta tha, aur panic-me-kill dabane
+        // wala trader apne STOP LOSSES disarm karna nahi chahta — wo bot
+        // rokna chahta hai. Ab dono desks same semantics: entries block,
+        // exits (SL/TP/liq) chalte hain. Ek-baar journal note per position.
         if (p.mode === 'live' && cfg.killSwitch) {
           const kd = todayIST();
-          if (p._killSuspendedDay !== kd) {
-            p._killSuspendedDay = kd;
+          if (p._killExitsNoteDay !== kd) {
+            p._killExitsNoteDay = kd;
             dirty = true;
             pushEntry(j, {
               kind: 'WATCH_ERROR', day: kd, pair: p.pair,
-              reason: 'KILL SWITCH ON — is LIVE position ke auto SL/TP closes SUSPENDED (position open rehta hai, manual control). Paper positions simulate karte rahenge.',
+              reason: 'KILL SWITCH ON — naye entries blocked hai; is LIVE position ke SL/TP exits AB NORMAL ENFORCE honge (v21.1.1 fix — pehle suspend hote the, jo dangerous tha).',
             });
-            watchErrors.push({ pair: p.pair, reason: 'kill switch ON — live stops suspended (manual)' });
           }
-          continue;
+          // NO continue — watcher exits proceed under kill
         }
         const _wv = wickVerdicts.get(String(p.pair || '').replace(/INR$/, ''));
         if (_wv?.action === 'SUPPRESS') {
@@ -1325,6 +1335,28 @@ export async function watchPositions({ sendTelegram } = {}) {
         else if (p.tp2 != null && !p.tp2Hit && (long ? price >= p.tp2 : price <= p.tp2)) close = { reason: 'TARGET-2 hit', price, kind: 'TP2' };
         if (!close) continue;
 
+        // v21.1.1 [audit B3]: DUST GUARD HOISTED — pehle yahan order-placement ke
+        // BAAD aata tha: sub-minQty book pe market-sell pehle FIRE hoti thi, phir
+        // check. Exchange ne accept kiya to journal row hamesha OPEN reh jaati
+        // (har 60s pe re-sell fail = WATCH_ERROR spam); reject kiya to catch-block
+        // wala spam — guard apne hi purpose tak kabhi pahunchta hi nahi tha.
+        // Ab pehle check, phir order.
+        if (p.mode === 'live' && !(p.leverage > 1)) {
+          const dustMeta = await getPairMeta(p.pair).catch(() => null);
+          if (dustMeta && dustMeta.minQty > 0 && p.qty > 0 && p.qty < dustMeta.minQty) {
+            if (!p.dustBelowMin) {
+              p.dustBelowMin = true;
+              dirty = true;
+              pushEntry(j, {
+                kind: 'WATCH_ERROR', day: todayIST(), pair: p.pair,
+                reason: `DUST GUARD — remaining ${p.qty} is below the exchange minimum ${dustMeta.minQty}: market-sell reject loop se bachne ke liye auto-close skip. Exchange app me manually dispose karo.`,
+              });
+              watchErrors.push({ pair: p.pair, reason: `qty below exchange minimum (${p.qty} < ${dustMeta.minQty}) — manual disposal needed` });
+            }
+            continue;
+          }
+        }
+
         let closed = false;
         if (p.mode === 'live' && coindcxConnected()) {
           try {
@@ -1385,25 +1417,6 @@ export async function watchPositions({ sendTelegram } = {}) {
         }
         if (!closed) continue;
 
-        // v18.9 DUST GUARD — a remaining book below the exchange minimum
-        // can never be market-sold (a 422 loop with WATCH_ERROR + telegram
-        // spam every 60s). Alert once, flag honestly, keep watching.
-        if (p.mode === 'live') {
-          const dustMeta = await getPairMeta(p.pair).catch(() => null);
-          if (dustMeta && dustMeta.minQty > 0 && p.qty > 0 && p.qty < dustMeta.minQty) {
-            if (!p.dustBelowMin) {
-              p.dustBelowMin = true;
-              dirty = true;
-              pushEntry(j, {
-                kind: 'WATCH_ERROR', day: todayIST(), pair: p.pair,
-                reason: `DUST GUARD — remaining ${p.qty} is below the exchange minimum ${dustMeta.minQty}: market-sell reject loop se bachne ke liye auto-close skip. Exchange app me manually dispose karo.`,
-              });
-              watchErrors.push({ pair: p.pair, reason: `qty below exchange minimum (${p.qty} < ${dustMeta.minQty}) — manual disposal needed` });
-            }
-            continue;
-          }
-        }
-
         // v18.9 FEE HONESTY — booked P&L is NET of both-side taker fees
         // (AI_COINDCX_FEE_PCT, default 0.10%/side): the daily-loss cap and
         // the track record were systematically overstated on gross math.
@@ -1451,9 +1464,28 @@ export async function watchPositions({ sendTelegram } = {}) {
         } catch { /* best-effort */ }
       }
       if (watchErrors.length > 0) {
-        try {
-          await sendTelegram(`🤖 ⚠️ <b>AI Trading</b> — close/reconcile FAILED (will retry)\n${watchErrors.map(c => `• ${c.pair} — ${c.reason}`).join('\n')}\nCheck CoinDCX keys/balance — SL/TP cannot execute while this fails.`);
-        } catch { /* best-effort */ }
+        // v21.1.1 [audit B10]: per-pair 30-min throttle — persistent failures
+        // (bad keys, dust loop, below-min) pehle har 60s ek Telegram bhejte the
+        // → channel mute ka guaranteed raasta. Same pair+reason class ab
+        // 30 min me sirf ek baar alert hota hai; WATCH_ERROR journal entries
+        // pura audit trail rakhte hain.
+        const now = Date.now();
+        const fresh = watchErrors.filter(w => {
+          const key = `${w.pair}::${String(w.reason).split('(')[0].slice(0, 60)}`;
+          const last = _watchErrAlerts.get(key) || 0;
+          if (now - last < 30 * 60_000) return false;
+          _watchErrAlerts.set(key, now);
+          return true;
+        });
+        if (_watchErrAlerts.size > 200) { // bounded
+          for (const k of _watchErrAlerts.keys()) { _watchErrAlerts.delete(k); if (_watchErrAlerts.size <= 100) break; }
+        }
+        if (fresh.length > 0) {
+          try {
+            await sendTelegram(`🤖 ⚠️ <b>AI Trading</b> — close/reconcile FAILED (will retry)
+${fresh.map(c => `• ${c.pair} — ${c.reason}`).join('\n')}\nCheck CoinDCX keys/balance — SL/TP cannot execute while this fails.`);
+          } catch { /* best-effort */ }
+        }
       }
     }
     return closures;
@@ -1463,6 +1495,8 @@ export async function watchPositions({ sendTelegram } = {}) {
 }
 // v18.9 single-flight + feed-gate throttle state
 let _watchInflight = null;
+// v21.1.1 [audit B10]: per-pair watch-error telegram throttle (pair::reason → last alert ts)
+const _watchErrAlerts = new Map();
 let _lastFeedGateDay = null, _lastFeedGateAt = 0, _lastFeedGapAt = 0;
 
 function loadCredsForOrder() {
@@ -1949,6 +1983,7 @@ export function __resetForTests() {
   _marginPairsAt = 0;
   // v18.9: watcher single-flight + feed-gate throttle state resets too
   _watchInflight = null;
+  _watchErrAlerts.clear();
   _lastFeedGateDay = null; _lastFeedGateAt = 0; _lastFeedGapAt = 0;
   // v6.7: the signal ledger resets with the journal (same test hygiene)
   try { __setLedgerForTests(null); } catch { /* best-effort */ }

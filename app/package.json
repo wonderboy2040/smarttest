@@ -1,7 +1,7 @@
 {
   "name": "advance-pro-intelligence",
   "private": true,
-  "version": "21.1.0",
+  "version": "21.1.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -52,7 +52,8 @@
   },
   "description": "SmartAI Pro v21 - Three-Desk Trading Terminal (deduped committee + Ollama superintelligence + vision seat + telegram self-heal)",
   "overrides": {
-    "qs": "^6.16.0"
+    "qs": "^6.16.0",
+    "proxy-addr": "^2.0.8"
   },
   "engines": {
     "node": ">=20"

@@ -32,7 +32,7 @@ import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfC
 // decisions (Phase 1A), shadow-gated (Phase 2) + honesty-gated (1B)
 // + correlation-discounted (1C), warmed at T3 cadence only (Phase 3).
 import { warmMeshModels, applyMeshModelGating } from './meshModels.js';
-import { applyCoreCorrelationDiscounts } from './seatCorrelation.js';
+import { applyCoreCorrelationDiscounts, coreSeatCorrelationView } from './seatCorrelation.js';
 // v2 signal-accuracy upgrade: sentiment (news/F&G/funding), institutional
 // flow (FII/DII + orderbook), fundamentals (India swing-only deep path)
 import { refreshSentiment, sentimentContextFor, absorbCouncilSentiment } from './sentiment.js';
@@ -58,6 +58,40 @@ import { applySignalTrustGuards, remember, pinHoldingOnBoard, __resetSignalMemor
 import { QUALITY_PULLBACK_SCORE_MUL, QUALITY_EXTENDED_SCORE_MUL, QUALITY_HARD_SCORE_MUL } from './entryTiming.js';
 import { discoverSpotUniverse, discoverFuturesUniverse, binancePriceMap, fetchUsdInr, expertScoreFactors } from './expertPicks.js';
 import { validateTick } from './wickFilter.js';
+
+/**
+ * v21.1.1 [audit C2]: REVIVED VOTES ko correlation discount dobara lagao.
+ * Pass-1 `applyCoreCorrelationDiscounts` pass-2 revival (smc/structure/
+ * tape/pattern… splice+push) se PEHLE chalta hai — revived vote fresh
+ * weight le aata hai, discount GAYA. India path pe tape seat har cycle
+ * revive hota hai (trend↔tape is the PRIMARY dedup pair) — yani headline
+ * false-diversity fix wahi undo ho raha tha. Ye helper sirf un votes ko
+ * touch karta hai jinpe corrDiscounted laga hi nahi (idempotent — already-
+ * discounted votes untouched).
+ */
+function _rediscountRevivedVotes(votes) {
+  try {
+    if (!Array.isArray(votes) || votes.length === 0) return votes;
+    const v = coreSeatCorrelationView();
+    if (!v || !v.pairs) return votes;
+    const discountBySeat = {};
+    for (const key of Object.keys(v.pairs)) {
+      const pr = v.pairs[key];
+      if (pr && Number.isFinite(pr.discount) && pr.discount > 0 && pr.discount < 1) {
+        discountBySeat[pr.redundant] = Math.min(discountBySeat[pr.redundant] ?? 1, pr.discount);
+      }
+    }
+    if (Object.keys(discountBySeat).length === 0) return votes;
+    for (let i = 0; i < votes.length; i++) {
+      const vt = votes[i];
+      if (!vt || !vt.id || vt.corrDiscounted === true) continue; // pass-1 wale already discounted
+      const disc = discountBySeat[vt.id];
+      if (!Number.isFinite(disc) || disc >= 1) continue;
+      votes[i] = { ...vt, weight: Math.round((vt.weight || 0) * disc * 1000) / 1000, corrDiscount: disc, corrDiscounted: true, corrRediscounted: true };
+    }
+    return votes;
+  } catch { return votes; /* guard must never break the board */ }
+}
 import { readDepth, warmDepthBatch } from './orderFlowDepth.js';
 // v11.8: REAL option-chain ctx for the India index seats (OptionsFlow
 // was designed for exactly NIFTY/BANKNIFTY but the board never attached
@@ -1596,7 +1630,7 @@ async function _computeBoard(mkt, deps, opts = {}) {
         }
       }
     }
-    const consensus = aggregateVotes(votes, gatesFor(depsSafe));
+    const consensus = aggregateVotes(_rediscountRevivedVotes(votes), gatesFor(depsSafe));
     if (consensus.dir > 0) breadth.bull++;
     else if (consensus.dir < 0) breadth.bear++;
     else breadth.flat++;
@@ -2683,7 +2717,7 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
   // the LLM actually sees the symbol, price and indicator state it is
   // being asked to verify — 'PENDING'/conf 0 starved the prompt.
   // v10.5: MTF agreement caps STRONG here too when the tape read conflicts.
-  const preConsensus = aggregateVotes(votes, gatesFor(deps), _deepMtfAgreement != null ? { mtfAgreement: _deepMtfAgreement } : {});
+  const preConsensus = aggregateVotes(_rediscountRevivedVotes(votes), gatesFor(deps), _deepMtfAgreement != null ? { mtfAgreement: _deepMtfAgreement } : {});
   // v20.6.1: deep path → aiCouncilVerify gets opts.deep=true → council
   // uses OLLAMA_DEEP_MODEL (deepseek-r1:14b) instead of OLLAMA_MODEL
   // (qwen3:8b). On 16GB with OLLAMA_MAX_LOADED_MODELS=1, Ollama auto-

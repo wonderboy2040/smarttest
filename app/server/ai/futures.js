@@ -101,6 +101,8 @@ const inrOfUsdt = (usdt, usdInr) => (Number.isFinite(usdt) ? Math.round(usdt * u
 
 // ---------------- PUBLIC: RT prices ----------------
 let _pricesCache = null, _pricesAt = 0;
+// v21.1.1 [audit B10]: futures watcher per-pair error-telegram throttle (pair::reason → last ts)
+const _futWatchErrAlerts = new Map();
 let _pricesInflight = null; // v10.10: single-flight — the 2s RT stream + board compute share ONE round-trip
 // v11.3: deep-stale window — the LAST resort before throwing. A
 // 3-min-old official book keeps the futures board alive (and honest —
@@ -1052,7 +1054,10 @@ export async function executeFuturesSignal(opts) {
       if (g.blocked) return reject(g.reason, g.reason, { goLiveGate: g.readiness?.stats });
     } catch { /* guard unavailable — never break the flow */ }
   }
-  {
+  // v21.1.1 [audit A1]: per-strategy kill rule ab LIVE-only block karta hai —
+  // paper continue (window refresh → recovery possible). Pehle all-modes
+  // block ek one-way latch tha (deadlock): settled trades pass-only aate hain.
+  if (wantMode === 'live') {
     try {
       const { strategyGuardBlocked } = await import('./strategyGuard.js');
       const g = strategyGuardBlocked(source, 'FUTURES');
@@ -1363,6 +1368,12 @@ export async function executeFuturesSignal(opts) {
           tpslFailed = true;
           tpslNote = `native TP/SL FAILED twice (${String(tpsl?.error || '').slice(0, 80)}) — PROTECTION-FIRST flatten triggered`;
         }
+      } else if (wantMode === 'live') {
+        // v21.1.1 [audit B5]: id-resolution miss (3×1.2s poll, fill latency)
+        // pehle TP/SL attempt hi nahi hota tha — position phir kabhi arm nahi
+        // hoti thi. Ab protectionMissing stamp hota hai → watcher har pass
+        // re-arm koshish karta hai jab tak native SL lag na jaaye.
+        tpslNote = 'native TP/SL not armed YET — exchange position id resolve nahi hui (fill latency); watcher har pass re-arm karega (protectionMissing)';
       }
       // v21.1.0: tpsl fail → flatten the just-opened position. Flatten bhi
       // fail ho (API down) → honest booking + watcher-guard note (purana
@@ -1386,6 +1397,10 @@ export async function executeFuturesSignal(opts) {
         // flatten fail — honest booking + watcher guard (existing path)
         tpslNote = `native TP/SL NOT armed + FLATTEN BHI FAIL (${String(flattenErr).slice(0, 60)}) — server watcher hi exit guard hai; manual verify karo`;
       }
+      // v21.1.1 [audit B5]: position pe protectionMissing stamp — watcher
+      // har pass native TP/SL re-arm karega jab tak arm na ho (ya flatten).
+      // Covers: id-resolution miss (tpsl attempted hi nahi) + flatten-fail.
+      const protectionMissing = tpslFailed || !exchangePositionId;
       let ledgerEntryId = null;
       try { ledgerEntryId = recordExecution(signal, { mode: 'live', market: 'FUTURES', source })?.id || null; } catch { /* best-effort */ }
       const position = mkPosition({
@@ -1393,6 +1408,7 @@ export async function executeFuturesSignal(opts) {
         ...(exchangePositionId ? { exchangePositionId } : {}),
         ...(exchangeLiq ? { liquidation: exchangeLiq, liquidationSource: 'exchange' } : {}),
         ...(ledgerEntryId ? { ledgerEntryId } : {}),
+        ...(protectionMissing ? { protectionMissing: true } : {}),
         status: 'OPEN',
       });
       j.positions.push(position);
@@ -1410,6 +1426,22 @@ export async function executeFuturesSignal(opts) {
         ...(walletNote || fitNote || levNote || tpslNote ? { fitted: [walletNote, fitNote, levNote, tpslNote].filter(Boolean).join(' · ') } : {}),
       };
     } catch (e) {
+      // v21.1.1 [audit B6]: AMBIGUOUS TRANSPORT ERRORS (timeout/network) —
+      // order exchange pe FILL ho bhi sakti thi. Spot desk (v21.1.0 fix) ki
+      // tarah ab UNKNOWN position row book hoti hai warna one-per-pair block
+      // disarm ho jaata tha aur 30s agent loop usi pair pe DUSRA live order
+      // daal deta tha (double-fill + pehli position bina SL ke).
+      const ambiguous = isAmbiguousTransportError(e);
+      if (ambiguous) {
+        const position = mkPosition({ status: 'UNKNOWN', ambiguousEntry: true, protectionMissing: true });
+        j.positions.push(position);
+        pushEntry(j, {
+          ...entry, status: 'SUBMITTED_UNKNOWN',
+          reason: `AMBIGUOUS ENTRY (timeout/network) — order MAY have filled on the exchange; pair re-entry blocked till reconciled. ${String(e?.message || e).slice(0, 140)}`,
+        });
+        saveJournalFresh(j);
+        return { ok: false, error: `CoinDCX futures order AMBIGUOUS: ${e?.message || e} — duplicate-entry guard armed (UNKNOWN row)`, ambiguous: true, position };
+      }
       pushEntry(j, { ...entry, status: 'FAILED', reason: String(e?.message || e).slice(0, 200) });
       saveJournalFresh(j);
       return { ok: false, error: `CoinDCX futures order failed: ${e?.message || e}` };
@@ -1533,6 +1565,27 @@ export async function watchFuturesPositions({ sendTelegram, getDeepSignal } = {}
                 kind: 'WATCH_ERROR', day: todayIST(), pair: p.pair, market: 'FUTURES',
                 reason: `exchange position id adopted late (${row.id}) — exit paths now armed`,
               });
+            }
+            // v21.1.1 [audit B5]: protection-missing position (entry-time id
+            // miss / tpsl+flatten dono fail / ambiguous UNKNOWN row jo
+            // reconcile ne adopt ki) — ab id hai, har pass native TP/SL
+            // arm karne ki koshish. Arm ho jaaye → flag clear + journal;
+            // fail → agle pass phir (30s server watcher hi backstop hai,
+            // native SL lagne ke baad server so bhi jaaye to chalega).
+            if (p.protectionMissing && p.exchangePositionId) {
+              const slArm = Number(p.sl) > 0 ? Number(p.sl) : null;
+              const tpArm = Number(p.tp2) > 0 ? Number(p.tp2) : (Number(p.tp) > 0 ? Number(p.tp) : null);
+              const arm = await createFuturesTpsl({ positionId: p.exchangePositionId, stopLoss: slArm, takeProfit: tpArm })
+                .catch(e => ({ ok: false, error: String(e?.message || e) }));
+              if (arm?.ok) {
+                delete p.protectionMissing;
+                dirty = true;
+                pushEntry(j, {
+                  kind: 'WATCH_ERROR', day: todayIST(), pair: p.pair, market: 'FUTURES',
+                  reason: `RECOVERY: native TP/SL armed late by watcher (SL ${slArm} · TP ${tpArm}) — protectionMissing cleared`,
+                });
+                try { await sendTelegram(`🤖 ✅ <b>FUTURES RECOVERY</b> — ${p.pair}: native TP/SL watcher ne late-arm kar diya (SL ${slArm} · TP ${tpArm}). Server-resident stop ab active.`); } catch { /* best-effort */ }
+              }
             }
             // still open — refresh the exchange's own numbers.
             // v7.0: partial legs shrink activePos — sync our qty to the
@@ -1814,13 +1867,30 @@ export async function watchFuturesPositions({ sendTelegram, getDeepSignal } = {}
     if (dirty) saveJournalFresh(j);
     if (typeof sendTelegram === 'function' && (closures.length > 0 || watchErrors.length > 0)) {
       try {
+        // v21.1.1 [audit B10]: watch-error lines 30-min per-pair throttle —
+        // persistent failures (dust, bad keys, no-id) pehle HAR 30s pass pe
+        // repeat hote the → channel mute. Closures (real events) always send.
+        const nowMs = Date.now();
+        const freshErrs = watchErrors.filter(w => {
+          const key = `${w.pair}::${String(w.reason).split('(')[0].slice(0, 60)}`;
+          const last = _futWatchErrAlerts.get(key) || 0;
+          if (nowMs - last < 30 * 60_000) return false;
+          _futWatchErrAlerts.set(key, nowMs);
+          return true;
+        });
+        if (_futWatchErrAlerts.size > 200) {
+          for (const k of _futWatchErrAlerts.keys()) { _futWatchErrAlerts.delete(k); if (_futWatchErrAlerts.size <= 100) break; }
+        }
         const fullClosures = closures.filter(c => !c.partial);
         const partialClosures = closures.filter(c => c.partial);
-        await sendTelegram(`🤖 <b>AI Trading · Futures</b>\n${[
+        const lines = [
           ...fullClosures.map(c => `• ${c.pair} (${c.mode}) — ${c.reason}: ₹${c.pnlINR > 0 ? '+' : ''}${c.pnlINR}`),
           ...partialClosures.map(c => `💰 ${c.reason}`),
-          ...watchErrors.map(c => `⚠️ ${c.pair} — ${c.reason}`),
-        ].join('\n')}`);
+          ...freshErrs.map(c => `⚠️ ${c.pair} — ${c.reason}`),
+        ];
+        if (lines.length > 0) {
+          await sendTelegram(`🤖 <b>AI Trading · Futures</b>\n${lines.join('\n')}`);
+        }
       } catch { /* best-effort */ }
     }
     return closures;
@@ -1859,6 +1929,24 @@ async function partialCloseFuturesLeg(j, p, price, { stage, pct }) {
         reason: `partial TP disabled for this position — ${pct}% of ${originalQty} rounds to 0 at ${p.pair} precision (classic full TP2 exit applies)`,
       });
       return { ok: false, disabled: true, error: 'qty rounds to 0' };
+    }
+    // v21.1.1 [audit B12]: exchange-minimum guard (spot desk ka v18.9 fix
+    // port — wahan hai, yahan nahi tha). Below-minQty opposite-side order
+    // exchange reject karta hai → leg fail → WATCH_ERROR + telegram HAR
+    // 30s pass pe, tier exits kabhi execute nahi hote. Ab: below-min →
+    // partialTpOff + ek baar honest note (full TP2 exit bacha hai).
+    if (p.mode === 'live') {
+      try {
+        const meta = await fetchFuturesInstrumentMeta(p.pair);
+        if (meta?.minQty > 0 && partialQty < meta.minQty) {
+          p.partialTpOff = true;
+          pushEntry(j, {
+            kind: 'WATCH_ERROR', day: todayIST(), pair: p.pair, market: 'FUTURES',
+            reason: `partial TP disabled — ${stage} leg qty ${partialQty} below the futures minimum ${meta.minQty} for ${p.pair} (full TP2 exit applies)`,
+          });
+          return { ok: false, disabled: true, error: `qty ${partialQty} below futures minimum ${meta.minQty}` };
+        }
+      } catch { /* meta unavailable — precision guard upar already covers */ }
     }
 
     // LIVE: move the fraction on the exchange BEFORE booking anything
@@ -2018,6 +2106,7 @@ export function __resetFuturesForTests() {
   _walletLegBudgetMs = WALLET_LEG_BUDGET_MS;
   _usdInr = null; _usdInrAt = 0;
   _walletSnapCache = null; _walletSnapInflight = null; // v20.8.5: snapshot mini-cache
+  _futWatchErrAlerts.clear(); // v21.1.1 [audit B10]
 }
 export function __setUsdInrForTests(v) { _usdInr = v; _usdInrAt = Date.now(); }
 /** v10.14 test hook: shrink the wallet-leg deadline so budget tests run in ms. */

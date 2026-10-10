@@ -391,8 +391,17 @@ export async function getOptionsDesk(symbol = 'NIFTY') {
       try { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()); }
       catch { return new Date().toISOString().slice(0, 10); }
     })();
+    // v21.1.1 [audit C8]: 15:30 ke baad TODAY's expiry drop — degenerate
+    // zero-greeks table (T=0) serve hota tha jabki option settle ho chuka.
+    // Market-close ke baad sirf aagli expiry hi pick hogi.
+    const _pastCloseToday = (() => {
+      try {
+        const ist = new Date(Date.now() + 5.5 * 3600_000);
+        return ist.getUTCHours() > 15 || (ist.getUTCHours() === 15 && ist.getUTCMinutes() >= 30);
+      } catch { return false; }
+    })();
     const exp = (chain.expiryDates || []).map(d => String(d))
-      .filter(d => d >= today).sort()[0]
+      .filter(d => d >= today && !(_pastCloseToday && d === today)).sort()[0]
       || nextWeeklyExpiryFor(sym);
     const rows = chain.rows.filter(r => r.expiry === exp);
     if (rows.length > 5) {

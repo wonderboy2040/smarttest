@@ -584,6 +584,14 @@ export async function fetchNSEOptionChain(symbol) {
             putVolume: Number(x.PE?.totalTradedVolume) || 0,
           })),
           source: 'nse',
+          // v21.1.1 [audit C4]: NSE option-chain-indices payload me lot-size
+          // field NAHI hai (Groww mirror ke aggregatedDetails me hota hai).
+          // Pehle undefined rehta tha → desk seedha hardcoded table use karta
+          // tha aur "chain lotSize FIRST" claim galat read hota tha. Ab seedha
+          // static fallback stamp hota hai + lotSizeSource marker — exchange
+          // lot revision ho to desk UI me dikh jayega ki ye static hai.
+          lotSize: NSE_STATIC_LOT_SIZES[sym] || null,
+          lotSizeSource: NSE_STATIC_LOT_SIZES[sym] ? 'static-table (NSE payload lot-size field nahi rakhta)' : null,
           fetchedAt: Date.now(),
         };
       } catch { /* retry once more */ }
@@ -771,6 +779,10 @@ const GROWW_INDEX_PAGES = {
   SENSEX: 'https://groww.in/options/sp-bse-sensex',
   NIFTY: 'https://groww.in/options/nifty',
 };
+// v21.1.1 [audit C4]: NSE-direct chains ke liye static lot table (NSE payload
+// lot-size field nahi deta; Groww mirror real lot deta hai). optionsDesk.js ke
+// LOT_SIZES ke saath sync me rakhna hai.
+const NSE_STATIC_LOT_SIZES = { NIFTY: 75, BANKNIFTY: 35, FINNIFTY: 65, MIDCPNIFTY: 140, NIFTYNXT50: 25 };
 const GROWW_CHAIN_TTL = 90 * 1000;      // re-fetch at most every 90s
 const GROWW_NEG_MS = 5 * 60 * 1000;     // back off 5 min after a failure
 const GROWW_HEADERS = {

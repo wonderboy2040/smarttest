@@ -159,8 +159,12 @@ describe('v18.9 #3 — a dead feed is loud, never silent', () => {
 });
 
 // ---------------- 4. kill-switch semantics ----------------
-describe('v18.9 #4 — kill switch suspends LIVE auto-closes (documented contract)', () => {
-  it('killSwitch ON → live SL close skipped + honest journal stamp; paper still simulates', async () => {
+describe('v18.9 #4 — kill switch semantics (v21.1.1 revised: exits ENFORCED under kill)', () => {
+  it('killSwitch ON → live SL close STILL fires (kill = no NEW entries, stops disarm nahi hote); paper simulates', async () => {
+    // v21.1.1 [audit B11]: v18.9 ka behavior (kill ON → live stops SUSPEND,
+    // position manual control) DANGEROUS tha — panic-kill dabane wala trader
+    // apne STOP LOSSES disarm nahi karna chahta. Ab entries block, exits
+    // enforce. Ye test naya contract lock karta hai.
     saveJSON('ai-trading-config.json', { killSwitch: true });
     __setJournalForTests({
       entries: [],
@@ -171,10 +175,12 @@ describe('v18.9 #4 — kill switch suspends LIVE auto-closes (documented contrac
     const j = loadJournal();
     const live = j.positions.find(p => p.id === 'live1')!;
     const paper = j.positions.find(p => p.id === 'paper1')!;
-    expect(live.status).toBe('OPEN'); // suspended — no exchange order
+    expect(live.status).toBe('CLOSED'); // v21.1.1: SL close EXECUTED under kill
     expect(paper.status).toBe('CLOSED'); // simulation continues
+    // honest journal note (once per day per position)
     expect(j.entries.some(e => e.kind === 'WATCH_ERROR' && /KILL SWITCH ON/.test(String(e.reason || '')))).toBe(true);
-    expect(mockPrivate.mock.calls.filter(c => String(c[0]).includes('orders/create'))).toHaveLength(0);
+    // the live market sell DID fire (exit enforced)
+    expect(mockPrivate.mock.calls.filter(c => String(c[0]).includes('orders/create')).length).toBeGreaterThanOrEqual(1);
   });
 });
 

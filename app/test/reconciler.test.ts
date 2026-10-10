@@ -92,16 +92,32 @@ describe('v20.7 reconciler — kill-switch hierarchy', () => {
     expect(canEnterNew()).toBe(true);
   });
 
-  it('external kill-flag file → auto-arm L3 on next tick', async () => {
+  it('kill-flag file → LEVEL verbatim restore (v21.1.1: L1 restart-mass-flatten fix) + foreign file → L3', async () => {
     const port = new PaperPort({ startingEquityUSDT: 1000 });
     initReconciler({ port, env: {}, heartbeatFile: HEARTBEAT, killFlagFile: KILL_FLAG });
     expect(killLevel()).toBe(0);
-    // external supervisor writes the kill flag
+    // v21.1.1 [audit B1]: persisted {level:1} ab L1 hi restore hota hai —
+    // pehle hard-coded L3 tha (restart par "no new entries" → "flatten
+    // everything" escalate ho jaata tha — operator ne maanga hi nahi).
+    fs.writeFileSync(KILL_FLAG, JSON.stringify({ level: 1, reason: 'daily-loss caution', at: Date.now() }));
+    await __driveReconcileTickForTests();
+    expect(killLevel()).toBe(1);
+    expect(killReason()).toMatch(/daily-loss caution/);
+    // removing the flag → resume
+    fs.unlinkSync(KILL_FLAG);
+    await __driveReconcileTickForTests();
+    expect(killLevel()).toBe(0);
+    // foreign/unparseable flag → fail-safe L3 (unchanged)
+    fs.writeFileSync(KILL_FLAG, 'not-json-external-touch');
+    await __driveReconcileTickForTests();
+    expect(killLevel()).toBe(3);
+    fs.unlinkSync(KILL_FLAG);
+    await __driveReconcileTickForTests();
+    expect(killLevel()).toBe(0);
+    // explicit L3 flag → L3 restore
     fs.writeFileSync(KILL_FLAG, JSON.stringify({ level: 3, reason: 'external supervisor' }));
     await __driveReconcileTickForTests();
     expect(killLevel()).toBe(3);
-    expect(killReason()).toMatch(/external trigger/);
-    // removing the flag → resume
     fs.unlinkSync(KILL_FLAG);
     await __driveReconcileTickForTests();
     expect(killLevel()).toBe(0);

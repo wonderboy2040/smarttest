@@ -83,6 +83,18 @@ export async function executeIndiaSignal(opts) {
     const mins = istHM();
     if (mins < IST_ENTRY_FIRST) return reject('Before 09:30 IST — opening chop window, LIVE entries blocked');
     if (mins > IST_ENTRY_LAST) return reject('After 15:00 IST — too late for a fresh intraday LIVE entry (square-off 15:15)');
+    // v21.1.1 [audit A6/D1]: Phase-4 gates ab India LIVE path me bhi wired —
+    // pehle sirf crypto desks (executeSignal/executeFuturesSignal) pe the,
+    // jabki StrategyHealthPanel "enforced on both desks" claim karta tha.
+    // India LIVE Dhan order mode-gate + risk-caps se guzar ke seedha ja sakta
+    // tha bina paper track-record gate aur per-strategy kill rule ke.
+    try {
+      const { goLiveGateBlocked, strategyGuardBlocked } = await import('./strategyGuard.js');
+      const g = goLiveGateBlocked();
+      if (g?.blocked) return reject(g.reason, undefined, { goLiveGate: true });
+      const sg = strategyGuardBlocked(source, 'INDIA');
+      if (sg?.blocked) return reject(sg.reason, undefined, { strategyPaused: true });
+    } catch { /* guard module absent — fail-open (test env) */ }
   }
 
   // --- gate 4: fresh server-side India signal ---

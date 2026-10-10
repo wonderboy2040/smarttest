@@ -975,9 +975,24 @@ export function registerAITradingRoutes(app, deps) {
   app.post('/api/exec/kill', async (req, res) => {
     try {
       const { setKill } = await import('../exec/reconciler.js');
-      const level = Math.max(0, Math.min(3, Number((req.body || {}).level) || 0));
+      // v21.1.1 [audit B4]: pehle missing/non-numeric level NaN→0 ho jaata tha
+      // — panic path pe ek malformed request ({}, {level:"halt"}) ACTIVE kill
+      // CLEAR kar deta thi. Ab explicit integer 0-3 hi accept hota hai; aur
+      // level 0 (disarm) ke liye confirm phrase chahiye (LIVE-arming jaisa
+      // hi two-step) taaki accidental disarm ho hi na sake.
+      const raw = (req.body || {}).level;
+      const level = Number(raw);
+      if (!Number.isInteger(level) || level < 0 || level > 3) {
+        return res.status(400).json({ ok: false, error: { code: 'BAD_LEVEL', message: 'level must be an explicit integer 0-3' } });
+      }
       const reason = String((req.body || {}).reason || 'manual UI button');
-      const r = setKill(level, reason);
+      if (level === 0) {
+        const confirm = String((req.body || {}).confirm || '').trim().toUpperCase();
+        if (confirm !== 'CLEAR-KILL') {
+          return res.status(400).json({ ok: false, error: { code: 'CONFIRM_REQUIRED', message: 'Kill disarm karne ke liye body me "confirm":"CLEAR-KILL" bhejo (accidental protect). Level 0 hi confirm maangta hai; 1-3 seedha set hota hai.' } });
+        }
+      }
+      const r = setKill(level, level === 0 ? `${reason} (confirmed CLEAR-KILL)` : reason);
       res.json({ ok: true, ...r });
     } catch (e) { jsonError(res, 500, 'exec kill failed', e); }
   });
@@ -1108,7 +1123,12 @@ export function registerAITradingRoutes(app, deps) {
         pushEntry(j, {
           kind: 'ORDER', day: todayIST(), pair: `B-${symbol}_USDT`, symbol: `B-${symbol}_USDT`, market: 'FUTURES', side,
           mode: port.mode === 'api' ? 'live' : 'paper', source: 'exec-enter',
-          status: r.ok ? 'FILLED' : 'REJECTED',
+          // v21.1.1 [audit B19]: stage-aware status — pehle har non-OK
+          // result 'REJECTED' likha jaata tha, jabki protection-fail /
+          // leverage-mismatch stages me order PLACE ho chuka hota (fill bhi
+          // ho sakta hai) — post-mortem me "never attempted" dikhna jhoot
+          // tha. fill-confirm = sach me unfilled; baaki = submitted hua tha.
+          status: r.ok ? 'FILLED' : (r.stage === 'fill-confirm' ? 'FAILED' : 'SUBMITTED_UNKNOWN'),
           reason: r.ok
             ? `PM protection-first entry OK (position ${r.positionId} · lev ${r.sizing?.leverage}x · qty ${r.sizing?.qty})`
             : `[${r.stage}] ${String(r.error || '').slice(0, 160)}`,

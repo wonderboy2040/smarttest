@@ -189,6 +189,25 @@ export async function durableBootRestoreAll() {
     remoteTs: (s) => Math.max(maxTs(s?.positions), maxTs(s?.entries)),
   });
   if (journal) restored.tradingJournal = true;
+  // v21.1.1 [audit A4]: ai-signal-ledger.json ab boot-restore hota hai.
+  // Ledger save pe durablePut karta tha par restore kabhi nahi hota tha —
+  // ephemeral-FS (Render) restart pe Phase-4 state (settled trades,
+  // kill-rule windows, go-live readiness counter) SILENTLY zero ho jaata
+  // tha. Fail-closed tha (unsafe nahi) par "100 paper trades" achievement
+  // evaporate ho jaata tha.
+  const ledger = await durableBootRestore('ai-signal-ledger.json', {
+    isUsable: (l) => Array.isArray(l?.entries) && l.entries.length > 0,
+    localTs: (l) => maxTs(l?.entries) || Number(l?.updatedAt) || 0,
+    remoteTs: (l) => maxTs(l?.entries) || Number(l?.updatedAt) || 0,
+  });
+  if (ledger) {
+    restored.signalLedger = true;
+    // ledger.js module-eval capture drop (same pattern as agents below)
+    try {
+      const mod = await import('../ai/ledger.js');
+      if (typeof mod.__reloadLedgerForBoot === 'function') mod.__reloadLedgerForBoot();
+    } catch { /* best-effort */ }
+  }
   const tcfg = await durableBootRestore('ai-trading-config.json', {
     isUsable: (s) => !!(s && typeof s === 'object' && Object.keys(s).length),
     localTs: (s) => s?.liveConfirmedAt || s?.updatedAt || 0,

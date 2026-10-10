@@ -364,7 +364,11 @@ export function walkForwardSymbol({ symbol, market, candles, maxRiskPct = 5, cap
     degradationPct = Math.round(((trainExp - testExp) / trainExp) * 1000) / 10;
     overfit = degradationPct > 40 ? 'HIGH' : degradationPct > 15 ? 'MODERATE' : 'CALIBRATED';
   } else if (trainExp != null && testExp != null) {
-    overfit = testExp > trainExp ? 'CALIBRATED' : 'NO_EDGE';
+    // v21.1.1 [audit A8]: train expectancy <= 0 ho to system me edge hi
+    // nahi hai — pehle testExp > trainExp pe 'CALIBRATED' bol deta tha
+    // (loschh consistent system = calibrated padh lena, misleading).
+    // Ab: train negative → NO_EDGE / NO_TRAIN_EDGE hi, chahe test kuch bhi ho.
+    overfit = trainExp <= 0 ? (testExp > 0 ? 'NO_TRAIN_EDGE' : 'NO_EDGE') : 'NO_EDGE';
   }
 
   return {
@@ -390,7 +394,10 @@ export async function runBacktest({ market = 'CRYPTO', symbols, minGrade = 'ACTI
   const mkt = String(market).toUpperCase() === 'INDIA' ? 'INDIA' : 'CRYPTO';
   const syms = (Array.isArray(symbols) && symbols.length > 0 ? symbols : (mkt === 'CRYPTO' ? DEFAULT_CRYPTO : DEFAULT_INDIA))
     .map(s => String(s).toUpperCase().replace(/[^A-Z0-9-]/g, '')).filter(Boolean).slice(0, 8);
-  const key = `bt:${mkt}:${syms.join(',')}:${minGrade}:${capitalPerTradeINR}:${maxRiskPct}:${strategy}:${walkForward ? 'wf' : 'std'}`;
+  // v21.1.1 [audit A7]: currentMinConfidence ab cache key me — learned gates
+  // is value se derive hote hain; config change ke baad bhi 10-min TTL
+  // cache purana verdict serve karta tha (walk-forward verdict bhi).
+  const key = `bt:${mkt}:${syms.join(',')}:${minGrade}:${capitalPerTradeINR}:${maxRiskPct}:${strategy}:${currentMinConfidence}:${walkForward ? 'wf' : 'std'}`;
   const hit = _cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.payload;
 

@@ -380,3 +380,19 @@ liye Watchdog bat kaafi hai.
   Watchdog window ka output padho (`[npm]` lines me asli reason aata hai)
 - **Site purani lag rahi hai** → hard refresh: `Ctrl+Shift+R` (service
   worker cache). Banner aa gaya to Watchdog restart karo.
+
+---
+
+## 🆕 v21.1.1 — RECHECK RELEASE (advance-pro full-site audit)
+
+**IMPORTANT — pehle ye 3 kaam karo:**
+1. **Render pe Build Command**: `npm ci && npm run build` (dist ab git me nahi aata)
+2. **`/api/exec/kill` disarm**: level 0 ke liye body me `{"level":0,"confirm":"CLEAR-KILL"}` bhejo (accidental disarm protect)
+3. **Bot Lab / exec API users**: kill-ab "exits enforced" semantics hai — kill ON bhi SL/TP closes chalte hain (sirf naye entries block)
+
+**Kya naya hai:** restart-safe kill levels (L1 L1 hi rehta hai — mass-flatten nahi),
+futures positions ab protection-missing pe har pass TP/SL re-arm karta hai, spot dust
+guard order se pehle check hota hai, India LIVE bhi go-live gate ke peeche, walk-forward
+toggle Backtest panel me visible, health alerts ab idle feeds pe false nahi bajte,
+watcher Telegram spam 30-min throttled, SETUP bat rollback bug fix.
+**Test**: 3495/3495 green · npm audit 0 · CI har push pe verify karega.
