@@ -56,7 +56,7 @@ export const CHANGE_KINDS = [
 /** Canonical body — everything EXCEPT id/prevHash/hash (the chain
  * links stay frozen even though `details` is rich). */
 function bodyOf(e) {
-  const { id, prevHash, hash, ...body } = e || {};
+  const { id: _id, prevHash: _prevHash, hash: _hash, ...body } = e || {};
   return body;
 }
 function hashEntry(e) {

@@ -20,7 +20,7 @@ import {
 // v10.17 FULL UNIVERSE SCAN — TV filter-query discovery + tiered
 // cadence (T1 base∪hot every cycle · T2 rotating slices) + hot
 // promotion. Flag AI_INDIA_FULL_UNIVERSE=off reverts to the static base.
-import { tieredScanUniverse, absorbScanRows, fullIndiaUniverseEnabled, boardUniverseOverrides } from './indiaUniverse.js';
+import { tieredScanUniverse, absorbScanRows, fullIndiaUniverseEnabled as _fullIndiaUniverseEnabled, boardUniverseOverrides } from './indiaUniverse.js';
 import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandles } from './futures.js';
 // v20.7.12 [M-2]: USDINR last-known-good fallback (disk-backed) — flat-84
 // hardcode (signals.js:2240) TV-only fallback contexts ko ~6% misprice
@@ -2366,7 +2366,7 @@ function riskCapFor(deps) {
   } catch { return 5; }
 }
 
-function modelStatus(council, deps) {
+function modelStatus(council, _deps) {
   return MODELS.map(m => ({
     id: m.id, name: m.name, role: m.role, weight: m.weight,
     online: m.id === 'aicouncil' ? !!council?.online : true,

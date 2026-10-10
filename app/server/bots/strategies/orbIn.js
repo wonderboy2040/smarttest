@@ -187,7 +187,7 @@ export const orbIn = {
   /** The exact feature set gates AND jev both see (plan §6.1 list). */
   snapshotFeatures(rows, i, x) {
     const row = rows[i];
-    const { side, c, stop, stopDist, target, orSize, orSizeAtr, minutesFromOpen, orb } = x;
+    const { side, c, stop: _stop, stopDist, target, orSize: _orSize, orSizeAtr, minutesFromOpen, orb } = x;
     const atr = row.atr;
     const dir = side === 'LONG' ? 1 : -1;
     const emaF = row.emaFast, emaS = row.emaSlow;

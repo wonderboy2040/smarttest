@@ -13,7 +13,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { subscribe as feedSubscribe, snapshot as feedSnapshot, feedStatus, pruneLiveFeedNow } from './liveFeed.js';
-import { ensureUsSubscribed, usClientUp, usClientDown, usMarketOpen, isStaleUsQuote, getUsSessionQuote, releaseUsSubscribed } from './usStream.js';
+import { ensureUsSubscribed, usClientUp, usClientDown, usMarketOpen as _usMarketOpen, isStaleUsQuote as _isStaleUsQuote, getUsSessionQuote, releaseUsSubscribed } from './usStream.js';
 import { initInStream, ensureInSubscribed, inClientUp, inClientDown, releaseInSubscribed } from './inStream.js';
 import { ensureCryptoSubscribed, cryptoClientUp, cryptoClientDown, releaseCryptoSubscribed, fetchCoinDcxTickers, lastTickerSource } from './cryptoStream.js';
 // v10.10: CoinDCX DIRECT ultra-fast RT — USDT perps (FUT_) + USDC global
@@ -445,7 +445,7 @@ function stripHtml(str) {
 }
 
 // Cap an array at a maximum length to prevent DoS via huge payloads.
-function capArray(arr, maxLen) {
+function _capArray(arr, maxLen) {
   if (!Array.isArray(arr)) return [];
   return arr.slice(0, maxLen);
 }
@@ -602,7 +602,7 @@ registerAITradingRoutes(app, {
 import { registerBotRoutes } from './bots/routes.js';
 import { fetchCoinDcxCandles, fetchBinanceKlines } from './ai/data.js';
 import { fetchDhanHistory, DHAN_IDS } from './bots/core/dhanFetch.js';
-import { saveCandles, loadCandles, loadCandlesCached, mergeBarSeries, sameDenomination } from './bots/core/candleStore.js';
+import { saveCandles, loadCandles as _loadCandles, loadCandlesCached, mergeBarSeries, sameDenomination } from './bots/core/candleStore.js';
 import { usdInrLastKnown, usdInrFallback } from './ai/lib/usdinr.js';
 
 const BOTS_STATE_DIR = process.env.BOT_STATE_DIR
@@ -2408,13 +2408,13 @@ app.get('/api/fundamentals/:symbol', async (req, res) => {
     };
 
     const price = meta.regularMarketPrice || 0;
-    const prevClose = meta.chartPreviousClose || meta.previousClose || price;
+    const _prevClose = meta.chartPreviousClose || meta.previousClose || price;
     const marketCap = meta.marketCap || 0;
 
     // Extract historical closes from chart for 5yr approximation
     const timestamps = result.timestamp || [];
     const quoteClose = result.indicators?.quote?.[0]?.close || [];
-    const closes = timestamps.map((t, i) => ({ date: new Date(t * 1000).toISOString().split('T')[0], close: quoteClose[i] })).filter(c => c.close != null);
+    const _closes = timestamps.map((t, i) => ({ date: new Date(t * 1000).toISOString().split('T')[0], close: quoteClose[i] })).filter(c => c.close != null);
 
     // Compute approximate revenue/earnings from market cap + P/E (if available)
     const peRatio = qs?.summaryDetail?.trailingPE ? toNum(qs.summaryDetail.trailingPE) : 0;
@@ -2989,7 +2989,7 @@ let _positionManager = null;
 try {
   const { resolveExecutionPort } = await import('./exec/port.js');
   const { PositionManager } = await import('./exec/positionManager.js');
-  const { initReconciler, setKill, killLevel } = await import('./exec/reconciler.js');
+  const { initReconciler, setKill: _setKill, killLevel: _killLevel } = await import('./exec/reconciler.js');
   const { ramCanEnter, ramCanLLM } = await import('./ai/ramGovernor.js');
   // shared Telegram alert sink (re-uses the secrets.js sender)
   let _execAlert = null;

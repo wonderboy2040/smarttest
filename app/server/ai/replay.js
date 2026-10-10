@@ -223,7 +223,7 @@ export async function replayIntradayGates(symbol, opts = {}) {
 
     // conf ladder proxy (the MTF ladder: aligned +3 / counter −7)
     let conf = 50 + Math.min(45, Math.abs(score) * 11);
-    const aligned = parts.filter(([tf, v]) => (side === 'LONG' ? v > 0 : v < 0)).length;
+    const aligned = parts.filter(([_tf, v]) => (side === 'LONG' ? v > 0 : v < 0)).length;
     if (aligned === parts.length) { conf += 3; gates.mtfAligned++; }
     else if (aligned === 0) { conf -= 7; gates.mtfCounter++; }
     conf = Math.max(20, Math.min(95, conf));

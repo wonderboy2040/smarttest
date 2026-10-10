@@ -66,7 +66,7 @@ import { qualityVerdict } from './probrain.js';
 import { applySignalTrustGuards } from './signalMemory.js';
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
-const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
+const _r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
 

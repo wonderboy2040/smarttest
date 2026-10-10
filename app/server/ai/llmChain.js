@@ -325,7 +325,7 @@ export async function councilAskDeep(prompt, deps) {
  * sentinel-track nahi kyunki capability-missing failure nahi hai).
  * images: [base64, ...] (data-URL prefix ke BINA — Ollama format).
  */
-export async function councilAskVision(prompt, images, deps = null, opts = {}) {
+export async function councilAskVision(prompt, images, _deps = null, opts = {}) {
   if (!Array.isArray(images) || images.length === 0) return { json: null, model: null };
   const visionModel = ollamaVisionModel();
   if (!visionModel) return { json: null, model: null };

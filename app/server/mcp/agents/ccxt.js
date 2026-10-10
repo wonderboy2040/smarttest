@@ -82,7 +82,7 @@ const EXCHANGES = {
       if (!Array.isArray(list)) return null;
       return list.reverse().map(k => ({ time: Number(k[0]), open: Number(k[1]), high: Number(k[2]), low: Number(k[3]), close: Number(k[4]), volume: Number(k[5]) }));
     },
-    orderbook: async (sym, limit) => {
+    orderbook: async (sym, _limit) => {
       const inst = sym.includes('-') ? sym : sym.replace(/USDT$/, '-USDT');
       const j = await fetchJSON(`https://www.okx.com/api/v5/market/books?instId=${inst}&sz=10`);
       const list = j?.data?.[0];

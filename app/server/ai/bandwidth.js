@@ -184,8 +184,8 @@ export function bandwidthView(env = {}) {
  */
 export function initBandwidthAlerts({ send, env = {}, log = () => {} } = {}) {
   if (typeof send !== 'function') return null;
-  const cap = _capBytes(env);
-  const alertPct = Number(env.BANDWIDTH_ALERT_PCT) > 0 ? Number(env.BANDWIDTH_ALERT_PCT) : 70;
+  const _cap = _capBytes(env);
+  const _alertPct = Number(env.BANDWIDTH_ALERT_PCT) > 0 ? Number(env.BANDWIDTH_ALERT_PCT) : 70;
   let lastAlertDay = '';
   const timer = setInterval(async () => {
     try {

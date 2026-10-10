@@ -1,4 +1,4 @@
-# SMARTAI PRO — PHASE-2 LIVE FLOW CHECKLIST (v21.1.0)
+# SMARTAI PRO — PHASE-2 LIVE FLOW CHECKLIST (v21.1.2)
 
 > Ye wo manual verification items hain jo **sirf aapke laptop/Render pe, real
 > network + real keys ke saath** ho sakte hain (sandbox me impossible).
@@ -29,6 +29,23 @@
 ## C. Data feeds (har source ka status)
 
 - [ ] CoinDCX futures WS: `/api/health` → `feeds.ws.coindcxFutures.healthy: true` + ageSec < 5
+- [ ] **v21.1.2 WS idle-vs-down**: `armed:false` socket = IDLE (grey, normal — koi subscriber
+  nahi), DOWN nahi. Red sirf `healthy:false && armed!==false`. OS strip WS chip
+  tooltip me ab `cooldownReason` / `failStreak` / `cooldownRemainMs` seedha dikhta hai
+- [ ] **CoinDCX "WS Down" kabhi dikhe to PROBE chalao (v21.1.2 naya)**:
+  ```bash
+  cd app && node scripts/cx-ws-probe.mjs        # futures socket
+  node scripts/cx-ws-probe.mjs --spot            # spot socket bhi
+  ```
+  Ye 45s me stage-wise (HTTP → handshake → ns-ACK → join → ticks) VERDICT deta hai:
+  | Verdict | Matlab | Action |
+  |---|---|---|
+  | HEALTHY | Host se WS theek | UI false-positive tha — v21.1.2 idle-fix hi solution |
+  | BLOCKED (403/451) | Host IP/region WAF-reject | Server region badlo (Render: Singapore / Oracle Mumbai) |
+  | DNS-FAIL / TIMEOUT | Egress blocked | `wss://stream.coindcx.com:443` allow karo |
+  | NO-NS-ACK | Protocol/upstream degraded | CoinDCX status + docs check |
+  | SILENT-CHANNEL | Joined par zero ticks | Channel docs verify; GLOB off-hours quiet ho sakta |
+  (Sandbox se LIVE verify ho chuka: HEALTHY — 114 ticks/30s, first tick join ke 0.3s baad)
 - [ ] Binance futures WS: `feeds.ws.binanceFutures.healthy` (agar accelerator on hai)
 - [ ] India Groww 3s poller: market hours me `feeds.sources['groww-nse-realtime'].live: true`
 - [ ] Finnhub US (agar key hai): `feeds.sources['finnhub-stream'].live: true`

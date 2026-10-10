@@ -26,7 +26,7 @@
 // explicitly-passed `now`) so tests can pin every rule.
 // ============================================================
 
-const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const _clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 
@@ -366,7 +366,7 @@ export function structureStop({ candles, side, ltp, atr, maxAtrMult = 2.2, noise
 // the honest quality object that ships on every signal + the
 // confidence/grade adjustments.
 export function qualityVerdict({
-  market, side, consensus, votes, ltp, changePct, rsi, adx, atr,
+  market, side, _consensus, votes, ltp, changePct, rsi, adx, atr,
   candles, regime, htf, ltf, ltfLabel, now,
 }) {
   const mkt = String(market || 'INDIA').toUpperCase();

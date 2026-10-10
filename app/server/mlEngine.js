@@ -30,7 +30,7 @@ function round(n, d = 2) {
 // utni high, hamesha same input → same output) + source:'heuristic'
 // label. generateTopFeatures() ka random shuffle bhi gaya — fixed
 // merit order ab.
-const REGIMES = ['RISK_ON', 'NEUTRAL', 'RISK_OFF', 'GOLDILOCKS', 'STAGFLATION'];
+const _REGIMES = ['RISK_ON', 'NEUTRAL', 'RISK_OFF', 'GOLDILOCKS', 'STAGFLATION'];
 
 /** Deterministic score → [lo, hi] probability (smooth logistic-ish,
  *  clamped — no randomness, same input same output). */
@@ -58,7 +58,7 @@ function detectRegime(niftyChange, bankNiftyChange, indiaVix, usVix, dxy, goldCh
   return { regime: 'NEUTRAL', probability: scoreProbability(totalScore, 0.4, 0.65), sip_multiplier: 1.0 };
 }
 
-function gaussianRandom() {
+function _gaussianRandom() {
   let u = 0, v = 0;
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
@@ -86,7 +86,7 @@ function calculateSMA(prices, period) {
   return prices.slice(-period).reduce((s, v) => s + v, 0) / period;
 }
 
-function calculateEMA(prices, period) {
+function _calculateEMA(prices, period) {
   if (!prices || prices.length < period) return null;
   const k = 2 / (period + 1);
   let ema = prices.slice(0, period).reduce((s, v) => s + v, 0) / period;
@@ -158,7 +158,7 @@ function generateSignal(prices, currentPrice, currentChange) {
   const sma20 = calculateSMA(closePrices, 20);
   const sma50 = calculateSMA(closePrices, 50);
   const macd = calculateMACD(closePrices);
-  const current = currentPrice || closePrices[closePrices.length - 1];
+  const _current = currentPrice || closePrices[closePrices.length - 1];
   const change = currentChange || 0;
 
   let score = 50;
@@ -229,7 +229,7 @@ function calculatePricePoints(candles, currentPrice, direction = 'bullish') {
   };
 }
 
-function generatePriceTargets(candles, currentPrice, market) {
+function generatePriceTargets(candles, currentPrice, _market) {
   const closePrices = (candles || []).map(c => c.close || 0).filter(v => v > 0);
   const returns = [];
   for (let i = 20; i < closePrices.length; i++) {

@@ -170,7 +170,7 @@ export function registerTrim(name, fn) {
 }
 function _runTrims(where) {
   let ran = 0;
-  for (const [name, fn] of _trims) {
+  for (const [_name, fn] of _trims) {
     try { fn(); ran++; } catch { /* one bad trim never blocks the rest */ }
   }
   _state.memTrims++;
@@ -233,7 +233,7 @@ function _bestEffortFlush(reason) {
   _state._lastFlushAt = now;
   try {
     const flushers = (typeof _state.getFlushers === 'function' ? _state.getFlushers() : []) || [];
-    for (const [name, fn] of flushers) {
+    for (const [_name, fn] of flushers) {
       try { if (typeof fn === 'function') fn(); } catch { /* best-effort during crash */ }
     }
   } catch { /* never re-throw inside the crash path */ }

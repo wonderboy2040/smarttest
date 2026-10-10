@@ -285,7 +285,7 @@ function _scheduleReconnect() {
   if (typeof _reconnectTimer.unref === 'function') _reconnectTimer.unref();
 }
 
-function _closeBinanceFutWs(reason) {
+function _closeBinanceFutWs(_reason) {
   if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
   if (_resubTimer) { clearTimeout(_resubTimer); _resubTimer = null; }
   if (_ws) {

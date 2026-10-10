@@ -17,7 +17,7 @@
 // Every fetch is timeout-guarded and null-safe: an unreachable
 // source degrades that market's signals — it never crashes the API.
 // ============================================================
-import { computeIndicatorsFromCandles } from './lib/indicators.js';
+import { computeIndicatorsFromCandles as _computeIndicatorsFromCandles } from './lib/indicators.js';
 import { fetchCoinDcxTickers } from '../cryptoStream.js';
 import { TV_SCAN_HEADERS } from '../lib/tvHeaders.js';
 // v20.7.8 [L5]: the SHARED disk-backed USDINR store — the leftover flat

@@ -36,7 +36,7 @@ import { fetchCoinDcxTickers } from '../cryptoStream.js';
 import { isNseHoliday } from '../intraday/time.js';
 // v20.9.0 (H1 — audit): SAPTA ab SHARED HARD RISK GATE se guzarta hai
 // (wahi jo Bot Lab use karta hai) + event-day guard + cost-aware ranking.
-import { hardGateCheck, currentLossStreak, drawdownFromPeakPct } from '../risk/hardGate.js';
+import { hardGateCheck, currentLossStreak, drawdownFromPeakPct as _drawdownFromPeakPct } from '../risk/hardGate.js';
 import { eventGuardCheck } from './eventGuard.js';
 import { estimateRoundTripCost } from './tradingCosts.js';
 
@@ -342,7 +342,7 @@ export function proTraderGate(sig, cfg = PROTRADER_DEFAULTS) {
  *  • peakCum/cum    cumulative realized PnL ka peak/current (drawdown
  *                  basis — start-se nahi, PEAK se)
  */
-export function saptaRiskState(trades, { day, now = Date.now(), cumStats = null } = {}) {
+export function saptaRiskState(trades, { day, now: _now = Date.now(), cumStats = null } = {}) {
   const list = Array.isArray(trades) ? trades : [];
   const todayKey = day || _todayIST();
   const closedToday = list.filter((t) => t?.day === todayKey && t?.status === 'CLOSED');
@@ -472,7 +472,7 @@ export function pickProTraderCandidate(signals, cfg, { existingSymbols = [], coo
 export function proTraderReversalCheck({ trade, ltp, deepSide, deepConf, mtfConsensus, mtfAgreePct, cfg = PROTRADER_DEFAULTS }) {
   const reasons = [];
   const side = trade.side;
-  const entry = Number(trade.entryPrice);
+  const _entry = Number(trade.entryPrice);
   const sl = Number(trade.sl || trade.signal?.sl || 0);
   const p = Number(ltp);
   if (!Number.isFinite(p) || p <= 0) return { hit: false, reasons: ['no-ltp'], wantClose: false };

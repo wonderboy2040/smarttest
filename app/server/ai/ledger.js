@@ -43,7 +43,7 @@ const sha256 = (s) => crypto.createHash('sha256').update(String(s), 'utf8').dige
  *  partials (v7.0: the partial legs mutate in place exactly like the
  *  outcome does, without breaking the chain links after them). */
 function bodyOf(e) {
-  const { id, prevHash, hash, outcome, partials, ...body } = e || {};
+  const { id: _id, prevHash: _prevHash, hash: _hash, outcome: _outcome, partials: _partials, ...body } = e || {};
   return body;
 }
 function hashEntry(e) {
@@ -66,7 +66,7 @@ export function __reloadLedgerForBoot() {
   try {
     const l = load();
     if (Array.isArray(l?.entries) && l.entries.length > 0) {
-      // eslint-disable-next-line no-console
+       
       console.log(`[ledger] boot-restore: ${l.entries.length} entries hydrated (durable)`);
     }
     return true;

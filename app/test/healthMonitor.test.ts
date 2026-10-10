@@ -53,4 +53,27 @@ describe('server/healthMonitor.js — v21.1.0 /api/health contract', () => {
     const killActive = snap.kills?.aiDesk?.enabled === true || (snap.kills?.exec?.level || 0) > 0;
     expect(snap.ok).toBe(!killActive); // consistency — flag hamesha kills se derive
   });
+
+  // v21.1.2 (report-1.5): WS feeds cooldown detail expose karte hain —
+  // "kyun down" bina /api/feed-status ke hi dikhna chahiye.
+  it('feeds.ws.* entries cooldown detail (failStreak/cooldownRemainMs[/cooldownReason]) shape dete hain', async () => {
+    const snap = await healthSnapshot();
+    const ws = snap.feeds?.ws || {};
+    for (const [k, v] of Object.entries(ws)) {
+      expect(v, `feeds.ws.${k}`).toHaveProperty('armed');
+      expect(typeof v.failStreak, `feeds.ws.${k}.failStreak`).toBe('number');
+      expect(typeof v.cooldownRemainMs, `feeds.ws.${k}.cooldownRemainMs`).toBe('number');
+      if ('cooldownReason' in v) {
+        expect([null, 'handshake-streak', 'silent-contract', 'glob-quiet'], `feeds.ws.${k}.cooldownReason`)
+          .toContain(v.cooldownReason ?? null);
+      }
+    }
+    // idle-aware alert contract (healthMonitor loop) + UI classification
+    // (wsFeedView) dono armed:false ko down nahi maante — same entry se:
+    if (ws.coindcxFutures && ws.coindcxFutures.armed === false && ws.coindcxFutures.healthy === false) {
+      const { wsFeedView } = await import('../src/components/aitrading/wsFeedView');
+      expect(wsFeedView(ws.coindcxFutures).down).toBe(false);
+      expect(wsFeedView(ws.coindcxFutures).idle).toBe(true);
+    }
+  });
 });

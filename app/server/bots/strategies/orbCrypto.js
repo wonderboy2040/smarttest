@@ -15,7 +15,7 @@
 // Causality: identical discipline to orbIn (all windows end at
 // the signal bar; prior-session levels strictly prior).
 // ============================================================
-import { nn, prepareShared, finishShared, utcDayKey } from '../core/features.js';
+import { nn, prepareShared, finishShared, utcDayKey as _utcDayKey } from '../core/features.js';
 import { makeSnapshot, r4, missingFeatures } from './contract.js';
 
 export const SESSION_VARIANTS = {

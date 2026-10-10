@@ -656,7 +656,7 @@ function _ensureWs() {
   _syncBinanceFutTier(); // cx socket (re)arming — the tier re-evaluates
 }
 
-function _closeWs(reason) {
+function _closeWs(_reason) {
   if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
   if (_io) {
     try { _io.close(); } catch { /* already dead */ }

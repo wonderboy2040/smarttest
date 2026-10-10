@@ -18,8 +18,8 @@
 //      Greeks and lot sizes.
 // ============================================================
 import { fetchNSEOptionChain, fetchBSEOptionChain, fetchYahooQuotes } from './data.js';
-import { bsPrice, bsGreeks, impliedVol, yearsToExpiry, nextWeeklyExpiry, normCdf } from './lib/blackScholes.js';
-import { aggregateVotes } from './ensemble.js';
+import { bsPrice, bsGreeks, impliedVol as _impliedVol, yearsToExpiry, nextWeeklyExpiry, normCdf } from './lib/blackScholes.js';
+import { aggregateVotes as _aggregateVotes } from './ensemble.js';
 import { sessionPhase } from './probrain.js';
 
 const RISK_FREE = 0.069; // ~RBI repo-ish risk-free for NSE pricing
@@ -575,7 +575,7 @@ export function buildStrategies(desk, consensus) {
       delta: g.delta, theta: g.theta,
     };
   };
-  const T = yearsToExpiry(`${expiry}T15:30:00+05:30`);
+  const _T = yearsToExpiry(`${expiry}T15:30:00+05:30`);
   const out = [];
   // v6.7: POP needs an IV anchor — real chain ATM IV, else the VIX the
   // synthetic chain was priced from (honest model-estimated POP)

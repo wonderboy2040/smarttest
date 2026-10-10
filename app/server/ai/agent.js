@@ -31,9 +31,9 @@ import { loadJSON, saveJSON } from '../lib/store.js';
 import { durablePut } from '../mcp/durable.js';
 import { coindcxConnected } from '../mcp/coindcx.js';
 import { getTick } from '../liveFeed.js';
-import { walletSnapshot, executeFuturesSignal, closeFuturesPosition, fetchUsdInr, inrOfUsdt } from './futures.js';
+import { walletSnapshot, executeFuturesSignal, closeFuturesPosition, fetchUsdInr, inrOfUsdt as _inrOfUsdt } from './futures.js';
 import {
-  loadConfig, loadJournal, dailyStats, todayIST,
+  loadConfig, loadJournal, dailyStats as _dailyStats, todayIST,
   getPositionsWithPnl, withJournalLock, saveJournal, pushEntry,
 } from './coindcxOrders.js';
 // v10.1 accuracy upgrade (B4): pair-level correlation for the entry guard
@@ -43,12 +43,12 @@ import { v2ModelsEnabled } from './models.js';
 // v10.6 Pro Upgrade #2 (Kelly-lite): calibration buckets → realized edge
 import { trustReport, __testables as __trustTestables } from './trust.js';
 // v10.6 Pro Upgrade #6 (slippage-aware execution)
-import { readDepth, estimateSlippagePct, splitOrderForSlippage } from './orderFlowDepth.js';
+import { readDepth, estimateSlippagePct as _estimateSlippagePct, splitOrderForSlippage } from './orderFlowDepth.js';
 // v10.15 GAP 1: Live Conviction Tracker — the ensemble re-votes open
 // positions; FLIPPED exits at thesis-invalidation, WEAKENING tightens,
 // STRENGTHENING earns winner-extension room.
 import {
-  convictionEnabled, convictionOfPosition, weakeningShouldTighten, extensionConvictionVote,
+  convictionEnabled, convictionOfPosition, weakeningShouldTighten, extensionConvictionVote as _extensionConvictionVote,
 } from './positionConviction.js';
 // v10.15 GAP 2: Event Guard — no fresh entries inside a pre-event
 // blackout; T-2h sizing haircut (earnings/FOMC/RBI/CPI awareness).
@@ -90,7 +90,7 @@ function combinedFutDeployableUSDT(walletLike, fxFallback = 85) {
   const i = Number.isFinite(inr) && inr > 0 ? inr / fx : 0;
   return r2(u + i) || 0;
 }
-const nowMin = () => Date.now() / 60000;
+const _nowMin = () => Date.now() / 60000;
 
 // ---------------- config (durable) ----------------
 export const AGENT_DEFAULTS = {

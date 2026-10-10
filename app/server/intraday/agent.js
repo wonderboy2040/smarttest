@@ -16,7 +16,7 @@
 //     triggerScan, getTrackRecord, getPaperSummary,
 //     analyzeSymbol, getMarketRegime }
 // ============================================================
-import { istMinutes, marketPhase, getISTParts, isNseMarketOpen } from './time.js';
+import { istMinutes as _istMinutes, marketPhase, getISTParts, isNseMarketOpen } from './time.js';
 // v10.8 PRO #3: persistent chat memory — the desk remembers past turns
 import { rememberChat, memoryContextFor } from '../ai/agentMemory.js';
 // v10.10 SUPER-INTEL FALLBACK — engine-down ≠ data-down: deterministic

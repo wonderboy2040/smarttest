@@ -26,7 +26,7 @@ const r1 = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 10) / 10 
  */
 export function explainTicker(signal, ind = {}) {
   if (!signal || !ind) return null;
-  const s = r1(signal.ltp);
+  const _s = r1(signal.ltp);
   const ltp = Number(signal.ltp) > 0 ? Number(signal.ltp) : null;
   if (!ltp) return null;
 

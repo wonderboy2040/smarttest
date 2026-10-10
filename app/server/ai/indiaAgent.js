@@ -49,7 +49,7 @@ import { v2ModelsEnabled } from './models.js';
 // ensemble re-votes open India positions; FLIPPED exits at
 // thesis-invalidation, WEAKENING ratchets the SL toward breakeven.
 import {
-  convictionEnabled, convictionOfPosition, weakeningShouldTighten,
+  convictionEnabled, convictionOfPosition, weakeningShouldTighten as _weakeningShouldTighten,
 } from './positionConviction.js';
 // v11.1 GAP 2 — circuit-limit risk for open India positions (pure
 // classification + the Groww quote that carries the day's price band).
@@ -445,7 +445,7 @@ async function _tick(deps, sendTelegram) {
   let grGate = null;
   try {
     const { loadAgentConfig } = await import('./agent.js');
-    const cxCfg = loadAgentConfig();
+    const _cxCfg = loadAgentConfig();
     grGate = await globalRiskGate({
       cryptoEquityINR: 10_000, // practice default; the crypto agent refreshes with its live wallet on ITS ticks
       indiaCapitalINR: equityINR,

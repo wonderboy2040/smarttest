@@ -20,7 +20,7 @@
 // cache, absolute stateDir default (botRunner.js).
 // ============================================================
 import { BotRunner, botsEnabled, STRATEGIES, runThreeArmBacktest } from './botRunner.js';
-import { loadBotState, saveBotState, setKillSwitch, killSwitchActive } from './botState.js';
+import { loadBotState, saveBotState, setKillSwitch, killSwitchActive as _killSwitchActive } from './botState.js';
 import { smokeAll } from './smoke.js';
 import { createJev, jevConfig } from './jevEngine.js';
 import path from 'node:path';

@@ -118,12 +118,12 @@ export function futBookSnapshot(maxAgeMs = FUT_BOOK_FRESH_MS) {
 }
 
 /** One row lookup (tests + diagnostics). */
-function futBookRow(pair) {
+function _futBookRow(pair) {
   return _book.get(String(pair || '').toUpperCase()) || null;
 }
 
 /** Socket-liveness: epoch of the last merged book update (0 = never). */
-function futBookLastUpdateAt() { return _lastUpdateAt; }
+function _futBookLastUpdateAt() { return _lastUpdateAt; }
 
 /** Diagnostics for status endpoints/tests. */
 export function futBookStats() {

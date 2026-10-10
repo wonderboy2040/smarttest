@@ -82,7 +82,7 @@ export function seriesStats(rets, rfAnnual) {
   const annMu = mu * TRADING_DAYS;
   const annSd = sd * Math.sqrt(TRADING_DAYS);
   const annDd = dd * Math.sqrt(TRADING_DAYS);
-  const rfDaily = rfAnnual / TRADING_DAYS;
+  const _rfDaily = rfAnnual / TRADING_DAYS;
   const sharpe = annSd > 0 ? (annMu - rfAnnual) / annSd : null;
   const sortino = annDd > 0 ? (annMu - rfAnnual) / annDd : null;
   // max drawdown on the cumulative return path

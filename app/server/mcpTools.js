@@ -4,7 +4,7 @@
 // Live Real-Time Market APIs, SuperScore v6, News & Portfolio Data
 // ============================================================
 
-import { getMLPrediction, getRegime } from './mlEngine.js';
+import { getMLPrediction as _getMLPrediction, getRegime } from './mlEngine.js';
 import { TV_SCAN_HEADERS } from './lib/tvHeaders.js';
 
 // ============================================
@@ -658,15 +658,15 @@ export async function executeServerMCPTool(name, args = {}, context = {}) {
             const d = item.d;
             const ltp = pf(d[23]) || pf(d[0]) || 0;
             if (!ltp || ltp <= 0) continue;
-            const open = pf(d[1]) || ltp;
+            const _open = pf(d[1]) || ltp;
             const high = pf(d[2]) || ltp;
             const low = pf(d[3]) || ltp;
             const change = pf(d[5]) || 0;
             const ema10 = pf(d[6]) ?? ltp;
             const ema20 = pf(d[7]) ?? ltp;
             const rsi = pf(d[10]) ?? 50;
-            const macd = pf(d[11]);
-            const macdSig = pf(d[12]);
+            const _macd = pf(d[11]);
+            const _macdSig = pf(d[12]);
             const atr = pf(d[13]) || (ltp * 0.02);
             const vwap = pf(d[14]) || ltp;
             const adx = pf(d[15]) ?? 20;
@@ -772,7 +772,7 @@ export async function executeServerMCPTool(name, args = {}, context = {}) {
         const ltp = growwQuote?.ltp || pf(tvData?.[23]) || pf(tvData?.[0]) || 0;
         if (!ltp || ltp <= 0) return { error: `Real-time intraday data unavailable for ${rawSym}. Verify symbol.` };
 
-        const open = pf(tvData?.[1]) || (growwQuote?.ltp && growwQuote?.dayChange != null ? (growwQuote.ltp - growwQuote.dayChange) : ltp);
+        const _open = pf(tvData?.[1]) || (growwQuote?.ltp && growwQuote?.dayChange != null ? (growwQuote.ltp - growwQuote.dayChange) : ltp);
         const high = Math.max(growwQuote?.high || 0, pf(tvData?.[2]) || 0) || ltp;
         const low = Math.min(growwQuote?.low || Infinity, pf(tvData?.[3]) || Infinity);
         const effectiveLow = isFinite(low) ? low : ltp;
@@ -780,8 +780,8 @@ export async function executeServerMCPTool(name, args = {}, context = {}) {
         const ema10 = pf(tvData?.[6]) ?? ltp;
         const ema20 = pf(tvData?.[7]) ?? ltp;
         const rsi = pf(tvData?.[10]) ?? 50;
-        const macd = pf(tvData?.[11]);
-        const macdSig = pf(tvData?.[12]);
+        const _macd = pf(tvData?.[11]);
+        const _macdSig = pf(tvData?.[12]);
         const atr = pf(tvData?.[13]) || (ltp * 0.02);
         const vwap = pf(tvData?.[14]) || ltp;
         const adx = pf(tvData?.[15]) ?? 20;

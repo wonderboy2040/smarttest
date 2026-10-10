@@ -53,7 +53,7 @@ import { settlePositionOutcome } from './ledger.js';
 import { pRound } from './lib/priceRound.js';
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
-const num = (v) => { const n = typeof v === 'number' ? v : parseFloat(String(v ?? '')); return Number.isFinite(n) ? n : null; };
+const _num = (v) => { const n = typeof v === 'number' ? v : parseFloat(String(v ?? '')); return Number.isFinite(n) ? n : null; };
 const inrOfUsdt = (usdt, usdInr) => r2((Number(usdt) || 0) * (Number(usdInr) > 0 ? Number(usdInr) : 84));
 
 const AGENT_CONFIG_FILE = 'ai-agent-config.json'; // owned by agent.js — mirrored read (loadProTraderConfig pattern)
@@ -179,7 +179,7 @@ export function reversalDecision({ p, price, usdInr, cfg, cycle, now = Date.now(
   const pnlINR = reversalLegPnlINR({ p, price, usdInr });
   const trig = reversalTriggerOf({ pnlINR, cfg });
   if (!trig) return { action: 'HOLD', flipSide: null, blocked: null, pnlINR, reasons };
-  const legNo = p.reversal?.leg ?? 1;
+  const _legNo = p.reversal?.leg ?? 1;
   const opposite = p.side === 'LONG' ? 'SHORT' : 'LONG';
 
   if (trig === 'PROFIT_TARGET') {

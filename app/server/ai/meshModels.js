@@ -181,7 +181,7 @@ export async function warmMeshModels(market, symbols) {
   // burning every bucket in the first warm of the day
   needed.sort((a, b) => ((_lastQueryAt.get(a.key) || 0) - (_lastQueryAt.get(b.key) || 0)));
   const batch = needed.slice(0, BATCH_N());
-  for (const { cap, sym, key } of batch) _lastQueryAt.set(key, now);
+  for (const { cap: _cap, sym: _sym, key } of batch) _lastQueryAt.set(key, now);
   if (batch.length > 0) _warmStats.queriesIssued += batch.length;
 
   await Promise.allSettled(batch.map(async ({ cap, sym }) => {
@@ -671,7 +671,7 @@ export function applyMeshModelGating(votes, { seats = _seatModes(), corr = null 
 export function meshModelsWarmView() {
   const byMarket = {};
   for (const [key, rec] of _store.entries()) {
-    const [mkt, sym] = key.split('|');
+    const [mkt, _sym] = key.split('|');
     if (!byMarket[mkt]) byMarket[mkt] = { symbols: 0, capsServed: 0, capsGapped: 0, staleCapped: 0 };
     byMarket[mkt].symbols += 1;
     for (const [cap, c] of Object.entries(rec.caps || {})) {

@@ -230,7 +230,7 @@ async function _runWeeklyReport(deps, weekKey) {
   }).join('\n');
 
   const stats = _dayStats(trades);
-  const closes = trades.map(t => t.closeReason);
+  const _closes = trades.map(t => t.closeReason);
   const slDiscipline = trades.length
     ? Math.round(trades.filter(t => ['SL_HIT', 'SL_TRAIL_HIT', 'MANUAL'].includes(t.closeReason)).length / trades.length * 100) : null;
   const t1BookingRate = trades.filter(t => t.target1).length

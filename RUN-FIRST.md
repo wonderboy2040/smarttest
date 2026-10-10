@@ -383,6 +383,24 @@ liye Watchdog bat kaafi hai.
 
 ---
 
+## 🆕 v21.1.2 — REPORT PHASE-1 (WS-Down fix + probe + lint zero)
+
+**IMPORTANT — 2 naya/updated kaam:**
+1. **CoinDCX tab "WS DOWN" dikhe to** pehle OS strip pe hover karo — tooltip me
+   `cooldownReason`/`failStreak`/`cooldownRemainMs` dikhega. Grey "N idle" = koi
+   subscriber nahi (NORMAL, down nahi). Ab bhi doubt ho to probe chalao:
+   `cd app && node scripts/cx-ws-probe.mjs` (spot: `--spot`) — VERDICT line
+   exact wajah + action batayegi. (Sandbox se LIVE verify: HEALTHY, 114 ticks/30s)
+2. **Render deploy**: dist ab git me tracked NAHI — Build Command
+   `npm ci && npm run build` zaroori (v21.1.1 se hi, ab remote se bhi clean)
+
+**Kya naya hai:** WS idle-vs-down UI fix (armed:false = grey idle, red sirf
+armed+unhealthy), `/api/health` me WS cooldown reason/streak/remaining, process
+exit-listener cross-registry hardening, **eslint 128 → 0 warnings** (scope-aware
+renames), 10 naye tests (3505/3505 green).
+
+---
+
 ## 🆕 v21.1.1 — RECHECK RELEASE (advance-pro full-site audit)
 
 **IMPORTANT — pehle ye 3 kaam karo:**

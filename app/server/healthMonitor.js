@@ -86,7 +86,7 @@ export async function healthSnapshot() {
       nseOpen = isNseMarketOpen();
     } catch { nseOpen = null; /* time.js unavailable — unfiltered (safe) */ }
     const INDIA_FEED_SOURCES = new Set(['groww-live', 'yahoo-delayed', 'groww', 'yahoo']);
-    let staleArmed = [];
+    const staleArmed = [];
     for (const [src, a] of Object.entries(ages)) {
       out.feeds.sources[src] = { ...a, live: booleans[src] === true };
       if (INDIA_FEED_SOURCES.has(String(src).toLowerCase()) && nseOpen === false) continue;
@@ -111,6 +111,13 @@ export async function healthSnapshot() {
       lastTickAt: cx?.lastTickAt ?? null,
       ageSec: cx?.lastTickAt ? Math.max(0, Math.round((now - cx.lastTickAt) / 1000)) : null,
       armed: _cxArmed, // idle-by-design (no subscribers) = alerting nahi hogi
+      // v21.1.2 (report-1.5): "kyun down" seedha health me — cooldown phase
+      // me REST 2s polling chalta rehta hai (prices aate hain), WS sirf
+      // accelerator band hota hai. UI tooltip + automated monitors ab
+      // reason/streak/remaining dekh sakte hain bina /api/feed-status ke.
+      cooldownReason: cx?.cooldownReason ?? null, // 'handshake-streak' | 'silent-contract' | 'glob-quiet' | null
+      failStreak: Number.isFinite(cx?.failStreak) ? cx.failStreak : 0,
+      cooldownRemainMs: cx?.cooldownActive === true ? Math.max(0, cx?.cooldownRemainMs || 0) : 0,
     };
     if (cx?.spotWs) {
       out.feeds.ws.coindcxSpot = {
@@ -118,6 +125,8 @@ export async function healthSnapshot() {
         lastUpdateAt: cx.spotWs.lastUpdateAt ?? null,
         ageMs: cx.spotWs.ageMs ?? null,
         armed: _cxArmed,
+        failStreak: Number.isFinite(cx?.failStreak) ? cx.failStreak : 0,
+        cooldownRemainMs: cx?.cooldownActive === true ? Math.max(0, cx?.cooldownRemainMs || 0) : 0,
       };
     }
   } catch { /* cxRtStream not armed */ }
@@ -129,6 +138,10 @@ export async function healthSnapshot() {
       lastTickAt: b?.lastTickAt ?? null,
       ageSec: b?.lastTickAt ? Math.max(0, Math.round((now - b.lastTickAt) / 1000)) : null,
       armed: b?.enabled === true && b?.wantOpen === true,
+      // v21.1.2 (report-1.5): parity with coindcxFutures entry (binance tier
+      // me explicit reason string nahi hai — sirf streak + remain).
+      failStreak: Number.isFinite(b?.failStreak) ? b.failStreak : 0,
+      cooldownRemainMs: b?.cooldownActive === true ? Math.max(0, b?.cooldownRemainMs || 0) : 0,
     };
   } catch { /* binanceFutWs not armed */ }
 

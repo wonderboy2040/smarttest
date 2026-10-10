@@ -418,7 +418,7 @@ export function analyzeIntradayFromScanner(symbol, tv, groww, opts = {}) {
     (tv?.low > 0 ? tv.low : Infinity)
   );
   const effectiveLow = isFinite(low) ? low : ltp;
-  const volume = groww?.volume || tv?.volume || 0;
+  const _volume = groww?.volume || tv?.volume || 0;
 
   // Pre-computed indicators from TradingView (instant — no candle counts needed)
   const ema10 = tv?.ema10 ?? ltp;

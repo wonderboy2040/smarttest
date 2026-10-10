@@ -173,7 +173,7 @@ export function buildSuperBlueprint({
   side, ltp, atr, aiScore, market, ema20 = null,
   entryZoneLow = null, entryZoneHigh = null,
   stopLoss, target1, target2, target3 = null,
-  atrPctLtp = null, now = Date.now(), sqOffBy = null, changePct = null,
+  atrPctLtp = null, now = Date.now(), sqOffBy = null, changePct: _changePct = null,
 }) {
   if (!(ltp > 0) || !Number.isFinite(stopLoss) || !Number.isFinite(target1)) return null;
   const long = String(side || 'LONG').toUpperCase() !== 'SHORT';

@@ -19,7 +19,7 @@
 //      endpoint, honest error when unreachable).
 // ============================================================
 import { computeIndicatorsFromCandles, emaSeries, obvSlope } from './lib/indicators.js';
-import { INDIA_UNIVERSE, CRYPTO_UNIVERSE, fetchCoinDcxCandles } from './data.js';
+import { INDIA_UNIVERSE as _INDIA_UNIVERSE, CRYPTO_UNIVERSE as _CRYPTO_UNIVERSE, fetchCoinDcxCandles } from './data.js';
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);

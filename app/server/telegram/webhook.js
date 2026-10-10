@@ -52,7 +52,7 @@ import { transcribeVoiceNote, voiceMimeOf } from '../ai/voiceNotes.js';
 import {
   approvalEnabled, createTradeApproval, beginPinPhase, rejectTradeApproval,
   submitPin, parseTradeCommand, parseApprovalCallback, pendingRequest,
-  requestById, approvalStatus, ownsRequest,
+  requestById as _requestById, approvalStatus, ownsRequest,
 } from '../ai/tradeApproval.js';
 import { runApprovedExecution } from '../ai/routes.js';
 
@@ -550,7 +550,7 @@ export function registerTelegramWebhook(app, deps = {}) {
 }
 
 // ---------------- command dispatcher ----------------
-async function handleTelegramCommand({ text, chatKey, role, cfgTG, aiDeps, send }) {
+async function handleTelegramCommand({ text, chatKey, role, _cfgTG, aiDeps, send }) {
   // ---- PIN window first: a pending approval swallows digit messages ----
   if (await handlePossiblePin({ text, chatKey, send })) return;
 

@@ -27,7 +27,7 @@ import { aggregateVotes, buildTradePlan, applyRegimeWeights, classifyRegimeFromC
 // trust guards (chase + OB/OS) applied at entry, exactly what the board
 // and the execution gate now do. This is the proof layer: raw vs
 // guarded on identical data.
-import { entryTimingRead, CHASE_HARD_CONF_CAP, CHASE_SOFT_CONF_PENALTY } from './entryTiming.js';
+import { entryTimingRead, CHASE_HARD_CONF_CAP as _CHASE_HARD_CONF_CAP, CHASE_SOFT_CONF_PENALTY } from './entryTiming.js';
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 const SLIPPAGE = 0.001; // 10 bps each side

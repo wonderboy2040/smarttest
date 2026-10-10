@@ -119,7 +119,7 @@ export function buildCryptoIndices(rows) {
  * tv: TradingView indicator row (may be null — quote-only fallback)
  * q:  live quote { price, change, high, low, volume } (Groww NSE / CoinDCX INR)
  */
-export function moversAnalysis(row, market) {
+export function moversAnalysis(row, _market) {
   const tags = [];
   const bits = [];
 

@@ -72,7 +72,7 @@ export class ApiFuturesPort {
       }));
     } catch (e) { return []; }
   }
-  async open({ pair, side, qty, leverage, type = 'market', price = null, sl, tp, clientId }) {
+  async open({ pair, side, qty, leverage, type = 'market', price = null, _sl, _tp, clientId }) {
     try {
       const isLong = String(side).toUpperCase() === 'LONG';
       // v20.7.10 CRITICAL FIX: createFuturesOrder({ pair, side, qty,
@@ -152,7 +152,7 @@ export class ApiFuturesPort {
       return { ok: r?.ok === true, raw: r, error: r?.ok === true ? undefined : String(r?.error || 'exit rejected') };
     } catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
-  async cancelOpenOrders({ pair }) {
+  async cancelOpenOrders({ _pair }) {
     // v20.7.12 [H2-5]: pehle ok:true stub tha — positionManager iska note
     // error message me embed karta hai, par ok jhootha tha (cancel HUA HI
     // NAHI tha jabki flow aage badh gaya). Ab honest verdict — caller
@@ -412,7 +412,7 @@ export class BrowserCdpPort {
       }).filter((p) => p.pair);
     } catch (e) { return []; }
   }
-  async open({ pair, side, qty, leverage, type = 'limit', price, sl, tp, clientId }) {
+  async open({ pair, side, qty, leverage, type: _type = 'limit', price, _sl, _tp, clientId }) {
     try {
       // v20.7.6 FIX: browserAgent ke REAL signatures use karo — pehle ye
       // cxSelectPair(pair) / cxPlaceOrder({...}) bina `page` arg ke call
@@ -430,7 +430,7 @@ export class BrowserCdpPort {
       return { ok: !!r?.ok, orderId: clientId || `browser-${Date.now()}`, raw: r };
     } catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
-  async setProtection({ positionId, sl, tp }) {
+  async setProtection({ _positionId, _sl, _tp }) {
     // Phase 6 hardening: set SL/TP via CoinDCX UI's TP/SL control +
     // read-back verify. NOT YET IMPLEMENTED — return ok:false so the
     // positionManager's protection-first sequence flattens on schedule.
@@ -473,7 +473,7 @@ export class BrowserCdpPort {
       return { ok: !!r?.ok, raw: r };
     } catch (e) { return { ok: false, error: String(e?.message || e) }; }
   }
-  async cancelOpenOrders({ pair }) { return { ok: true, note: 'browser cancelOpenOrders not yet wired' }; }
+  async cancelOpenOrders({ _pair }) { return { ok: true, note: 'browser cancelOpenOrders not yet wired' }; }
 }
 
 /**

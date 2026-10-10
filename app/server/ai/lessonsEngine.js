@@ -28,7 +28,7 @@
 // (n, winRate, avgR stamped per lesson); a lesson engine without
 // numbers is an opinion engine. Rows < 20 → deterministic mode.
 // ============================================================
-import { rowsForLessons, datasetStatus } from './outcomeHarvester.js';
+import { rowsForLessons, datasetStatus as _datasetStatus } from './outcomeHarvester.js';
 import { driftReport } from './driftMonitor.js';
 import { recordChange } from './evolutionLedger.js';
 import { loadJSON, saveJSON } from '../lib/store.js';

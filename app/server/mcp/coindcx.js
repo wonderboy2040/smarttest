@@ -95,7 +95,7 @@ function loadManualBasis() {
   }
   // Legacy flat shape { BTC: 123 } (pre-v6.1 file or durable backup) —
   // the whole object IS the basis map.
-  const { updatedAt, ...coins } = raw;
+  const { updatedAt: _updatedAt, ...coins } = raw;
   return coins;
 }
 function saveManualBasis(basis) {

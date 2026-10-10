@@ -11,6 +11,7 @@
 import { memo, useCallback, useEffect, useState } from 'react';
 import { HeartPulse } from 'lucide-react';
 import { apiFetch } from '../../utils/api';
+import { wsFeedView, wsFeedTooltipLine, type WsFeedEntry } from './wsFeedView';
 
 interface HealthSnap {
   ok?: boolean;
@@ -18,7 +19,7 @@ interface HealthSnap {
   feeds?: {
     sources?: Record<string, { ageSec: number; live?: boolean }>;
     staleSources?: string[];
-    ws?: Record<string, { healthy?: boolean; ageSec?: number | null }>;
+    ws?: Record<string, WsFeedEntry>;
   };
   kills?: {
     aiDesk?: { enabled?: boolean };
@@ -70,7 +71,16 @@ export const OpsHealthStrip = memo(function OpsHealthStrip() {
   const stale = snap.feeds?.staleSources || [];
   const worstAge = sources.reduce((m, [, v]) => Math.max(m, v?.ageSec || 0), 0);
   const wsEntries = Object.entries(snap.feeds?.ws || {});
-  const wsDown = wsEntries.filter(([, v]) => v?.healthy === false);
+  // v21.1.2 (report Phase-1.1 / Cause-1): IDLE ≠ DOWN. Purana UI sirf
+  // `healthy === false` dekhta tha — server ke idle sockets (koi subscriber
+  // nahi, armed:false) bhi red "WS DOWN" ban jaate the. Ab classification
+  // wsFeedView helper se hoti hai (pure + unit-tested):
+  //   • armed + unhealthy  → DOWN (red)
+  //   • armed:false         → IDLE (grey, "N idle")
+  //   • healthy             → OK
+  const wsViews = wsEntries.map(([k, v]) => ({ name: k, entry: v, view: wsFeedView(v) }));
+  const wsDown = wsViews.filter((w) => w.view.down);
+  const wsIdle = wsViews.filter((w) => w.view.idle);
 
   // ---- kills ----
   const execLvl = snap.kills?.exec?.level || 0;
@@ -94,9 +104,17 @@ export const OpsHealthStrip = memo(function OpsHealthStrip() {
       </span>
       {chip(feedTone, `FEEDS ${liveCount}/${sources.length}${worstAge > 0 ? ` · ${worstAge}s` : ''}`, feedTitle, 'feeds')}
       {wsEntries.length > 0 && chip(
-        wsDown.length === 0 ? 'ok' : 'bad',
-        `WS ${wsEntries.length - wsDown.length}/${wsEntries.length}`,
-        wsDown.length === 0 ? 'All market WebSockets healthy' : `WS DOWN: ${wsDown.map(([k]) => k).join(', ')}`,
+        wsDown.length > 0 ? 'bad' : 'ok',
+        wsDown.length > 0
+          ? `WS ⚠ ${wsDown.length} DOWN`
+          : wsIdle.length > 0
+            ? `WS ${wsEntries.length - wsIdle.length}/${wsEntries.length} · ${wsIdle.length} idle`
+            : `WS ${wsEntries.length}/${wsEntries.length}`,
+        wsDown.length > 0
+          ? `WS DOWN (armed streams): ${wsDown.map((w) => w.name).join(', ')}\n${wsViews.map((w) => wsFeedTooltipLine(w.name, w.entry)).join('\n')}`
+          : wsIdle.length > 0
+            ? `Armed streams sab healthy${wsIdle.length ? ` · ${wsIdle.length} IDLE (koi subscriber nahi — normal, down nahi)` : ''}\n${wsViews.map((w) => wsFeedTooltipLine(w.name, w.entry)).join('\n')}`
+            : `All market WebSockets healthy\n${wsViews.map((w) => wsFeedTooltipLine(w.name, w.entry)).join('\n')}`,
         'ws',
       )}
       {chip(anyKill ? 'bad' : 'ok',

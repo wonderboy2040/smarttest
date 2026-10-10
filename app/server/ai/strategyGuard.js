@@ -53,7 +53,7 @@ export const KILL_RULE = {
   // trigger hi nahi hota (winR.length >= minTrades unreachable). Clamp karo
   // aur ek warning line do taaki silent-disable na ho.
 if (KILL_RULE.minTrades > KILL_RULE.window) {
-  // eslint-disable-next-line no-console
+   
   console.warn(`[strategyGuard] STRATEGY_KILL_MIN_TRADES (${KILL_RULE.minTrades}) > STRATEGY_KILL_WINDOW (${KILL_RULE.window}) — window ko minTrades tak clamp kiya (warna rule silently disabled rehta)`);
   KILL_RULE.window = KILL_RULE.minTrades;
 }

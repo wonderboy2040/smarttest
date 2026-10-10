@@ -51,7 +51,7 @@ function _resetDailyCounter() {
 }
 
 // Raw Telegram send — injected so this module has no TG dependency.
-function makeSender(sendTelegramRaw, escapeHtml) {
+function makeSender(sendTelegramRaw, _escapeHtml) {
   return async function send(html) {
     try { return await sendTelegramRaw(html); } catch { return false; }
   };

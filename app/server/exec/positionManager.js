@@ -36,7 +36,7 @@
 // same code path runs in api / browser / paper mode.
 // ============================================================
 import { ratchetSl } from '../ai/coindcxOrders.js';
-import { computeSizing, liqDistancePct, tierLeverage } from './sizing.js';
+import { computeSizing, liqDistancePct as _liqDistancePct, tierLeverage } from './sizing.js';
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 // Quantities use the instrument qty step (0.0001) — NEVER r2 (2 decimals would
@@ -284,7 +284,7 @@ export class PositionManager {
    * with the live mark price for each open position.
    * Returns the list of actions taken (for journal + UI).
    */
-  async tick({ pricesByPair, now = Date.now(), atrByPair = {} }) {
+  async tick({ pricesByPair, now: _now = Date.now(), atrByPair = {} }) {
     const actions = [];
     const positions = await this._port.getPositions();
     for (const p of positions) {
@@ -429,7 +429,7 @@ export class PositionManager {
    *   2 classes → 50% reduce
    *   3+ classes → full close
    */
-  async reversalCheck({ evidenceByPair, now = Date.now() }) {
+  async reversalCheck({ evidenceByPair, now: _now = Date.now() }) {
     const actions = [];
     const positions = await this._port.getPositions();
     for (const p of positions) {
@@ -479,7 +479,7 @@ export class PositionManager {
    * timeout) — us case me position naked reh jaati thi aur message jhoot
    * bolta tha. Retry ×2 (1s gap), phir honest verdict.
    */
-  async _flattenWithRetry(filled, { retries = 1, log = () => {} } = {}) {
+  async _flattenWithRetry(filled, { retries = 1, log: _log = () => {} } = {}) {
     let lastErr = 'unknown';
     for (let i = 0; i <= retries; i++) {
       try {

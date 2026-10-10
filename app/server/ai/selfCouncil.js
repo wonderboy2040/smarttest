@@ -38,7 +38,7 @@ const FILE = 'ai-self-proposals.json';
 const MAX_PROPOSALS = 50;
 const SAFE_AUTO_HOURS = 24;
 
-const r2 = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : null);
+const _r2 = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v) * 100) / 100 : null);
 
 /** The FULL whitelist of keys a proposal may patch. 'safe' keys =
  * bounded gate numerics; 'risky' keys = scope/size knobs. Anything
@@ -123,7 +123,7 @@ export function submitProposal(p) {
 }
 
 /** Current values of ONLY the keys a patch touches. */
-function snapshotOf(patch, store) {
+function snapshotOf(patch, _store) {
   let cfg;
   try { cfg = loadAgentConfig(); } catch { cfg = {}; }
   const snap = {};

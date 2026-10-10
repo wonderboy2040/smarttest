@@ -64,7 +64,7 @@ export function makeLvl(overrides = {}) {
     lotSize: 1,
     sessionKey: sKey,
 
-    prepare(bars, opts = {}) {
+    prepare(bars, _opts = {}) {
       const rows = prepareShared(bars, { atrPeriod, emaFast: 50, emaSlow: 200 });
       finishShared(rows, bars, { intervalMin: 5, sessionKey: sKey });
       for (let i = 0; i < rows.length; i++) {
@@ -201,7 +201,7 @@ export function makeLvl(overrides = {}) {
           return Number(f.reclaim_close) === 1 ? null : 'no_reclaim';
         },
         function friction_dominant(row, ctx = {}) {
-          const f = ctx.features || {};
+          const _f = ctx.features || {};
           const fr = nn(ctx.frictionRiskR ?? row?.frictionRiskR);
           if (fr == null) return 'friction_dominant:insufficient_data';
           // tight-stop killer: friction >= 10% of the 0.5R target = walk away

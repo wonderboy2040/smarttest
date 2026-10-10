@@ -52,7 +52,7 @@ const DEPTH_CHAIN_BUDGET_MS = 6000;
 const FALLBACK_FLOOR_MS = 750;
 const RING_KEEP = 3;                // velocity ring (spoof detection)
 const WALL_X = 4;                   // level ≥ 4× side median = wall
-const WALL_VANISH_FACTOR = 1.5;     // wall "gone" when back under this × median
+const _WALL_VANISH_FACTOR = 1.5;     // wall "gone" when back under this × median
 
 const num = (v) => { const n = typeof v === 'number' ? v : parseFloat(String(v ?? '')); return Number.isFinite(n) ? n : null; };
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);

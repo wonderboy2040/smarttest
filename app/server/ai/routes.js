@@ -102,7 +102,7 @@ import {
 // gates, CoinDCX + Dhan in the user's open browser, reversal-confirmed exits).
 import {
   proTraderTick, proTraderStatusView, proTraderStart, proTraderStop,
-  updateProTraderConfig, loadProTraderConfig, proTraderStreamHandler,
+  updateProTraderConfig, loadProTraderConfig as _loadProTraderConfig, proTraderStreamHandler,
   proTraderBrowserTest, proTraderTestRun, PROTRADER_TICK_SEC,
 } from './proTraderAuto.js';
 import { executeIndiaSignal, watchIndiaPositions, closeIndiaPosition } from './indiaOrders.js';
@@ -123,7 +123,7 @@ import { runCustomStrategyBacktest } from './strategyLab.js';
 // v10.9 INSTANT TELEGRAM PUSH — the price-driven sink (SL/TP touches +
 // STRONG signals) + the shared dedupe the 60s backup alerter reuses.
 import {
-  startInstaPushSink, scanStrongSignalsBackup, instaPushStatus, instantPushEnabled,
+  startInstaPushSink, scanStrongSignalsBackup, instaPushStatus, instantPushEnabled as _instantPushEnabled,
 } from './telegramPush.js';
 // v10.9 WEEKLY REVIEW — journal + calibration → one LLM narration
 import { runWeeklyPerformanceReview, weeklyReviewStatus, scheduleWeeklyReviewPush } from './weeklyReview.js';
@@ -149,9 +149,9 @@ import { runWeeklyPerformanceReview, weeklyReviewStatus, scheduleWeeklyReviewPus
 // same live tracking + conviction intelligence the desk gives its own.
 // v12.0: + R-multiple/MFE-MAE excursion tracking + aggregate stats.
 import {
-  recordManualTrade, listManualTrades, getManualTrade, closeManualTrade,
+  recordManualTrade, listManualTrades, getManualTrade as _getManualTrade, closeManualTrade,
   ltpForManualTrade, manualTradeView, manualConvictionOf, lastKnownConvictionForView,
-  startManualTradeMonitor, manualMonitorStatus, flushManualState,
+  startManualTradeMonitor, manualMonitorStatus, flushManualState as _flushManualState,
   updateExcursion, manualStats,
 } from './manualTrades.js';
 import { getTick as _getTick } from '../liveFeed.js';
@@ -1202,7 +1202,7 @@ export function registerAITradingRoutes(app, deps) {
   app.post('/api/ai/agent/config', (req, res) => {
     try {
       // mode changes NEVER pass through this endpoint — start/stop own it
-      const { mode, enabled, ...patch } = req.body || {};
+      const { mode: _mode, enabled: _enabled, ...patch } = req.body || {};
       const cfg = updateAgentConfig(patch);
       res.json({ ok: true, config: cfg });
     } catch (e) {
@@ -1239,7 +1239,7 @@ export function registerAITradingRoutes(app, deps) {
 
   app.post('/api/ai/protrader-auto/config', (req, res) => {
     try {
-      const { mode, enabled, ...patch } = req.body || {}; // start/stop own these
+      const { mode: _mode, enabled: _enabled, ...patch } = req.body || {}; // start/stop own these
       const cfg = updateProTraderConfig(patch);
       res.json({ ok: true, config: cfg });
     } catch (e) {
@@ -1287,7 +1287,7 @@ export function registerAITradingRoutes(app, deps) {
   app.post('/api/india/agent/config', (req, res) => {
     try {
       // mode changes NEVER pass through this endpoint — start/stop own it
-      const { mode, enabled, ...patch } = req.body || {};
+      const { mode: _mode, enabled: _enabled, ...patch } = req.body || {};
       const cfg = updateIndiaAgentConfig(patch);
       res.json({ ok: true, config: cfg });
     } catch (e) {

@@ -72,7 +72,7 @@ async function yahooQuoteSummary(symbol) {
   const modules = 'defaultKeyStatistics,financialData,summaryDetail,assetProfile';
   let { cookies, crumb } = await ensureCrumb();
   for (const host of ['query1', 'query2']) {
-    for (const attempt of [0, 1]) {
+    for (const _attempt of [0, 1]) {
       try {
         const url = `https://${host}.finance.yahoo.com/v10/finance/quoteSummary/${yh}?modules=${modules}&crumb=${encodeURIComponent(crumb)}`;
         const r = await fetch(url, { headers: { 'User-Agent': UA, Cookie: cookies }, signal: AbortSignal.timeout(9000) });

@@ -9,7 +9,7 @@
 // • Cron (node-cron): 09:10 IST Mon-Fri → Telegram briefing.
 // ============================================================
 import { askLLM } from './agent.js';
-import { getISTParts, marketPhase, isNseMarketOpen, istDayKey } from './time.js';
+import { getISTParts, marketPhase as _marketPhase, isNseMarketOpen, istDayKey } from './time.js';
 import { loadJSON, saveJSON } from './store.js';
 
 const BRIEFING_FILE = 'last-briefing.json';

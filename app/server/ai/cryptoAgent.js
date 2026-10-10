@@ -18,7 +18,7 @@
 // ============================================================
 import { getSignals, getDeepSignal, buildRegime } from './signals.js';
 import { walletSnapshot, fetchUsdInr } from './futures.js';
-import { getPositionsWithPnl, loadConfig, getRiskState, loadJournal, todayIST } from './coindcxOrders.js';
+import { getPositionsWithPnl, loadConfig as _loadConfig, getRiskState, loadJournal, todayIST } from './coindcxOrders.js';
 import { trustReport, governance } from './trust.js';
 import { maxSaneLeverage } from './ensemble.js';
 import { loadAgentConfig, agentStatus } from './agent.js';

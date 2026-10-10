@@ -110,7 +110,7 @@ function _syncTradeSubscriptions(open, deps) {
   const { ensureSubs, releaseSubs, clientUp, clientDown } = deps || {};
   if (typeof ensureSubs !== 'function' || typeof releaseSubs !== 'function') return;
   const want = _splitOpenTradeSyms(open);
-  const wantCx = { fut: want.fut, glob: want.glob };
+  const _wantCx = { fut: want.fut, glob: want.glob };
   const wantCxAny = want.fut.size > 0 || want.glob.size > 0;
 
   // First open trade → start holding (clientUp per stream so the

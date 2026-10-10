@@ -126,7 +126,7 @@ function _govern(level, cfg, args) {
  * server/index.js (before the boot chatter starts).
  *   initLogGovernor({ env, nowFn })
  */
-export function initLogGovernor({ env = process.env, nowFn } = {}) {
+export function initLogGovernor({ env = process.env, nowFn: _nowFn } = {}) {
   if (_state.armed || _orig) return false;
   const off = String(env.LOG_GOVERNOR || '').toLowerCase() === 'off';
   // v21.1.0: console channel → level name mapping (log=info is the

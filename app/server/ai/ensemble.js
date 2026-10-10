@@ -119,7 +119,7 @@ export function aggregateVotes(votes, gates = DEFAULT_GATES, opts = {}) {
   const side = bull > bear ? 'LONG' : 'SHORT';
   const dir = side === 'LONG' ? 1 : -1;
   const winWeight = Math.max(bull, bear);
-  const loseWeight = Math.min(bull, bear);
+  const _loseWeight = Math.min(bull, bear);
 
   // Agreement: winning weight / voting weight (abstaining models don't count against).
   const agreement = winWeight / votingWeight;

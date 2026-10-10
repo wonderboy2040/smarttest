@@ -29,7 +29,7 @@ REM USE: double-click karo, window khuli/minimized rakho.
 REM      startai.exe iske SAATH mat chalao (port 8080 clash).
 REM      Band karna = Ctrl+C ya window close.
 REM ============================================================
-title SmartAI PRO v21.1.1 - Anti-Freeze Watchdog
+title SmartAI PRO v21.1.2 - Anti-Freeze Watchdog
 cd /d "%~dp0"
 
 set "NODE_EXE="
@@ -47,7 +47,7 @@ if not defined NODE_EXE (
 )
 
 echo ============================================================
-echo  SMARTAI PRO v21.1.1 - ANTI-FREEZE SUPERVISOR
+echo  SMARTAI PRO v21.1.2 - ANTI-FREEZE SUPERVISOR
 echo  Site   : localhost:8080
 echo  Engine : %NODE_EXE%
 echo  Hang   : FREEZE detect - force-kill + restart

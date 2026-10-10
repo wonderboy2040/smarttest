@@ -122,7 +122,7 @@ export function auditTrades(trades, ctx = {}) {
     // dupes and creating false ones.
     const day = ctx.dayKey ? ctx.dayKey(t) : istDate(t.tsIn);
     const session = (t.session != null ? t.session : (ctx.sessionKey ? ctx.sessionKey(t) : day));
-    const rec = { ...t, day, session };
+    const _rec = { ...t, day, session };
     if (!daySeen.has(day)) daySeen.set(day, t.tsIn);
     if (!sessSeen.has(session)) sessSeen.set(session, t.tsIn);
 

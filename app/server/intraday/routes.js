@@ -33,7 +33,7 @@ import { discoverSpotUniverse } from '../ai/expertPicks.js';
 import { sendTelegramMessage } from '../ai/secrets.js';
 import { computeSuperScore, buildSuperBlueprint, intradayExpertFactors } from '../ai/superIntel.js';
 import { runProTraderAgent } from './agent.js';
-import { runCommitteeDebate, clearCommitteeCache } from './committee.js';
+import { runCommitteeDebate, clearCommitteeCache as _clearCommitteeCache } from './committee.js';
 import { generateDailyBriefing, pushMorningBriefingToTelegram, getLastBriefing } from './briefing.js';
 import { getJournal, runEodReview, runWeeklyReport, initJournal } from './journal.js';
 import cron from 'node-cron';

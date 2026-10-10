@@ -31,7 +31,7 @@ import { PaperPort } from '../exec/port.js';
 import { eventGuardCheck } from '../ai/eventGuard.js';
 import { regimeRoute } from './regimeRouter.js';
 import { currentLossStreak } from '../risk/hardGate.js';
-import { wilsonLowerBound } from '../risk/hardGate.js';
+import { wilsonLowerBound as _wilsonLowerBound } from '../risk/hardGate.js';
 import { sendTelegramMessage } from '../ai/secrets.js';
 import { makeOrbCrypto } from './strategies/orbCrypto.js';
 import { makeLvl } from './strategies/lvl.js';
@@ -553,7 +553,7 @@ export class BotRunner {
 
   strategyCfg(_botId) { return undefined; } // strategies' own defaults
 
-  lastClosedIndex(rows, now, strategy) {
+  lastClosedIndex(rows, now, _strategy) {
     if (!rows?.length) return -1;
     // A 5m bar is closed when now >= bar.time + 5min (+grace)
     for (let i = rows.length - 1; i >= Math.max(0, rows.length - 3); i--) {

@@ -20,7 +20,7 @@
 // surface the plan asked for (bot ab portfolio pe bhi jawab deta hai).
 // ============================================================
 import { askLLM } from '../intraday/agent.js';
-import { buildRegime } from './signals.js';
+import { buildRegime as _buildRegime } from './signals.js';
 
 // ---------------- the red-flag engine (PURE) ----------------
 /**

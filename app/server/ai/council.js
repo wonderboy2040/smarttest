@@ -401,7 +401,7 @@ export async function councilMeshBundle(market, symbols) {
  *  desks' own gauntlets do; heatPct feeds the risk guardian's prompt
  *  + deterministic veto context, so a nominal-10k read used to
  *  understate real heat whenever actual capital differed. */
-async function riskContextFor(market) {
+async function riskContextFor(_market) {
   try {
     let cryptoEquityINR = 10_000;
     let indiaCapitalINR = 10_000;

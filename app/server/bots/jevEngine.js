@@ -36,11 +36,17 @@ import path from 'node:path';
 // the, par lab scripts (botlab-smoke/backtest/calibrate) + test suites me
 // 11+ instances ban-te the → MaxListenersExceededWarning + hidden leak.
 // Ab EK module-level listener saare live instances ke flushers chalata hai.
-const _jevFlushers = new Set();
-let _jevExitHookArmed = false;
+// v21.1.2 (report-1.4, cross-registry hardening): module-scoped armed flag
+// vitest file-isolation me HAR test file ke liye reset ho jaata tha, jabki
+// `process` shared rehta hai (fileParallelism:false = ek hi worker) — har
+// file jo createJev tak pahunchti thi ek aur process 'exit' listener add
+// karti thi. Ab flusher-Set + armed-flag dono globalThis par rehte hain:
+// ek hi listener, chahe module kitni baar bhi re-instantiate ho.
+const _G = globalThis;
+const _jevFlushers = (_G.__smartaiJevFlushers ??= new Set());
 function _armJevExitHook() {
-  if (_jevExitHookArmed) return;
-  _jevExitHookArmed = true;
+  if (_G.__smartaiJevExitHookArmed) return;
+  _G.__smartaiJevExitHookArmed = true;
   process.once('exit', () => {
     for (const flush of _jevFlushers) {
       try { flush(); } catch { /* never fatal */ }
@@ -103,7 +109,7 @@ export function createJev(opts = {}) {
   let cacheDirty = false;
 
   // ---- load cache (best-effort) ----
-  const cacheFile = () => cfg.cachePath;
+  const _cacheFile = () => cfg.cachePath;
   try {
     if (cfg.cachePath && fs.existsSync(cfg.cachePath)) {
       const lines = fs.readFileSync(cfg.cachePath, 'utf8').split('\n');

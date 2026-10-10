@@ -859,7 +859,7 @@ function dhanPlaceOrderScript({ side, price, quantity, product }) {
 // control, confirms. Honest failure (row nahi mila / panel closed)
 // returns ok:false — the engine then keeps the trade in CLOSE_UNKNOWN
 // and re-attempts (never journals a close that did not happen).
-function dhanClosePositionScript(symbol, side) {
+function dhanClosePositionScript(symbol, _side) {
   return `
     ${DOM_HELPERS}
     try {
