@@ -15,9 +15,14 @@ server/data/logs/
 *.log
 
 # Build artifacts
-# v21.0.1 FIX: dist/ ab repo me TRACKED hai (upar root .gitignore me reason) —
-# git pull pe fresh frontend guaranteed, watchdog rebuild ki zarurat nahi.
-!dist/
+# v21.1.0 CHANGE: dist/ ab git me TRACK NAHI hota (Phase-1.2).
+# Fresh build guarantee ab 3 layers se aata hai:
+#   1) supervisor.js ensureFrontend — dist missing/stale pe auto npm ci+build
+#   2) Render build command: npm ci && npm run build (README me documented)
+#   3) CI (.github/workflows/ci.yml) har push pe build verify karta hai
+# Fayda: har commit me 40+ hashed-bundle files ka noise nahi, repo chhota,
+# stale bundle kabhi serve nahi hoga (stamp-mismatch boot warning + 503 self-heal page).
+dist/
 build/
 
 # Test data & scratch dirs

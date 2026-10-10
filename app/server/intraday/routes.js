@@ -63,8 +63,8 @@ import { TV_SCAN_HEADERS } from '../lib/tvHeaders.js';
 const UNIVERSE_FILE = 'intraday-universe.json';
 const UNIVERSE_CRYPTO_FILE = 'intraday-universe-crypto.json';
 const UNIVERSE_CUSTOM_MAX = 50;
-let _universe = loadJSON(UNIVERSE_FILE, { removedBase: [], custom: [] });
-let _cryptoUniverse = loadJSON(UNIVERSE_CRYPTO_FILE, { removedBase: [], custom: [] });
+const _universe = loadJSON(UNIVERSE_FILE, { removedBase: [], custom: [] });
+const _cryptoUniverse = loadJSON(UNIVERSE_CRYPTO_FILE, { removedBase: [], custom: [] });
 
 function _validCustomSym(s) {
   return typeof s === 'string' && /^[A-Z0-9&-]{2,15}$/.test(s.trim().toUpperCase());

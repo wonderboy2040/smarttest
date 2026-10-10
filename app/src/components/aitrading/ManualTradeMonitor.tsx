@@ -425,7 +425,7 @@ export const ManualTradeMonitor = memo(function ManualTradeMonitor({ desk, notif
     };
     schedule();
     return () => { activeRef.current = false; if (timer) clearTimeout(timer); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [load]);
 
   useEffect(() => { tradesRef.current = trades; }, [trades]);

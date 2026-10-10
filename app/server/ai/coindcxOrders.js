@@ -475,6 +475,40 @@ export async function executeSignal(opts) {
   if (cfg.killSwitch) {
     return reject('Kill switch ON — execution disabled');
   }
+  // v21.1.0 (Phase-2 audit fix #4): EXEC-RECONCILER KILL — L1/L2/L3 kill
+  // (UI /api/exec/kill ya kill-flag file se) pehle sirf /api/exec/enter
+  // rokta tha; AI-desk gauntlet sirf apne CONFIG killSwitch dekhta tha.
+  // Ab reconciler ka kill-level bhi LIVE entries rokta hai (paper/notify
+  // untouched — practice flow me exec stack involved hi nahi hai).
+  // Defensive import: reconciler na ho (single-node local/tests) to koi
+  // gate nahi — isKilled() unarmed default false hai.
+  if (wantMode === 'live') {
+    try {
+      const { isKilled, killLevel, killReason } = await import('../exec/reconciler.js');
+      if (typeof isKilled === 'function' && isKilled()) {
+        return reject(`Exec kill L${killLevel()} ACTIVE (${killReason() || 'no reason'}) — live entries blocked`);
+      }
+    } catch { /* reconciler unavailable — single-node local, no exec stack */ }
+  }
+  // v21.1.0 (Phase-4): GO-LIVE GATE — LIVE sirf tab jab PAPER track-record
+  // qualify kare (min trades / +expectancy / DD limit — strategyGuard.js).
+  // VITEST me enforce off hai (dedicated gate tests override karte hain).
+  if (wantMode === 'live') {
+    try {
+      const { goLiveGateBlocked } = await import('./strategyGuard.js');
+      const g = goLiveGateBlocked();
+      if (g.blocked) return reject(g.reason, g.reason, { goLiveGate: g.readiness?.stats });
+    } catch { /* guard unavailable — never break the flow */ }
+  }
+  // v21.1.0 (Phase-4): PER-STRATEGY KILL RULE — rolling 30-trade expectancy
+  // negative → us strategy ki naye entries reject (auto-resume on recovery).
+  {
+    try {
+      const { strategyGuardBlocked } = await import('./strategyGuard.js');
+      const g = strategyGuardBlocked(source, 'CRYPTO');
+      if (g.blocked) return reject(g.reason, g.reason, { strategyPaused: true });
+    } catch { /* guard unavailable — never break the flow */ }
+  }
 
   // --- gate 2: auto-mode policy ---
   if (wantAuto && !cfg.allowAuto) {
@@ -825,6 +859,35 @@ export async function executeSignal(opts) {
       saveJournal(j);
       return { ok: true, mode: 'live', orderId, position, filled: { qty, price: pRound(price), notionalINR: r2(notional), ...(lev > 1 ? { leverage: lev, marginINR: marginUsed } : {}) }, ...{ fitted: [fitNote, levNote].filter(Boolean).join(' · ') || undefined } };
     } catch (e) {
+      // v21.1.0 AMBIGUOUS-ENTRY GUARD (Phase-2 order-exec audit fix #2):
+      // timeout/abort/network failure means the order MAY have filled on the
+      // exchange. Pehle ye plain FAILED journal karta tha with NO position row —
+      // one-per-pair guard kuch nahi dekhta tha aur 30s agent tick usi pair pe
+      // SECOND live order laga sakta tha jiska pehla order actually fill ho
+      // chuka tha. Ab ambiguous failure ek UNKNOWN position row book karta
+      // hai (no order id → 3-min watcher human-surface path + concentration
+      // slot) jo duplicate re-entry ko BLOCK karta hai jab tak resolve na ho.
+      if (isAmbiguousTransportError(e)) {
+        const position = {
+          id: crypto.randomUUID(), pair, side: effectiveSignal.side, mode: 'live', market: 'CRYPTO', source,
+          exchangeOrderId: null,
+          qty, entryPrice: price, notionalINR: r2(notional),
+          ...(lev > 1 ? { leverage: lev, marginINR: marginUsed } : {}),
+          sl: effectiveSignal.plan?.stopLoss ?? null, tp: effectiveSignal.plan?.target1 ?? null,
+          initialRisk: pRound(Math.abs(price - (effectiveSignal.plan?.stopLoss ?? price))),
+          peakPrice: pRound(price),
+          signal: { grade: signal.grade, confidence: signal.confidence, agreement: signal.agreement, summary: signal.summary },
+          openedAt: Date.now(), unknownSince: Date.now(), ambiguousEntry: true,
+          status: 'UNKNOWN',
+        };
+        j.positions.push(position);
+        pushEntry(j, {
+          ...entry, status: 'SUBMITTED_UNKNOWN', qty, price: pRound(price), notionalINR: r2(notional),
+          reason: `AMBIGUOUS ENTRY (${String(e?.message || e).slice(0, 120)}) — UNKNOWN row booked: one-per-pair duplicate re-entry BLOCKED, watcher will surface for manual verify`,
+        });
+        saveJournal(j);
+        return { ok: false, ambiguous: true, error: `CoinDCX order AMBIGUOUS (network/timeout — order MAY have filled): ${e?.message || e}. UNKNOWN position booked for ${pair}; duplicate re-entry blocked — verify on the exchange app.` };
+      }
       pushEntry(j, { ...entry, status: 'FAILED', reason: String(e?.message || e).slice(0, 200) });
       saveJournal(j);
       return { ok: false, error: `CoinDCX order failed: ${e?.message || e}` };
@@ -1201,8 +1264,9 @@ export async function watchPositions({ sendTelegram } = {}) {
           const hit = (lvl) => lvl != null && (long ? price >= lvl : price <= lvl);
           const partialNotes = [];
 
-          // T1 leg
-          if (!p.tp1Hit && hit(t1)) {
+          // T1 leg (v21.1.0: ambiguous-partial 5-min hold bhi yahan gate karta
+          // hai — futures desk ka partialRetryAfter pattern, spot pe port)
+          if (!p.tp1Hit && hit(t1) && !(p.partialRetryAfter && Date.now() < p.partialRetryAfter)) {
             const leg = await partialCloseSpotLeg(j, p, price, { stage: 'T1', pct: pro.tp1ClosePct });
             if (leg.ok) {
               if (pro.breakEvenAfterTp1 && p.status !== 'CLOSED') {
@@ -1225,7 +1289,7 @@ export async function watchPositions({ sendTelegram } = {}) {
           }
 
           // T2 leg (fires the same pass when price gapped past both)
-          if (p.tp1Hit && !p.tp2Hit && hit(t2) && p.status === 'OPEN') {
+          if (p.tp1Hit && !p.tp2Hit && hit(t2) && p.status === 'OPEN' && !(p.partialRetryAfter && Date.now() < p.partialRetryAfter)) {
             const leg = await partialCloseSpotLeg(j, p, price, { stage: 'T2', pct: pro.tp2ClosePct });
             if (leg.ok) {
               if (t1 != null && p.status !== 'CLOSED') {
@@ -1418,7 +1482,7 @@ export function loadProTraderConfig() {
   // v7.0.2: same T1+T2 ≤ 90 invariant agent.js enforces — a hand-edited /
   // legacy config with a bigger split would try to close more than 100%
   // of the position (live: net-short flip on the exchange).
-  let tp1 = Math.max(10, Math.min(80, n(saved.tp1ClosePct, 40)));
+  const tp1 = Math.max(10, Math.min(80, n(saved.tp1ClosePct, 40)));
   let tp2 = Math.max(10, Math.min(80, n(saved.tp2ClosePct, 40)));
   if (tp1 + tp2 > 90) { const over = tp1 + tp2 - 90; tp2 = Math.max(10, tp2 - over); }
   return {
@@ -1578,6 +1642,21 @@ async function partialCloseSpotLeg(j, p, price, { stage, pct }) {
 
     return { ok: true, closedQty: partialQty, legPnlINR: r2(legPnlINR), remainingQty: p.qty };
   } catch (e) {
+    // v21.1.0 AMBIGUOUS-PARTIAL GUARD (Phase-2 audit fix #5): timeout/abort/
+    // network failure on the LIVE partial market order means the leg MAY have
+    // filled — 60s watcher pe re-send DOUBLE-SELL karta tha (tp1Hit latch bhi
+    // nahi laga kyunki leg fail hua). Futures desk ka v20.3 pattern port:
+    // 5-minute hold + honest journal note; definitive [4xx] rejections
+    // (jinhone coins move nahi kiye) next-tick retry rakhte hain.
+    if (p.mode === 'live' && isAmbiguousTransportError(e)) {
+      p.partialRetryAfter = Date.now() + 5 * 60_000;
+      try {
+        pushEntry(j, {
+          kind: 'WATCH_ERROR', day: todayIST(), pair: p.pair, market: 'CRYPTO',
+          reason: `partial ${stage} order AMBIGUOUS (${String(e?.message || e).slice(0, 120)}) — 5 min retry hold (double-sell guard; verify fill on exchange)`,
+        });
+      } catch { /* best-effort journal */ }
+    }
     return { ok: false, error: String(e?.message || e) };
   }
 }

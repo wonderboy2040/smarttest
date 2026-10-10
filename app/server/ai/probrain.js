@@ -233,7 +233,7 @@ export function regimeGate({ market, side, regime }) {
 
   let aligned = null; // unknown regime = no reward, no penalty
   if (regimeDir !== 0) aligned = regimeDir === want;
-  let counterTrend = aligned === false;
+  const counterTrend = aligned === false;
   let penaltyPct = 0;
   if (counterTrend) {
     // counter-regime: harder penalty when the regime is STRONG

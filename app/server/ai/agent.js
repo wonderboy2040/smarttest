@@ -1487,10 +1487,17 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
   // checks dono node-local the. Non-leader node ab entries ke pehle hi
   // ruk jaata hai. Upar ke exit sweeps/monitoring pehle hi ho chuke hain.
   try {
-    const { isLeader } = await import('../exec/reconciler.js');
+    const { isLeader, isKilled, killLevel, killReason } = await import('../exec/reconciler.js');
     if (typeof isLeader === 'function' && !isLeader()) {
       maybeLogSkip('non_leader', 'leader lease — ye node non-leader hai, auto-entries skip (exit/monitoring sweeps upar already done)');
       persistState(); return { ok: true, nonLeader: true };
+    }
+    // v21.1.0 (Phase-2 audit fix #4): L1/L2/L3 exec-kill ab agent loop ko
+    // bhi rokta hai — pehle sirf /api/exec/enter + SAPTA isKilled() dekhte
+    // the, agent auto-entries reconciler kill ke saath bhi chalti rehti thi.
+    if (typeof isKilled === 'function' && isKilled()) {
+      maybeLogSkip('exec_kill', `exec kill L${typeof killLevel === 'function' ? killLevel() : '?'} ACTIVE (${typeof killReason === 'function' ? (killReason() || 'no reason') : 'no reason'}) — agent auto-entries blocked is tick`);
+      persistState(); return { ok: true, execKilled: true };
     }
   } catch { /* reconciler unavailable — no gate (single-node local) */ }
 
@@ -1498,7 +1505,7 @@ ${convictionTightened.map(c => `• ${c.pair} — delta ${c.delta}, in profit: r
   if (cfg.desks.futures && !futuresViable && coindcxConnected()) {
     maybeLogSkip('futures_margin', `futures wallet margin < 2 USDT — LIVE futures entries wallet top-up ka intezaar karenge${cfg.mode === 'live' ? ' (mode LIVE)' : ` (mode ${String(cfg.mode).toUpperCase()} — paper sizing practice equity pe, ye gate sirf LIVE ko roka hai)`}`);
   }
-  let candidates = [];
+  const candidates = [];
   // v10.8 NEAR-MISS AUTO-TRADE: signals that MISS the full bar but sit
   // inside the gap window with high confidence + full quorum. Used
   // ONLY when no full qualifier exists this cycle, capped per day.

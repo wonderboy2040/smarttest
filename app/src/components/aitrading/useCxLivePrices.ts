@@ -450,7 +450,7 @@ export function useCxLivePrices(active: boolean, spot: string[], fut: string[], 
       lastFrameAtRef.current = 0;
       lastStatusAtRef.current = 0;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [active, spotKey, futKey, globKey, indiaKey]);
 
   /** Live tick lookup for a signal: market → key namespace.

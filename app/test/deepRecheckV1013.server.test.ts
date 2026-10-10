@@ -216,6 +216,10 @@ import path from 'node:path';
 
 const INDEX_PATH = path.resolve(__dirname, '..', 'server', 'index.js');
 const indexSource = fs.readFileSync(INDEX_PATH, 'utf-8');
+// v21.1.0 (Phase-3 split): auth system ab server/security/pinAuth.js me hai —
+// static security assertions usi file se padhi jati hain.
+const PINAUTH_PATH = path.resolve(__dirname, '..', 'server', 'security', 'pinAuth.js');
+const pinAuthSource = fs.readFileSync(PINAUTH_PATH, 'utf-8');
 
 describe('server/index.js — v10.13 static security guards', () => {
   it('the GLOBAL CSRF discriminator is mounted (cross-site + cookie + no Bearer → 403)', () => {
@@ -229,10 +233,12 @@ describe('server/index.js — v10.13 static security guards', () => {
   it('the CSRF middleware runs AFTER requireAuth and BEFORE the first route', () => {
     const authAt = indexSource.indexOf('app.use(requireAuth)');
     const csrfAt = indexSource.indexOf('app.use((req, res, next) => {', authAt);
-    const firstRouteAt = indexSource.indexOf("app.post('/api/auth/login'");
+    // v21.1.0: login route ab registerAuthRoutes(app, ...) se register hota hai —
+    // isliye "first route" ab pehla direct app.<verb> registration hai CSRF ke baad.
+    const registerAuthAt = indexSource.indexOf('registerAuthRoutes(app,');
     expect(authAt).toBeGreaterThan(-1);
     expect(csrfAt).toBeGreaterThan(authAt);
-    expect(firstRouteAt).toBeGreaterThan(csrfAt);
+    expect(registerAuthAt).toBeGreaterThan(csrfAt);
   });
 
   it('public market-data endpoints carry per-IP rate limits (quote/chart/fundamentals)', () => {
@@ -247,10 +253,13 @@ describe('server/index.js — v10.13 static security guards', () => {
   });
 
   it('the global PIN-failure lockout is wired (recordPinFail on bad PIN + pre-check)', () => {
-    expect(indexSource).toMatch(/function recordPinFail/);
-    expect(indexSource).toMatch(/function pinLockActive/);
-    expect(indexSource).toMatch(/recordPinFail\(\); \/\/ v10\.13/);
-    expect(indexSource).toMatch(/if \(pinLockActive\(\)\)/);
+    // v21.1.0: ye guards ab server/security/pinAuth.js me rehte hain (split).
+    expect(pinAuthSource).toMatch(/function recordPinFail/);
+    expect(pinAuthSource).toMatch(/function pinLockActive/);
+    expect(pinAuthSource).toMatch(/recordPinFail\(\); \/\/ v10\.13/);
+    expect(pinAuthSource).toMatch(/if \(pinLockActive\(\)\)/);
+    // ...aur index.js unhe pinAuth module se import karta hai.
+    expect(indexSource).toMatch(/from '\.\/security\/pinAuth\.js'/);
   });
 
   it('the terminal error middleware honors body-parser err.status (400 ≠ 500)', () => {

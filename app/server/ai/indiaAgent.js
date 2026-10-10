@@ -668,7 +668,7 @@ async function _tick(deps, sendTelegram) {
   }
 
   // ---- candidates ----
-  let candidates = [];
+  const candidates = [];
   // v21.0.2 INDEX-POLLUTION FIX: NIFTY/BANKNIFTY jaise index contexts INDIA
   // board me bhi chalte hain (signals.js board seeding), par indiaAgent
   // EQUITY desk hai — index qualify hone par LIVE dhanPlaceOrder "not

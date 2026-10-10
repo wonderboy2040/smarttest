@@ -99,7 +99,7 @@ async function fetchYahooChart(yhTicker, interval, range) {
  * the model weights per bar. The A/B runner below runs BOTH legs on
  * identical data so the flag can be evaluated before going live.
  */
-export function simulateSymbol({ symbol, market, candles, minGrade = 'ACTION', maxRiskPct = 5, capitalPerTradeINR = 1000, maxHoldBars = 48, strategy = 'weighted' }) {
+export function simulateSymbol({ symbol, market, candles, minGrade = 'ACTION', maxRiskPct = 5, capitalPerTradeINR = 1000, maxHoldBars = 48, strategy = 'weighted', minConfidence = 0 }) {
   if (!Array.isArray(candles) || candles.length < WARMUP + 20) return null;
   const long = side => String(side).toUpperCase() !== 'SHORT';
   const trades = [];
@@ -161,7 +161,9 @@ export function simulateSymbol({ symbol, market, candles, minGrade = 'ACTION', m
           if (skip) { i += 1; continue; }
         }
         const gf = { STRONG: 4, ACTION: 3, WATCH: 2, NEUTRAL: 1 }[consensus.grade] || 1;
-        if (consensus.dir !== 0 && gf >= gradeFloor) {
+        // v21.1.0 (Phase-4): optional CONFIDENCE bar — walk-forward mode ke
+        // TRAIN/TEST legs isko vary karte hain (learnedGates ka output).
+        if (consensus.dir !== 0 && gf >= gradeFloor && (Number(consensus.confidence) || 0) >= minConfidence) {
           const plan = buildTradePlan(consensus, ctx, market, { maxRiskPct });
           if (plan) {
             const next = candles[i + 1];
@@ -313,6 +315,67 @@ export function learnedGates(trades, currentMinConfidence = 75) {
   };
 }
 
+// ---------------- v21.1.0 (Phase-4): WALK-FORWARD TRAIN/TEST ----------------
+/**
+ * Overfit-pakadne wala split: candles 70/30 me kat-te hain —
+ *   TRAIN (pehla 70%): default gates pe replay → learnedGates() ek
+ *     confidence bar "seekhta" hai (sirf in-sample trades se).
+ *   TEST (aakhri 30%, WARMUP carry ke saath): usi LEARNED bar pe replay.
+ * Verdict: train-expectancy vs test-expectancy ka degradation —
+ *   HIGH overfit (>40% drop), MODERATE (>15%), ya CALIBRATED.
+ * Ye backtest ke "no look-ahead" replay ke UPAR hai: gate-tuning bhi
+ * ab out-of-sample me verify hota hai, sirf in-sample flattery nahi.
+ */
+export function walkForwardSymbol({ symbol, market, candles, maxRiskPct = 5, capitalPerTradeINR = 1000, maxHoldBars = 48, currentMinConfidence = 75, trainPct = 0.7, strategy = 'weighted' }) {
+  if (!Array.isArray(candles) || candles.length < (WARMUP + 20) * 2) return null;
+  const cut = Math.max(WARMUP + 30, Math.floor(candles.length * trainPct));
+  const trainC = candles.slice(0, cut);
+  const testC = candles.slice(Math.max(WARMUP, cut - WARMUP)); // indicators test-start pe hot hon
+
+  const base = { symbol, market, maxRiskPct, capitalPerTradeINR, maxHoldBars, strategy };
+  const trainSim = simulateSymbol({ ...base, candles: trainC, minGrade: 'ACTION' });
+  if (!trainSim) return null;
+  const learned = learnedGates(trainSim.trades || [], currentMinConfidence);
+  const learnedBar = learned.suggestedMinConfidence ?? currentMinConfidence;
+
+  // TRAIN bhi learned bar pe (in-sample flattery ka reference)
+  const trainAtLearned = simulateSymbol({ ...base, candles: trainC, minGrade: 'ACTION', minConfidence: learnedBar });
+  // TEST: current bar + learned bar + NO-bar dono legs — "current bar" (live
+  // config ka 75) aksar in-sample me hi ZERO trades deta hai (confidence
+  // distribution 55-72 rehta hai) — us case me overfit verdict BASE system
+  // ke train/test split se aata hai, kuch bhi nahi.
+  const testCurrent = simulateSymbol({ ...base, candles: testC, minGrade: 'ACTION', minConfidence: currentMinConfidence });
+  const testLearned = simulateSymbol({ ...base, candles: testC, minGrade: 'ACTION', minConfidence: learnedBar });
+  const testNoBar = simulateSymbol({ ...base, candles: testC, minGrade: 'ACTION' });
+
+  let trainExp = trainAtLearned?.stats?.avgR ?? null;
+  let testExp = testLearned?.stats?.avgR ?? null;
+  let comparisonBasis = 'learned-bar';
+  const learnedHasTrades = (trainAtLearned?.stats?.trades || 0) > 0 && (testLearned?.stats?.trades || 0) > 0;
+  if (!learnedHasTrades) {
+    // learned bar pe dono legs empty → BASE split comparison (no confidence filter)
+    trainExp = trainSim.stats?.avgR ?? null;
+    testExp = testNoBar?.stats?.avgR ?? null;
+    comparisonBasis = 'base-split (learned bar pe zero trades)';
+  }
+  let overfit = 'UNKNOWN';
+  let degradationPct = null;
+  if (trainExp != null && testExp != null && trainExp > 0) {
+    degradationPct = Math.round(((trainExp - testExp) / trainExp) * 1000) / 10;
+    overfit = degradationPct > 40 ? 'HIGH' : degradationPct > 15 ? 'MODERATE' : 'CALIBRATED';
+  } else if (trainExp != null && testExp != null) {
+    overfit = testExp > trainExp ? 'CALIBRATED' : 'NO_EDGE';
+  }
+
+  return {
+    symbol,
+    split: { trainBars: trainC.length, testBars: testC.length, trainPct, learnedBar, currentBar: currentMinConfidence },
+    train: { defaultGates: trainSim.stats, atLearnedBar: trainAtLearned?.stats ?? null, learned },
+    test: { currentBar: testCurrent?.stats ?? null, learnedBar: testLearned?.stats ?? null, noBar: testNoBar?.stats ?? null },
+    verdict: { overfit, degradationPct, comparisonBasis },
+  };
+}
+
 // ---------------- multi-symbol runner (cached) ----------------
 const DEFAULT_CRYPTO = ['BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'DOGE'];
 const DEFAULT_INDIA = ['RELIANCE', 'HDFCBANK', 'ICICIBANK', 'INFY', 'TCS', 'SBIN'];
@@ -323,11 +386,11 @@ const CACHE_TTL = 10 * 60_000;
 // backtest payloads forever. Bounded like every other repo cache.
 const CACHE_CAP = 24;
 
-export async function runBacktest({ market = 'CRYPTO', symbols, minGrade = 'ACTION', capitalPerTradeINR = 1000, maxRiskPct = 5, currentMinConfidence = 75, strategy = 'weighted' }) {
+export async function runBacktest({ market = 'CRYPTO', symbols, minGrade = 'ACTION', capitalPerTradeINR = 1000, maxRiskPct = 5, currentMinConfidence = 75, strategy = 'weighted', walkForward = false }) {
   const mkt = String(market).toUpperCase() === 'INDIA' ? 'INDIA' : 'CRYPTO';
   const syms = (Array.isArray(symbols) && symbols.length > 0 ? symbols : (mkt === 'CRYPTO' ? DEFAULT_CRYPTO : DEFAULT_INDIA))
     .map(s => String(s).toUpperCase().replace(/[^A-Z0-9-]/g, '')).filter(Boolean).slice(0, 8);
-  const key = `bt:${mkt}:${syms.join(',')}:${minGrade}:${capitalPerTradeINR}:${maxRiskPct}:${strategy}`;
+  const key = `bt:${mkt}:${syms.join(',')}:${minGrade}:${capitalPerTradeINR}:${maxRiskPct}:${strategy}:${walkForward ? 'wf' : 'std'}`;
   const hit = _cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL) return hit.payload;
 
@@ -349,6 +412,11 @@ export async function runBacktest({ market = 'CRYPTO', symbols, minGrade = 'ACTI
     if (!candles) return { symbol: sym, ok: false, reason: 'no historical data (CoinDCX + Yahoo both unreachable)' };
     const sim = simulateSymbol({ symbol: sym, market: mkt, candles, minGrade, maxRiskPct, capitalPerTradeINR, maxHoldBars, strategy });
     if (!sim) return { symbol: sym, ok: false, reason: 'not enough bars' };
+    // v21.1.0 (Phase-4): WALK-FORWARD train/test leg — overfit verdict per symbol.
+    let wf = null;
+    if (walkForward) {
+      wf = walkForwardSymbol({ symbol: sym, market: mkt, candles, maxRiskPct, capitalPerTradeINR, maxHoldBars, currentMinConfidence, strategy });
+    }
     // v10.6 A/B: the regime leg also runs the PLAIN leg on the SAME
     // candles — identical folds, side-by-side comparison.
     let comparison = null;
@@ -356,7 +424,7 @@ export async function runBacktest({ market = 'CRYPTO', symbols, minGrade = 'ACTI
       const plain = simulateSymbol({ symbol: sym, market: mkt, candles, minGrade, maxRiskPct, capitalPerTradeINR, maxHoldBars, strategy: 'weighted' });
       comparison = plain ? { weighted: plain.stats, regime_weighted: sim.stats } : null;
     }
-    return { symbol: sym, ok: true, source, ...(comparison ? { comparison } : {}), ...sim };
+    return { symbol: sym, ok: true, source, ...(comparison ? { comparison } : {}), ...(wf ? { walkForward: wf } : {}), ...sim };
   }));
 
   const perSymbol = results.map(r => r.status === 'fulfilled' ? r.value : { symbol: '?', ok: false, reason: 'failed' });
@@ -391,6 +459,22 @@ export async function runBacktest({ market = 'CRYPTO', symbols, minGrade = 'ACTI
     // v6.7: backtest-learned gate tuning (read-only recommendation —
     // the user applies it; nothing auto-mutates the live config)
     learned: learnedGates(allTrades, currentMinConfidence),
+    // v21.1.0 (Phase-4): aggregate overfit verdict jab walk-forward mode ON ho
+    ...(walkForward ? {
+      walkForward: {
+        perSymbol: perSymbol.filter(s => s.ok && s.walkForward).map(s => ({ symbol: s.symbol, ...s.walkForward })),
+        summary: (() => {
+          const rows = perSymbol.filter(s => s.ok && s.walkForward?.verdict).map(s => s.walkForward.verdict);
+          if (!rows.length) return null;
+          return {
+            symbols: rows.length,
+            high: rows.filter(v => v.overfit === 'HIGH').length,
+            moderate: rows.filter(v => v.overfit === 'MODERATE').length,
+            calibrated: rows.filter(v => v.overfit === 'CALIBRATED').length,
+          };
+        })(),
+      },
+    } : {}),
     disclaimer: 'Walk-forward replay of the SAME live ensemble on historical candles. Past performance ≠ future results. R = multiples of initial risk. No AI Council vote (offline in backtests).',
     generatedAt: Date.now(),
   };

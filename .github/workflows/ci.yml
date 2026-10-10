@@ -1,0 +1,43 @@
+# ============================================================
+# SmartAI Pro — CI (v21.1.0, Phase-1.5)
+# ------------------------------------------------------------
+# Har push / PR pe wahi full gate chalta hai jo local me chalta
+# hai (`npm run check` = typecheck → lint → version-contract →
+# tests → build → route-contract). dist/ ab git me tracked nahi
+# hai (Phase-1.2), isliye build ka verification yahin hota hai —
+# stale-bundle kabhi deploy nahi hoga.
+# ============================================================
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies (app)
+        run: npm ci
+        working-directory: app
+
+      - name: Full gate — typecheck + lint + version + tests + build + routes
+        run: npm run check
+        working-directory: app
+
+      - name: Audit prod deps (app) — fail on high/critical
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: app
+
+      - name: Audit prod deps (telegram-bot) — fail on high/critical
+        run: npm audit --omit=dev --audit-level=high
+        working-directory: app/telegram-bot

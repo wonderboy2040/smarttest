@@ -466,7 +466,7 @@ export async function runCouncilBoard({ market, signals, regime, deps }) {
   // v18.8: cloud keys OR a reachable local ollama — the council runs
   // for a zero-cloud-key local install too (probed, 90s-cached).
   const llmOnline = aiKeysPresent(deps?.KEYS) || !!(await ollamaProbe().catch(() => false));
-  let verdictsBySymbol = {}; // sym → {role: verdict}
+  const verdictsBySymbol = {}; // sym → {role: verdict}
   let model = 'deterministic';
   if (llmOnline) {
     const answers = await Promise.all(roles.map(async (role) => {

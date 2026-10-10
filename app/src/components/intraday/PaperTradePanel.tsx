@@ -344,7 +344,12 @@ export function PaperTradePanel({ livePrices, refreshKey, onOpenSymbolsChange }:
     } finally {
       syncingRef.current = false;
     }
-  }, []);
+    // v21.1.0 FIX (Phase-1.3): reportSymbols dep missing tha — stale closure
+    // forever first-render ka onOpenSymbolsChange callback capture karta tha.
+    // reportSymbols apne aap useCallback hai ([onOpenSymbolsChange]) — identity
+    // sirf parent callback badalne pe change hoti hai, to yahan koi infinite
+    // re-render loop nahi banega (sirf fresh closure re-subscribe hota hai).
+  }, [reportSymbols]);
 
   useEffect(() => { loadHistory(); }, [loadHistory, refreshKey]);
 

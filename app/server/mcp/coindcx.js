@@ -22,8 +22,12 @@
 // stream + /api/crypto-prices (one cached upstream fetch, see
 // server/cryptoStream.js) — no extra load on the 0.1-vCPU box.
 //
-// NOTE: the user should create the API key in CoinDCX with
-// view/balance (read-only) permissions — we never place orders.
+// NOTE (v21.1.0 — stale comment corrected): the API key needs
+// view/balance + TRADE permission (orders YAHAN se hi jaate hain —
+// coindcxOrders.js / futures.js / proTraderAuto.js). Withdrawal
+// permission OFF rakho + CoinDCX dashboard me IP whitelist ON karo.
+// Agar sirf pricing/balance chahiye to read-only key bhi chalega —
+// par LIVE trading modes us key se fire nahi honge.
 // ============================================================
 import crypto from 'node:crypto';
 import https from 'node:https';

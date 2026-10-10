@@ -10,6 +10,9 @@
 // devices keep their mirror; unused stores simply stop being touched.
 // ============================================================
 
+// v21.1.0 Phase-1.4: empty catch → swallow() (dev-only debug, behaviour same).
+import { swallow } from './swallow';
+
 const DB_NAME = 'wealthai_idb_v18';
 const DB_VERSION = 1;
 
@@ -74,7 +77,7 @@ class UserPrefsStore {
     } catch {
       try {
         localStorage.setItem(`pref_${key}`, JSON.stringify(value));
-      } catch {}
+      } catch (err) { swallow('db.setUserPreference.localFallback', err); } // v21.1.0 Phase-1.4: pehle invisible tha
     }
   }
 

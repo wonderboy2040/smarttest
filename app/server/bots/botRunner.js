@@ -490,6 +490,27 @@ export class BotRunner {
                 }
               } catch (e) {
                 appendEvent(this.stateDir, botId, { kind: 'protection_error', symbol, error: String(e?.message || e) });
+                // v21.1.0 (Phase-2 audit fix #9): ye outer catch pehle SIRF
+                // log karta tha — getPositions() throw hone par LIVE position
+                // bina kisi exchange-resident stop ke naked reh jaati thi.
+                // Ab best-effort flatten retry + honest telegram (closed=false
+                // ho to user ko MANUAL CLOSE ka explicit kehna).
+                try {
+                  const live = await port.getPositions();
+                  const pos = (Array.isArray(live) ? live : [])
+                    .filter((q) => q.pair === cand.symbol && q.side === cand.side)
+                    .sort((a, b) => (Number(b.qty) || 0) - (Number(a.qty) || 0))[0] || null;
+                  let closed = false;
+                  if (pos) { try { const cl = await port.close({ positionId: pos.id }); closed = cl?.ok === true; } catch { /* best-effort */ } }
+                  appendEvent(this.stateDir, botId, { kind: 'protection_flatten', symbol, closed });
+                  if (this.telegram.enabled) {
+                    sendTelegramMessage(`[${botId}] LIVE ${cand.side} ${cand.symbol} protection sequence FAILED (${String(e?.message || e).slice(0, 100)}) — flatten attempt closed=${closed}. Agar closed=false hai to exchange app me TURANT MANUAL CLOSE karo!`, this.tgEnv).catch(() => {});
+                  }
+                } catch (e2) {
+                  if (this.telegram.enabled) {
+                    sendTelegramMessage(`[${botId}] LIVE ${cand.side} ${cand.symbol} NAKED POSITION (protection fail + flatten bhi fail: ${String(e2?.message || e2).slice(0, 100)}) — TURANT MANUAL CLOSE KARO!`, this.tgEnv).catch(() => {});
+                  }
+                }
               }
             }
             // v20.8.2 FIX (H2 — cap within one tick): openCounts was

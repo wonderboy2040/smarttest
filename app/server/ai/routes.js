@@ -1597,7 +1597,10 @@ export function registerAITradingRoutes(app, deps) {
         ? String(req.query.strategy).toLowerCase() : 'weighted';
       const cfg = (() => { try { return loadConfig(); } catch { return {}; } })();
       const riskCap = Number(cfg.maxRiskPct) > 0 ? cfg.maxRiskPct : 5;
-      const out = await runBacktest({ market, symbols, minGrade, capitalPerTradeINR: capital, maxRiskPct: riskCap, currentMinConfidence: Number(cfg.minConfidence) > 0 ? Number(cfg.minConfidence) : 75, strategy });
+      // v21.1.0 (Phase-4): walkForward=1 → per-symbol 70/30 train/test leg +
+      // overfit verdict (gate-tuning ka out-of-sample proof).
+      const walkForward = ['1', 'true', 'yes'].includes(String(req.query.walkForward || '').toLowerCase());
+      const out = await runBacktest({ market, symbols, minGrade, capitalPerTradeINR: capital, maxRiskPct: riskCap, currentMinConfidence: Number(cfg.minConfidence) > 0 ? Number(cfg.minConfidence) : 75, strategy, walkForward });
       res.json(out);
     } catch (e) {
       jsonError(res, 500, 'backtest failed', e);
@@ -2032,6 +2035,18 @@ export function registerAITradingRoutes(app, deps) {
   // ---------------- v6.11: portfolio performance analytics ----------------
   app.get('/api/ai/perf', (_req, res) => {
     try { res.json(perfReport()); } catch (e) { jsonError(res, 500, 'perf report failed', e); }
+  });
+
+  // ---------------- v21.1.0 (Phase-4): strategy health + go-live gate ----------------
+  // Per-strategy rolling stats (source×market), 30-trade kill-rule state,
+  // aur PAPER track-record se GO-LIVE readiness (min trades / +expectancy /
+  // DD limit). UI ka StrategyHealthPanel isi pe chalta hai; executeSignal /
+  // executeFuturesSignal inhi gates se LIVE/paused entries reject karte hain.
+  app.get('/api/ai/strategy-health', async (_req, res) => {
+    try {
+      const { strategyHealthView } = await import('./strategyGuard.js');
+      res.json(strategyHealthView());
+    } catch (e) { jsonError(res, 500, 'strategy health failed', e); }
   });
 
   // ---------------- v6.11: cross-asset correlation matrix ----------------

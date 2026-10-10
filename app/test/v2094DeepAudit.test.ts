@@ -120,14 +120,15 @@ describe('C. botRunner — TG options-shape + verdict-aware risk alert [v20.9.4 
     expect(src.run).toMatch(/this\.tgEnv = \(telegram\?\.env && \(telegram\.env\.token \|\| telegram\.env\.chatId\)\)/);
   });
   it('every sendTelegramMessage call passes tgEnv (never raw this.env)', () => {
-    // strip comments: 4 real calls (3 inline `..., this.tgEnv).catch` + 1
-    // multiline risk-alert `..., this.tgEnv,\n ).then(...`)
+    // strip comments: 6 real calls (3 inline `..., this.tgEnv).catch` + 1
+    // multiline risk-alert `..., this.tgEnv,\n ).then(...` + 2 v21.1.0
+    // protection-fail flatten/NAKED alerts `..., this.tgEnv).catch`)
     const active = src.run.split('\n').filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n');
     const callCount = (active.match(/sendTelegramMessage\(/g) || []).length;
-    expect(callCount).toBe(4);
+    expect(callCount).toBe(6);
     // no call passes raw this.env as the options arg (the dead-TG bug)
     expect(active).not.toMatch(/sendTelegramMessage\([^)]{0,800}?this\.env\)/);
-    expect((active.match(/this\.tgEnv\)/g) || []).length).toBe(3);
+    expect((active.match(/this\.tgEnv\)/g) || []).length).toBe(5);
     expect(active).toMatch(/this\.tgEnv,\s*\n\s*\)\.then\(\(r\) =>/);
   });
   it('risk-alert: verdict check — quota burns ONLY on ok, 3-strike retry otherwise', () => {

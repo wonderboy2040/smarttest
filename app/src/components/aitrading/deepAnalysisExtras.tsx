@@ -166,7 +166,7 @@ export function useDeepAutoRecheck(
   // reset when a NEW analysis opens
   useEffect(() => {
     if (deep?.loading) { setLog([]); setRechecks(0); setNextRecheckAt(null); }
-  }, [deep?.loading, sig?.symbol, sig?.market]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [deep?.loading, sig?.symbol, sig?.market]);  
 
   const appendLog = useCallback((note: string, tone: DeepLogEntry['tone']) => {
     setLog(l => [{ at: Date.now(), note, tone }, ...l].slice(0, 5));

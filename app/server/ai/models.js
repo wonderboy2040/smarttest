@@ -552,7 +552,7 @@ export function tapeVote(t, label = '15m') {
     return vote(0, 0, [`${label} tape unavailable — model abstains (honest degrade)`]);
   }
   const pts = [];
-  let score = 0, conf = 42;
+  let score = 0; const conf = 42; // v21.1.0: conf const — tapeVote me kabhi reassign nahi hota (prefer-const)
   const ltp = t.ltp, e10 = t.ema10, e20 = t.ema20;
 
   // EMA stack + price position — the tape's own trend.

@@ -26,13 +26,15 @@ app/server/data/*
 app/data/
 
 # Build artifacts
-# v21.0.1 FIX (Vision AI button "show nahi ho raha" ka root cause): dist/ pehle
-# gitignored tha — fresh clone/pull pe frontend KABHI nahi aata tha, aur user ka
-# purana (stale) dist serve hota rehta tha jab tak watchdog rebuild na kar deta.
-# Ab app/dist repo me TRACKED hai — git pull = fresh frontend guaranteed.
-# (build/ dir aj bhi ignored — sirf vite ka dist deliverable hai.)
-!app/dist/
-!app/dist/**
+# v21.1.0 CHANGE (Phase-1.2): app/dist ab git me TRACK NAHI hota.
+# Purane v21.0.1 rationale (fresh frontend on pull) ab build-pipeline se
+# poori tarah serve hota hai:
+#   1) supervisor.js ensureFrontend — dist missing/stale pe auto install+build
+#   2) Render build command: npm ci && npm run build (README documented)
+#   3) CI har push pe npm run check (build included) run karti hai
+# Fayda: 40+ hashed dist files ka per-commit noise khatam, repo chhota,
+# aur stale bundle kabhi serve nahi hota (boot stamp-warning + 503 self-heal).
+app/dist/
 build/
 **/build/
 

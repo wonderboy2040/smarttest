@@ -63,6 +63,8 @@ import { useDeepAutoRecheck, DeepFreshnessChip, DeepTransitionLog, DeepIndicator
 // live re-validation state (loop ki hi cadence par poll hota hai).
 import { SignalRecheckPanel } from '../aitrading/SignalRecheckPanel';
 import { EngineHealthStrip } from '../aitrading/EngineHealthStrip';
+import { OpsHealthStrip } from '../aitrading/OpsHealthStrip';
+import { StrategyHealthPanel } from '../aitrading/StrategyHealthPanel';
 import {
   SectionLabel, RegimeChips, BreadthStrip, FilterChips, RefreshCountdown, BoardSummary, DeskStatsStrip,
   FreshnessBadge, boardStaleClass,
@@ -311,10 +313,10 @@ export default memo(function CoinDcxTab() {
   const newSymbols = useMemo(() => {
     const fresh = [...actionableSyms].filter(s => !prevTopRef.current.has(s));
     return new Set(fresh);
-  }, [actionableSyms]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [actionableSyms]);  
   useEffect(() => {
     if (board?.generatedAt) prevTopRef.current = actionableSyms;
-  }, [board?.generatedAt, actionableSyms]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [board?.generatedAt, actionableSyms]);  
 
   // v10.18 (deep-recheck #3): timer-ref toast — a stale timer used to
   // wipe a newer execution message early (two actions inside 6s).
@@ -542,6 +544,9 @@ export default memo(function CoinDcxTab() {
           aur hamesha-visible model attribution. */}
       <div className="quantum-panel rounded-2xl py-1.5">
         <EngineHealthStrip />
+        {/* v21.1.0 (Phase-3): operational health — feed ages / kills /
+            exec heartbeat / data-dirs, /api/health se 30s poll. */}
+        <OpsHealthStrip />
       </div>
 
       {/* ============ 00 · SUPERINTELLIGENCE AUTO-AGENT ============ */}
@@ -761,6 +766,11 @@ export default memo(function CoinDcxTab() {
       {!simple && (
         <div id="cx-mesh">
           <SectionLabel num="04" title="MCP Mesh Ops" sub="10 data agents ka health · free-tier budgets · mesh-backed ensemble seats (shadow/voting state) — dono desks ke T3 seats isi mesh se feed hote hain" />
+          {/* v21.1.0 (Phase-4): strategy health + GO-LIVE gate — CRYPTO/FUTURES
+              desks ka rolling 30-trade kill rule + paper-readiness counters. */}
+          <div className="mt-2.5">
+            <StrategyHealthPanel />
+          </div>
           <div className="mt-2.5">
             <MeshStatusPanel />
           </div>

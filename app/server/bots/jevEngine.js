@@ -31,6 +31,24 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+// v21.1.0 (Phase-3, MaxListeners fix): createJev() factory HAR call pe
+// process pe ek naya 'exit' listener add karta tha — server me single use
+// the, par lab scripts (botlab-smoke/backtest/calibrate) + test suites me
+// 11+ instances ban-te the → MaxListenersExceededWarning + hidden leak.
+// Ab EK module-level listener saare live instances ke flushers chalata hai.
+const _jevFlushers = new Set();
+let _jevExitHookArmed = false;
+function _armJevExitHook() {
+  if (_jevExitHookArmed) return;
+  _jevExitHookArmed = true;
+  process.once('exit', () => {
+    for (const flush of _jevFlushers) {
+      try { flush(); } catch { /* never fatal */ }
+    }
+    _jevFlushers.clear();
+  });
+}
+
 export const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 
 export const JEV_DEFAULTS = {
@@ -186,14 +204,16 @@ export function createJev(opts = {}) {
   // v20.8.4 FIX (L — flush-on-exit): the debounce comment promised "flush
   // on break" but no shutdown hook ever existed — the last ≤30s of cache
   // entries were lost on every exit (re-fetched at real cost on restart).
-  // process.once('exit') fires on normal exit AND on SIGINT/SIGTERM handled
-  // by the parent's graceful-shutdown path; persistCache is fully sync.
-  process.once('exit', () => {
+  // v21.1.0: instance-level listener ke bajaye module-level registry me
+  // apna flusher register karo (upar _armJevExitHook dekho) — listener
+  // count ab instance count se independent hai.
+  _jevFlushers.add(() => {
     try {
       if (_persistTimer != null) { clearTimeout(_persistTimer); _persistTimer = null; }
       if (cacheDirty) persistCache();
     } catch { /* never fatal */ }
   });
+  _armJevExitHook();
 
   /**
    * THE DECIDER. snap: { proposed: 'enter_long'|'enter_short',
@@ -210,7 +230,7 @@ export function createJev(opts = {}) {
     }
 
     let resp = cache.get(key);
-    let cached = !!resp;
+    const cached = !!resp;
     const wire = !resp;
     if (!resp) {
       if (!apiKey) {

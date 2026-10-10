@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch, getProxyBase, getSessionToken } from '../../utils/api';
+import { swallow } from '../../utils/swallow';
 
 // ============================================================
 //  PRO TRADER AUTO — SAPTA v18.6 (Superintelligence Advance AI
@@ -103,7 +104,7 @@ export const ProTraderAutoPanel = memo(function ProTraderAutoPanel({ notify }: {
       try {
         es = new EventSource(`${getProxyBase()}/api/ai/protrader-auto/stream?session=${encodeURIComponent(session)}`);
         es.addEventListener('status', (e) => {
-          try { const j = JSON.parse((e as MessageEvent).data) as PtaView; setView(j); setCfgEd((p) => p ?? (j.config as unknown as Record<string, unknown>)); } catch {}
+          try { const j = JSON.parse((e as MessageEvent).data) as PtaView; setView(j); setCfgEd((p) => p ?? (j.config as unknown as Record<string, unknown>)); } catch (err) { swallow('ProTraderAutoPanel.statusFrame', err); } // v21.1.0: malformed frame ab dev-me dikhta hai
         });
         es.onerror = () => {
           // v20.3: the native ~3s auto-reconnect re-tries the SAME
@@ -123,7 +124,7 @@ export const ProTraderAutoPanel = memo(function ProTraderAutoPanel({ notify }: {
     // engine state ek hi poll-me dikhna band ho jata hai)
     const onVis = () => { if (!document.hidden) refresh(); };
     document.addEventListener('visibilitychange', onVis);
-    return () => { clearInterval(iv); if (tokenWait) clearTimeout(tokenWait); if (reconnectTimer) clearTimeout(reconnectTimer); document.removeEventListener('visibilitychange', onVis); try { es?.close(); } catch {} };
+    return () => { clearInterval(iv); if (tokenWait) clearTimeout(tokenWait); if (reconnectTimer) clearTimeout(reconnectTimer); document.removeEventListener('visibilitychange', onVis); try { es?.close(); } catch (err) { swallow('ProTraderAutoPanel.cleanup', err); } };
   }, [refresh]);
 
   const act = useCallback(async (fn: () => Promise<Record<string, unknown>>, okText: string) => {

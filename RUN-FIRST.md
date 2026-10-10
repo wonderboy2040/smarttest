@@ -4,6 +4,42 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.1.0 — PHASE 1-4 RELIABILITY UPGRADE (user plan implemented)
+
+**1) LIVE trading ab GO-LIVE GATE ke peeche hai (sabse zaroori change):**
+- LIVE entries tabhi fire hongi jab **PAPER track-record qualify** kare:
+  100+ settled paper trades + positive expectancy + max drawdown limit ke andar.
+- Dono desks (India + CoinDCX) me **STRATEGY HEALTH panel** dikhega —
+  LIVE LOCKED/UNLOCKED chip + progress bar + exact counters.
+- Tunable: `GO_LIVE_MIN_TRADES=100`, `GO_LIVE_MIN_EXPECTANCY_R=0`,
+  `GO_LIVE_MAX_DD_R=8` (env se).
+- **Per-strategy auto-pause**: kisi strategy ki rolling 30-trade expectancy
+  negative ho gayi to wo khud pause ho jaati hai (naye entries honest reason
+  se reject; recover hone par auto-resume). Telegram pe 🛑 notification.
+
+**2) Naya /api/health + OPS strip:**
+- Dono tabs ke top par **OPS** strip: feeds ka last-tick age, WS health,
+  teeno kill layers, exec heartbeat, disk status — 30s refresh.
+- Server har 60s check karta hai — koi feed 90s+ stale / WS down / kill
+  arm / heartbeat gap / disk problem → **Telegram health alert** (15-min throttle).
+
+**3) dist/ ab git me nahi aata:**
+- `Start-SmartAI-Watchdog.bat` pehle hi **dist missing/stale hone par auto
+  build** karta hai (`ensureFrontend`) — kuch nahi karna.
+- Render deploy: **Build Command** me `npm ci && npm run build` rakho.
+- GitHub pe CI (Actions) har push pe build+test verify karta hai.
+
+**4) proxy-addr security fix:** npm audit ab **0 vulnerabilities** (pehle 1
+critical IP-spoofing). Telegram-bot lockfile bhi patched.
+
+**5) LIVE-CHECKLIST:** `app/PHASE-2-LIVE-CHECKLIST.md` kholo — real feeds,
+Telegram, Dhan, Render flows ke manual test items (PASS/FAIL log ke saath).
+
+**6) Logs kam shor karne ke liye:** `.env` me `LOG_LEVEL=warn` daal sakte ho
+(sirf warnings+errors dikhen ge). Default `info` (pehle jaisa).
+
+---
+
 ## 🎯 v21.0.6 — ADVANCE-PRO FULL AUDIT FIXES (8 major + 4 medium)
 
 **1) Options paper trading ab aur bhi ACCURATE:**

@@ -239,7 +239,7 @@ export async function executeServerMCPTool(name, args = {}, context = {}) {
 
           let actionBadge = '🛡️ HOLD & COMPOUND';
           let timingAdvice = 'Current levels healthy hain. Position hold karo, compounding chalne do.';
-          let dipBuyZone = `${Math.round(price * 0.94)} - ${Math.round(price * 0.96)}`;
+          const dipBuyZone = `${Math.round(price * 0.94)} - ${Math.round(price * 0.96)}`;
 
           if (superScore >= 68 || rsi < 35) {
             actionBadge = '💎 STRONG BUY / ACCUMULATE ON DIPS';
@@ -587,10 +587,10 @@ export async function executeServerMCPTool(name, args = {}, context = {}) {
         if (!price || price <= 0) return { error: 'Valid currentPrice is required' };
         const atr = price * (atrPct / 100);
 
-        let entry = price;
-        let sl = bias === 'BULLISH' ? price - (atr * 1.2) : price + (atr * 1.2);
-        let tp1 = bias === 'BULLISH' ? price + (atr * 1.5) : price - (atr * 1.5);
-        let tp2 = bias === 'BULLISH' ? price + (atr * 2.5) : price - (atr * 2.5);
+        const entry = price;
+        const sl = bias === 'BULLISH' ? price - (atr * 1.2) : price + (atr * 1.2);
+        const tp1 = bias === 'BULLISH' ? price + (atr * 1.5) : price - (atr * 1.5);
+        const tp2 = bias === 'BULLISH' ? price + (atr * 2.5) : price - (atr * 2.5);
 
         const risk = Math.abs(entry - sl);
         const reward1 = Math.abs(tp1 - entry);

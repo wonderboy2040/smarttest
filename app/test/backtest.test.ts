@@ -198,3 +198,47 @@ describe('simulateSymbol — v12.6 guarded strategy (the trust-guard replay)', (
     expect(bogus.stats.totalR).toBeCloseTo(plain.stats.totalR ?? 0, 2);
   });
 });
+
+// ============================================================
+// v21.1.0 (Phase-4): WALK-FORWARD TRAIN/TEST SPLIT
+// ============================================================
+import { walkForwardSymbol } from '../server/ai/backtest.js';
+
+describe('walkForwardSymbol — v21.1.0 train/test split + overfit verdict', () => {
+  it('returns null on insufficient bars (train+test dono warmup chahiye)', () => {
+    expect(walkForwardSymbol({ symbol: 'X', market: 'CRYPTO', candles: trendCandles({ n: 120 }) })).toBeNull();
+    expect(walkForwardSymbol({ symbol: 'X', market: 'CRYPTO', candles: [] })).toBeNull();
+  });
+
+  it('split shape: 70/30, learned bar [60..85] ke andar, dono legs stats dete hain', () => {
+    const candles = trendCandles({ n: 400, seed: 21 });
+    const wf = walkForwardSymbol({ symbol: 'BTC', market: 'CRYPTO', candles, currentMinConfidence: 75 })!;
+    expect(wf).not.toBeNull();
+    expect(wf.split.trainBars).toBeGreaterThan(wf.split.testBars);
+    expect(wf.split.trainPct).toBeCloseTo(0.7, 5);
+    expect(wf.split.learnedBar).toBeGreaterThanOrEqual(60);
+    expect(wf.split.learnedBar).toBeLessThanOrEqual(85);
+    expect(wf.train).toBeTruthy();
+    expect(wf.train.defaultGates).toBeTruthy();
+    expect(wf.test.currentBar).toBeTruthy();
+    expect(['HIGH', 'MODERATE', 'CALIBRATED', 'NO_EDGE', 'UNKNOWN']).toContain(wf.verdict.overfit);
+  });
+
+  it('test leg sirf OUT-OF-SAMPLE candles use karta hai (no train bleed)', () => {
+    const candles = trendCandles({ n: 400, seed: 33 });
+    const wf = walkForwardSymbol({ symbol: 'BTC', market: 'CRYPTO', candles, currentMinConfidence: 75 })!;
+    // train + test = total + WARMUP carry overlap (indicators test-start pe hot
+    // karne ke liye test leg pehle WARMUP bars overlap leta hai — by design)
+    expect(wf.split.trainBars + wf.split.testBars).toBeGreaterThanOrEqual(candles.length - 10);
+    expect(wf.split.trainBars + wf.split.testBars).toBeLessThanOrEqual(candles.length + 60);
+  });
+
+  it('minConfidence filter: bar 100 pe trades <= bar 0 pe trades (filter monotonicity)', () => {
+    const candles = trendCandles({ n: 400, seed: 9 });
+    const all = simulateSymbol({ symbol: 'BTC', market: 'CRYPTO', candles })!;
+    const filtered = simulateSymbol({ symbol: 'BTC', market: 'CRYPTO', candles, minConfidence: 100 })!;
+    expect(filtered.stats.trades).toBeLessThanOrEqual(all.stats.trades);
+    // bar 100 pe har entry ka confidence >= 100 tha (agar koi the)
+    for (const t of filtered.trades) expect(t.confidence).toBeGreaterThanOrEqual(100);
+  });
+});

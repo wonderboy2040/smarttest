@@ -18,7 +18,10 @@
 //           Sab kuch shared hardGate.js (server/risk/) se derive hota
 //           hai — SAPTA wahi gate use karta hai (audit A1).
 // ============================================================
-import { hardGateCheck, drawdownFromPeakPct, wilsonLowerBound } from '../risk/hardGate.js';
+// v21.1.0: hardGateCheck import removed — botRisk ka apna _accountStateReasons
+// usi shared-gate semantics ko fail-closed re-implement karta tha (divergence
+// risk), import unused tha. Sirf jo helpers actually use hote hain.
+import { drawdownFromPeakPct, wilsonLowerBound } from '../risk/hardGate.js';
 
 export const BOT_RISK_DEFAULTS = {
   riskPerTradePct: 0.5,

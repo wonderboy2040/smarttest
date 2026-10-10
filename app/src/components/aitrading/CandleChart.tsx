@@ -120,7 +120,11 @@ export const CandleChart = memo(function CandleChart({
       if (document.hidden) return; // D16: hidden tab → skip (battery/API budget)
       void load(tf);
     }, REFRESH_MS);
-    return () => { aliveRef.current = false; reqSeq.current++; clearInterval(t); };
+    // v21.1.0: ref OBJECT ko local const me capture karke cleanup me use
+    // karte hain — cleanup-time .current read pe exhaustive-deps warning
+    // aati thi (ref identity stable hai, semantics same).
+    const seqRef = reqSeq;
+    return () => { aliveRef.current = false; seqRef.current++; clearInterval(t); };
   }, [tf, load]);
 
   const H = compact ? 150 : 210;

@@ -1,3 +1,6 @@
+// v21.1.0 Phase-1.4: empty catches → swallow() (dev-only debug, behaviour same).
+import { swallow } from './swallow';
+
 const ENCRYPTION_KEY = import.meta.env.VITE_ENCRYPTION_KEY;
 if (!ENCRYPTION_KEY) {
   console.warn('VITE_ENCRYPTION_KEY not set — secureStorage encryption is disabled');
@@ -138,7 +141,7 @@ export const secureStorage = {
             // immediately so concurrent reads don't trigger a second re-encrypt.
             _migratedKeys.add(key);
             encryptData(plain).then(reEnc => {
-              try { localStorage.setItem(key, `enc:${reEnc}`); } catch { }
+              try { localStorage.setItem(key, `enc:${reEnc}`); } catch (err) { swallow('secureStorage.getItem.reEncrypt', err); }
             }).catch(() => { _migratedKeys.delete(key); });
             return plain;
           }
@@ -192,7 +195,7 @@ export const secureStorage = {
               localStorage.setItem(backupKey, item);
             }
             localStorage.removeItem(key);
-          } catch { }
+          } catch (err) { swallow('secureStorage.getItemAsync.backupPreserve', err); } // v21.1.0: undecryptable backup preserve failure ab dikhta hai
           return null;
         }
         return decrypted;
@@ -210,20 +213,20 @@ export const secureStorage = {
       // v10.13 (deep-recheck L2): .catch added — a rare WebCrypto failure
       // surfaced as an unhandled promise rejection on every write.
       encryptData(value).then(encrypted => {
-        try { localStorage.setItem(key, `enc:${encrypted}`); } catch { }
+        try { localStorage.setItem(key, `enc:${encrypted}`); } catch (err) { swallow('secureStorage.setItem.enc', err); }
       }).catch(() => {
         // Encryption failed — persist PLAINTEXT rather than silently losing
         // the write entirely (same degradation setItemAsync already uses).
-        try { localStorage.setItem(key, value); } catch { }
+        try { localStorage.setItem(key, value); } catch (err) { swallow('secureStorage.setItem.plainFallback', err); }
       });
     } else {
-      try { localStorage.setItem(key, value); } catch { }
+      try { localStorage.setItem(key, value); } catch (err) { swallow('secureStorage.setItem.plain', err); }
     }
   },
 
   // Fire-and-forget set, returns value for chaining convenience
   setItemPlain(key: string, value: string): void {
-    try { localStorage.setItem(key, value); } catch { }
+    try { localStorage.setItem(key, value); } catch (err) { swallow('secureStorage.setItemPlain', err); }
   },
 
   // Awaitable set — for flushCache-style rewrites where the page RELOADS
@@ -236,18 +239,18 @@ export const secureStorage = {
         const encrypted = await encryptData(value);
         localStorage.setItem(key, `enc:${encrypted}`);
       } catch {
-        try { localStorage.setItem(key, value); } catch { }
+        try { localStorage.setItem(key, value); } catch (err) { swallow('secureStorage.setItemAsync.plainFallback', err); }
       }
     } else {
-      try { localStorage.setItem(key, value); } catch { }
+      try { localStorage.setItem(key, value); } catch (err) { swallow('secureStorage.setItemAsync.plain', err); }
     }
   },
 
   removeItem(key: string): void {
-    try { localStorage.removeItem(key); } catch { }
+    try { localStorage.removeItem(key); } catch (err) { swallow('secureStorage.removeItem', err); }
   },
 
   clear(): void {
-    try { localStorage.clear(); } catch { }
+    try { localStorage.clear(); } catch (err) { swallow('secureStorage.clear', err); }
   }
 };

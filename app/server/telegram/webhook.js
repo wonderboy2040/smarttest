@@ -162,7 +162,7 @@ async function buildStatusText(aiDeps) {
     ].filter(Boolean).join('\n');
   } catch { /* keep unavailable */ }
 
-  let deskLines = [];
+  const deskLines = [];
   try {
     const [crypto, india] = await Promise.all([
       getSignals('CRYPTO', aiDeps, { limit: 3, warmOnly: true }).catch(() => null),

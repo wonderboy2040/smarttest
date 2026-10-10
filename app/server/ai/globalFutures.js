@@ -152,7 +152,7 @@ export async function refreshGlobalUniverse() {
   try { discovered = await fetchGlobalFuturesInstruments(); }
   catch { discovered = []; /* CoinDCX unreachable → seed-only (honest degrade) */ }
   const bySymbol = new Map(GLOBAL_FUTURES_SEED.map(u => [u.symbol, { ...u }]));
-  let added = [];
+  const added = [];
   for (const d of (Array.isArray(discovered) ? discovered : [])) {
     if (bySymbol.has(d.symbol)) continue;
     if (bySymbol.size >= GLOBAL_FUTURES_SEED.length + GLOBAL_DISCOVERED_MAX) break;

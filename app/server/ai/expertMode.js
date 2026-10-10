@@ -212,7 +212,7 @@ async function getExpertHeadlines(symbol, market) {
 }
 
 // ---------------- expert analyze (proxy to ml-service) ----------------
-let _inFlight = new Map(); // cacheKey -> promise (coalesce concurrent)
+const _inFlight = new Map(); // cacheKey -> promise (coalesce concurrent)
 
 export async function expertAnalyze(symbol, market, risk = {}) {
   const key = `${market}:${symbol}:${risk.capital || 0}:${risk.risk_pct || 1}`;

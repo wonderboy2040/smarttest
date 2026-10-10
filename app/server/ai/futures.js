@@ -1035,6 +1035,31 @@ export async function executeFuturesSignal(opts) {
   // --- gate 1: kill switch ---
   if (cfg.killSwitch) return reject('Kill switch ON — execution disabled');
 
+  // v21.1.0 (Phase-2 #4 + Phase-4): reconciler kill + GO-LIVE gate + per-strategy
+  // kill rule — spot desk ke saath parity (coindcxOrders.js gate 1 block dekho).
+  if (wantMode === 'live') {
+    try {
+      const { isKilled, killLevel, killReason } = await import('../exec/reconciler.js');
+      if (typeof isKilled === 'function' && isKilled()) {
+        return reject(`Exec kill L${killLevel()} ACTIVE (${killReason() || 'no reason'}) — live entries blocked`);
+      }
+    } catch { /* reconciler unavailable — single-node local */ }
+  }
+  if (wantMode === 'live') {
+    try {
+      const { goLiveGateBlocked } = await import('./strategyGuard.js');
+      const g = goLiveGateBlocked();
+      if (g.blocked) return reject(g.reason, g.reason, { goLiveGate: g.readiness?.stats });
+    } catch { /* guard unavailable — never break the flow */ }
+  }
+  {
+    try {
+      const { strategyGuardBlocked } = await import('./strategyGuard.js');
+      const g = strategyGuardBlocked(source, 'FUTURES');
+      if (g.blocked) return reject(g.reason, g.reason, { strategyPaused: true });
+    } catch { /* guard unavailable — never break the flow */ }
+  }
+
   // --- gate 2: auto policy ---
   if (wantAuto && !cfg.allowAuto) return { ok: false, error: 'Auto-execution is OFF (enable it in Risk settings)' };
   if (wantAuto && cfg.mode !== 'live') return { ok: false, error: 'Auto-execution only runs in LIVE mode' };
@@ -1317,12 +1342,49 @@ export async function executeFuturesSignal(opts) {
         if (row) { exchangePositionId = row.id; exchangeLiq = row.liquidationPrice > 0 ? row.liquidationPrice : null; }
       }
       // Native TP/SL — belt + suspenders (works while this server sleeps).
+      // v21.1.0 PROTECTION-FIRST (Phase-2 audit fix #3): tpsl fail → 2s baad
+      // EK retry; phir bhi fail → FLATTEN (positionManager.js ka core rule
+      // port: "no protection = no position"). Pehle ye position OPEN book
+      // karta tha sirf ek note ke saath — leveraged position exchange-resident
+      // stop ke bina 30s server-watcher ke bharose reh jati thi.
       let tpslNote = null;
+      let tpslFailed = false;
       if (exchangePositionId) {
         const tp = effectiveSignal.plan?.target2 ?? null;
         const sl = effectiveSignal.plan?.stopLoss ?? null;
-        const tpsl = await createFuturesTpsl({ positionId: exchangePositionId, stopLoss: sl, takeProfit: tp }).catch(e => ({ ok: false, error: String(e?.message || e) }));
-        tpslNote = tpsl?.ok ? `native TP/SL armed on the exchange (SL ${sl} · TP ${tp})` : `native TP/SL NOT armed (${String(tpsl?.error || '').slice(0, 80)}) — server watcher guards the exit`;
+        let tpsl = await createFuturesTpsl({ positionId: exchangePositionId, stopLoss: sl, takeProfit: tp }).catch(e => ({ ok: false, error: String(e?.message || e) }));
+        if (!tpsl?.ok) {
+          await new Promise(r => setTimeout(r, 2000)); // ek bounded retry — transient API hiccup
+          tpsl = await createFuturesTpsl({ positionId: exchangePositionId, stopLoss: sl, takeProfit: tp }).catch(e => ({ ok: false, error: String(e?.message || e) }));
+        }
+        if (tpsl?.ok) {
+          tpslNote = `native TP/SL armed on the exchange (SL ${sl} · TP ${tp})`;
+        } else {
+          tpslFailed = true;
+          tpslNote = `native TP/SL FAILED twice (${String(tpsl?.error || '').slice(0, 80)}) — PROTECTION-FIRST flatten triggered`;
+        }
+      }
+      // v21.1.0: tpsl fail → flatten the just-opened position. Flatten bhi
+      // fail ho (API down) → honest booking + watcher-guard note (purana
+      // behavior) — kabhi bhi "armed" ka jhootha claim nahi.
+      if (tpslFailed) {
+        let flattenErr = null;
+        try {
+          const fx = await exitFuturesPosition(exchangePositionId).catch(e => ({ ok: false, error: String(e?.message || e) }));
+          if (!fx?.ok) flattenErr = fx?.error || 'wrapped rejection';
+        } catch (e) { flattenErr = String(e?.message || e); }
+        if (!flattenErr) {
+          const usdInrFx = await fetchUsdInr().catch(() => 84);
+          pushEntry(j, {
+            ...entry, status: 'CLOSED', qty, price: pRound(price), notionalUSDT, notionalINR: inrOfUsdt(notionalUSDT, usdInrFx),
+            leverage: lev, marginUSDT: marginUsed, exchangeOrderId: orderId ?? null, exchangePositionId,
+            reason: `PROTECTION-FIRST FLATTEN: native TP/SL do attempt me arm nahi hua — entry turant close kar di gayi (scratch exit, fee-only). Original tpsl error: ${tpslNote}`,
+          });
+          saveJournalFresh(j);
+          return { ok: false, error: `Futures entry flattened (protection-first): native TP/SL arm nahi hua — ${tpslNote}. Position close ho gayi, scratch exit (fee-only).` };
+        }
+        // flatten fail — honest booking + watcher guard (existing path)
+        tpslNote = `native TP/SL NOT armed + FLATTEN BHI FAIL (${String(flattenErr).slice(0, 60)}) — server watcher hi exit guard hai; manual verify karo`;
       }
       let ledgerEntryId = null;
       try { ledgerEntryId = recordExecution(signal, { mode: 'live', market: 'FUTURES', source })?.id || null; } catch { /* best-effort */ }

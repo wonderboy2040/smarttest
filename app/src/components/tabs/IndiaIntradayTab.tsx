@@ -33,6 +33,7 @@ import { TopPicksPanel } from '../aitrading/TopPicksPanel';
 import { ExpertPicksPanel } from '../aitrading/ExpertPicksPanel';
 import { MarketClockStrip } from '../aitrading/MarketClockStrip';
 import { EngineHealthStrip } from '../aitrading/EngineHealthStrip';
+import { OpsHealthStrip } from '../aitrading/OpsHealthStrip';
 import { QuickNav } from '../aitrading/QuickNav';
 import { OptionsDeskPanel } from '../aitrading/OptionsDeskPanel';
 import { OrderConsole } from '../aitrading/OrderConsole';
@@ -42,6 +43,7 @@ import { ModelRegistry } from '../aitrading/ModelRegistry';
 import { BacktestPanel } from '../aitrading/BacktestPanel';
 import { GateReplayPanel } from '../intraday/GateReplayPanel';
 import { ModelPerformancePanel } from '../aitrading/ModelPerformancePanel';
+import { StrategyHealthPanel } from '../aitrading/StrategyHealthPanel';
 // v11.6 → v11.7 FIX: the MCP mesh ops view was originally wired only into the
 // DEAD tabs/AITradingTab.tsx (unreachable from App.tsx since the v6.9 desk
 // split) — users could never see it. Re-wired here onto the LIVE India desk.
@@ -225,10 +227,10 @@ export default memo(function IndiaIntradayTab() {
   const newSymbols = useMemo(() => {
     const fresh = [...actionableSyms].filter(s => !prevTopRef.current.has(s));
     return new Set(fresh);
-  }, [actionableSyms]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [actionableSyms]);  
   useEffect(() => {
     if (board?.generatedAt) prevTopRef.current = actionableSyms;
-  }, [board?.generatedAt, actionableSyms]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [board?.generatedAt, actionableSyms]);  
 
   // v10.18 (deep-recheck #3): timer-ref toast — a stale timer used to
   // wipe a newer execution message early (two actions inside 6s).
@@ -404,6 +406,9 @@ export default memo(function IndiaIntradayTab() {
           30s auto-refresh + RECHECK. */}
       <div className="quantum-panel rounded-2xl py-1.5">
         <EngineHealthStrip />
+        {/* v21.1.0 (Phase-3): operational health — feed ages / kills /
+            exec heartbeat / data-dirs, /api/health se 30s poll. */}
+        <OpsHealthStrip />
       </div>
 
       {/* ============ v6.12 PRO SESSION GATE ============ */}
@@ -662,6 +667,11 @@ export default memo(function IndiaIntradayTab() {
               30/90d win-rates + calibration chart + regime tilt state. */}
           <div className="mt-2.5">
             <ModelPerformancePanel desk="INDIA" />
+          </div>
+          {/* v21.1.0 (Phase-4): strategy health + GO-LIVE gate — rolling
+              30-trade kill rule + paper-readiness counters. */}
+          <div className="mt-2.5">
+            <StrategyHealthPanel />
           </div>
           {/* v11.6 MCP mesh ops — 10 data agents' health, free-tier budgets
               and the mesh-backed ensemble seats (shadow/voting state). */}

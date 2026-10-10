@@ -57,6 +57,19 @@ export function feedStatus() {
   return live;
 }
 
+// v21.1.0 (Phase-3): per-source LAST-TICK AGES — /api/health + frontend strip
+// ke liye. feedStatus() sirf booleans deta tha (60s window); ab har source ka
+// age seconds me bhi milta hai (never-ticked sources skip — wo "not armed"
+// hain, "stale" nahi).
+export function feedAges() {
+  const now = Date.now();
+  const out = {};
+  for (const [src, at] of Object.entries(_sourceSeen)) {
+    out[src] = { lastTickAt: at, ageSec: Math.max(0, Math.round((now - at) / 1000)) };
+  }
+  return out;
+}
+
 // Housekeeping (2026 perf audit M2): _ticks previously grew forever — every
 // key ever ticked stayed in the map for the whole process lifetime. Snapshots
 // only ever ask for keys an active client cares about, so anything stale

@@ -1263,7 +1263,7 @@ function _roePctOf(t, ltp) {
 //   * failure → CLOSE_UNKNOWN, trade monitored rehta hai + telegram alert
 async function _closeTrade(t, reason, cfg, sendTelegram, ltpOverride) {
   t.browser ??= { actions: [], shots: [] };
-  let exitPrice = Number(ltpOverride || t.lastLtp || t.entryPrice);
+  const exitPrice = Number(ltpOverride || t.lastLtp || t.entryPrice);
   let closeOk = true; let closeDetail = null; let verify = null;
   // v20.7.10 CRITICAL FIX: close TRADE ke mode pe gate hota hai, ENGINE ke
   // current config pe NAHI. Pehle cfg.mode dekhta tha — user live positions

@@ -11,6 +11,9 @@
 // the six live exports below are the entire public surface.
 // ============================================================
 
+// v21.1.0 Phase-1.4: empty catches → swallow() (dev-only debug, behaviour same).
+import { swallow } from './swallow';
+
 // Proxy base helper — resolves backend server URL dynamically
 // 1. Checks localStorage ('WEALTH_AI_BACKEND_URL')
 // 2. Checks build-time VITE_API_PROXY
@@ -19,7 +22,7 @@ export function getProxyBase(): string {
   try {
     const custom = localStorage.getItem('WEALTH_AI_BACKEND_URL');
     if (custom && custom.startsWith('http')) return custom.trim().replace(/\/$/, '');
-  } catch {}
+  } catch (err) { swallow('api.getProxyBase', err); }
 
   const envProxy = (import.meta.env.VITE_API_PROXY as string) || '';
   if (envProxy) return envProxy.replace(/\/$/, '');
@@ -61,13 +64,13 @@ export function setSessionToken(token: string | null) {
       sessionStorage.removeItem('wealthai_session_token');
       localStorage.removeItem('wealthai_session_token');
     }
-  } catch {}
+  } catch (err) { swallow('api.setSessionToken', err); }
 }
 // Restore token on module load — try sessionStorage first, then localStorage.
 try {
   const t = sessionStorage.getItem('wealthai_session_token') || localStorage.getItem('wealthai_session_token');
   if (t) _sessionToken = t;
-} catch {}
+} catch (err) { swallow('api.tokenRestore', err); }
 
 // Track the in-flight auth check so we don't fire it multiple times.
 let _authCheckPromise: Promise<boolean> | null = null;
@@ -154,7 +157,7 @@ function notifySessionExpired() {
     if (Date.now() - _last401At < 3000) return; // one event per burst
     _last401At = Date.now();
     window.dispatchEvent(new CustomEvent('session-expired'));
-  } catch { /* non-browser env */ }
+  } catch (err) { swallow('api.notifySessionExpired', err); } /* non-browser env */
 }
 /** v20.1 test hook — reset the session-expired burst throttle between cases. */
 export function __resetSessionExpiredThrottleForTests() { _last401At = 0; }
@@ -166,6 +169,6 @@ function notifyBackendOnline() {
     if (Date.now() - _lastOnlinePing < 5000) return; // throttle event spam
     _lastOnlinePing = Date.now();
     window.dispatchEvent(new CustomEvent('backend-online'));
-  } catch { /* non-browser env */ }
+  } catch (err) { swallow('api.notifyBackendOnline', err); } /* non-browser env */
 }
 export function getSessionToken(): string | null { return _sessionToken; }

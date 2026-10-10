@@ -31,6 +31,12 @@ const SSE_MAX_CLIENTS = 8;          // bounded subscribers (sseCap convention)
 const SSE_BACKPRESSURE_BYTES = 1 << 20;
 
 let _runner = null;
+
+/** v21.1.0 (Phase-3): PEEK — runner banao NAHI, sirf existing return.
+ *  healthMonitor ka /api/health snapshot isse use karta hai: getBotRunner()
+ *  call karta to singleton null-candleProvider ke saath ban jata aur index.js
+ *  ki asli wiring (candleProvider/jev) hamesha ke liye ignore ho jaati. */
+export function peekBotRunner() { return _runner; }
 let _smokeCache = { at: 0, result: null };
 let _smokeInFlight = null;
 let _tickInFlight = false;

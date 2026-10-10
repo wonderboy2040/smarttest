@@ -360,7 +360,7 @@ function DhanPanel({ busy, onSave, dhan, indiaMode, onConnect, onDisconnect, onR
 
   const connect = useCallback(async () => {
     const r = await onConnect(clientId.trim(), accessToken.trim());
-    flash(r.ok, r.ok ? `✅ Dhan connected${dhan ? '' : ''} — profile verified` : `⛔ ${r.error || 'connect failed'}`);
+    flash(r.ok, r.ok ? '✅ Dhan connected — profile verified' : `⛔ ${r.error || 'connect failed'}`);
     if (r.ok) { setClientId(''); setAccessToken(''); onRefresh(); }
   }, [clientId, accessToken, onConnect, onRefresh]);
 

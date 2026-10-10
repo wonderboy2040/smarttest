@@ -182,10 +182,19 @@ async function _reconcileTick() {
     _writeHeartbeat();
 
     // L3: flatten all + return
+    // v21.1.0 (Phase-2 audit fix #7): failed closes pehle SILENT the — L3
+    // kill ke dauran flatten fail hone par position open reh jaati thi, koi
+    // retry nahi, koi alert nahi. Ab ek immediate retry + phir bhi fail to
+    // CRITICAL alert (12s agla tick dobara try karega).
     if (_state.killLevel >= 3) {
       const positions = await _state.port.getPositions();
       for (const p of positions) {
-        try { await _state.port.close({ positionId: p.id }); } catch { /* reconcile read best-effort */ }
+        let closed = false, lastErr = null;
+        for (let attempt = 0; attempt < 2 && !closed; attempt++) {
+          try { await _state.port.close({ positionId: p.id }); closed = true; }
+          catch (e) { lastErr = e; }
+        }
+        if (!closed) _alertCall(`🚨 L3 FLATTEN FAILED ${p.pair}: ${String(lastErr?.message || lastErr || '').slice(0, 120)} — next 12s tick retry karega, MANUAL VERIFY KARO.`);
       }
       return;
     }
@@ -194,7 +203,12 @@ async function _reconcileTick() {
     if (_state.killLevel === 2) {
       const positions = await _state.port.getPositions();
       for (const p of positions) {
-        try { await _state.port.close({ positionId: p.id }); } catch { /* reconcile read best-effort */ }
+        let closed = false, lastErr = null;
+        for (let attempt = 0; attempt < 2 && !closed; attempt++) {
+          try { await _state.port.close({ positionId: p.id }); closed = true; }
+          catch (e) { lastErr = e; }
+        }
+        if (!closed) _alertCall(`🚨 L2 REDUCE-ONLY CLOSE FAILED ${p.pair}: ${String(lastErr?.message || lastErr || '').slice(0, 120)} — next 12s tick retry karega, MANUAL VERIFY KARO.`);
       }
       return;
     }
@@ -217,8 +231,13 @@ async function _reconcileTick() {
         if (enginePairs.has(String(p.pair))) {
           // engine-owned orphan with no SL → the CORE RULE applies
           if (noSl) {
-            try { await _state.port.close({ positionId: p.id }); } catch { /* reconcile read best-effort */ }
-            _alertCall(`🚨 ORPHAN ${p.pair} no SL on exchange — FLATTENED (core rule).`);
+            // v21.1.0: flatten fail ho to "FLATTENED" ka jhootha claim nahi —
+            // honest error alert (next 12s tick retry karega).
+            let flatErr = null;
+            try { await _state.port.close({ positionId: p.id }); }
+            catch (e) { flatErr = e; }
+            if (flatErr) _alertCall(`🚨 ORPHAN ${p.pair} no SL — FLATTEN FAILED: ${String(flatErr?.message || flatErr || '').slice(0, 120)}. Next tick retry; MANUAL VERIFY.`);
+            else _alertCall(`🚨 ORPHAN ${p.pair} no SL on exchange — FLATTENED (core rule).`);
           }
         } else if (noSl) {
           // v20.7.12 [H1]: user's MANUAL position — adopt-only + advisory
@@ -238,7 +257,18 @@ async function _reconcileTick() {
         }
       }
     }
-  } catch { /* reconciler must never throw */ }
+  } catch (e) {
+    // v21.1.0 (Phase-2 audit fix #7): reconciler kabhi throw nahi hota, par
+    // pehle ye catch bilkul SILENT tha — persistent API failure (bad keys,
+    // network down) ke dinon tak reconcile rukta rehta tha aur koi nahi jaanta
+    // tha. Ab throttled CRITICAL alert (10 min) + console.error.
+    const now = Date.now();
+    if (now - (_state._lastTickErrAlert || 0) > 10 * 60_000) {
+      _state._lastTickErrAlert = now;
+      try { console.error('[reconciler] tick failed:', e); } catch { /* logging best-effort */ }
+      _alertCall(`🚨 RECONCILE TICK FAILED: ${String(e?.message || e || '').slice(0, 160)} — exchange sync ruka hai (12s retry chalu). Agar fire lage to /api/exec/kill se L1 laga do.`);
+    }
+  }
 }
 
 function _writeHeartbeat() {

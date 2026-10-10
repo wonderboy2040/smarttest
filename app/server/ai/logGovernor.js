@@ -14,11 +14,20 @@
 //     line + "×N repeats" (watchers/streams love repeating lines).
 //   • RATE CAP: soft token bucket of LOG_LINES_PER_MIN per channel;
 //     excess lines are DROPPED (counted, summarized once a minute).
+//   • v21.1.0 LOG LEVELS (Phase-3): console.log→info, console.warn→warn,
+//     console.error→error, console.debug→debug. LOG_LEVEL env (default
+//     'info') us level se NICHE ke sab lines DROP karta hai (LOG_LEVEL=warn
+//     → info chatter gayab, sirf warn+error; LOG_LEVEL=error → sirf errors).
+//     Flood control ko trigger point pe milta hai — per-call-site edits nahi.
 //   • NEVER THROWS: any internal error falls back to raw console.
 // Env knobs: LOG_LINES_PER_MIN (default 240), LOG_DEDUPE_MS (default
-// 20000), LOG_GOVERNOR=off to disable (raw passthrough).
+// 20000), LOG_LEVEL (default info), LOG_GOVERNOR=off to disable (raw
+// passthrough).
 // Leaf module — zero server imports, safe to load first.
 // ============================================================
+
+// v21.1.0: numeric level ranks — chhota number = zyada verbose.
+const LEVEL_RANK = { debug: 10, info: 20, warn: 30, error: 40 };
 
 let _orig = null;            // { log, warn, error }
 const _state = {
@@ -66,6 +75,10 @@ function _govern(level, cfg, args) {
   _state.raw++;
   if (!_state.armed) { _write(level, args); return; }
   try {
+    // ---- v21.1.0 level pass (dedupe/rate se PEHLE — filtered line ka
+    // bucket consume karna bhi waste hai) ----
+    const rank = LEVEL_RANK[cfg.levelName?.[level] ?? 'info'] ?? LEVEL_RANK.info;
+    if (rank < cfg.minRank) { _state.levelDropped++; return; }
     const now = _now();
     const key = `${level}:${_keyOf(args)}`;
 
@@ -116,12 +129,21 @@ function _govern(level, cfg, args) {
 export function initLogGovernor({ env = process.env, nowFn } = {}) {
   if (_state.armed || _orig) return false;
   const off = String(env.LOG_GOVERNOR || '').toLowerCase() === 'off';
+  // v21.1.0: console channel → level name mapping (log=info is the
+  // industry convention). LOG_LEVEL default 'info' — pehle jaisa behavior
+  // (kuch suppress nahi hota, sirf naya debug channel filter hota hai).
+  const levelName = { log: 'info', warn: 'warn', error: 'error', debug: 'debug' };
+  const wanted = String(env.LOG_LEVEL || 'info').toLowerCase();
+  const minRank = LEVEL_RANK[wanted] ?? LEVEL_RANK.info; // unknown value → info (safe)
   const cfg = {
     linesPerMin: _num(env.LOG_LINES_PER_MIN, DEFAULTS.linesPerMin),
     dedupeMs: _num(env.LOG_DEDUPE_MS, DEFAULTS.dedupeMs),
     summaryMs: DEFAULTS.summaryMs,
+    levelName,
+    minRank,
+    level: wanted,
   };
-  _orig = { log: console.log, warn: console.warn, error: console.error };
+  _orig = { log: console.log, warn: console.warn, error: console.error, debug: console.debug };
   if (off) {
     _state.armed = false; // passthrough, but stats stay wired
   } else {
@@ -130,10 +152,12 @@ export function initLogGovernor({ env = process.env, nowFn } = {}) {
   _state.cfg = cfg;
   _state.minuteStart = 0;
   _state.minuteLines = 0;
+  _state.levelDropped = 0;
   const wrap = (level) => (...args) => _govern(level, cfg, args);
   console.log = wrap('log');
   console.warn = wrap('warn');
   console.error = wrap('error');
+  console.debug = wrap('debug');
   return true;
 }
 
@@ -148,6 +172,8 @@ export function logGovernorStats() {
       dropped: _state.dropped,
       dedupeKeys: _dedupe.size,
       capPerMin: _state.cfg?.linesPerMin || DEFAULTS.linesPerMin,
+      logLevel: _state.cfg?.level || 'info',
+      levelDropped: _state.levelDropped || 0,
     };
   } catch { return { armed: false }; }
 }
@@ -159,11 +185,12 @@ export function __resetLogGovernorForTests() {
       console.log = _orig.log;
       console.warn = _orig.warn;
       console.error = _orig.error;
+      if (typeof _orig.debug === 'function') console.debug = _orig.debug; // v21.1.0
     } catch { /* already restored */ }
   }
   _orig = null;
   _state.armed = false;
-  _state.lines = 0; _state.raw = 0; _state.suppressed = 0; _state.dropped = 0;
+  _state.lines = 0; _state.raw = 0; _state.suppressed = 0; _state.dropped = 0; _state.levelDropped = 0;
   _state.lastSummaryAt = 0; _state.minuteStart = 0; _state.minuteLines = 0;
   _state.cfg = null;
   _dedupe.clear();

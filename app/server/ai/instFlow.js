@@ -96,12 +96,17 @@ async function fetchFiiDii() {
       if (!r.ok) continue;
       const rows = await r.json();
       if (!Array.isArray(rows) || rows.length === 0) continue;
+      // v21.1.0 FIX (Phase-1.4, REAL DATA BUG): fiiBuy/fiiSell kabhi accumulate nahi
+      // hote the — fiiBuyCr/fiiSellCr hamesha 0 return hote the. NSE FIIDII rows ka
+      // buyValue/sellValue ab loop me proper accumulate hota hai.
       let fiiNet = 0, diiNet = 0, fiiBuy = 0, fiiSell = 0;
       let sawFii = false, sawDii = false;
       for (const row of rows) {
         const cat = String(row?.category || '').toUpperCase();
         const net = parseCr(row?.netValue ?? row?.net ?? row?.NetValue);
-        if (cat.startsWith('FII') || cat.startsWith('PRO')) { fiiNet += net; sawFii = true; }
+        const buy = parseCr(row?.buyValue ?? row?.buy ?? row?.BuyValue);
+        const sell = parseCr(row?.sellValue ?? row?.sell ?? row?.SellValue);
+        if (cat.startsWith('FII') || cat.startsWith('PRO')) { fiiNet += net; sawFii = true; fiiBuy += buy; fiiSell += sell; }
         else if (cat.startsWith('DII') || cat.startsWith('BII')) { diiNet += net; sawDii = true; }
       }
       if (!sawFii && !sawDii) continue; // parse produced nothing usable

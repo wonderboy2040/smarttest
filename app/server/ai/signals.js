@@ -1538,7 +1538,7 @@ async function _computeBoard(mkt, deps, opts = {}) {
     // diversity fix — trend↔tape / momentum↔tape / smc↔structure
     // redundant pairs ledger-settled correlation se discount hote
     // hain; < 20 overlap = byte-identical legacy board, honest).
-    let votes = applyCoreCorrelationDiscounts(
+    const votes = applyCoreCorrelationDiscounts(
       applyMeshModelGating(
         applyRegimeWeights(applyAdaptiveWeights(runQuantModels(ctx), adaptiveMul), regimeLabel),
       ),
