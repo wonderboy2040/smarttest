@@ -22,8 +22,18 @@ export interface BotAccountStats {
   maxDrawdownPct: number | null;
 }
 
+// v21.2.0 (dual-provider): per-provider stats block — status.ai.{jev,laya}.
+// `jev` legacy field bhi same shape ka hai (server compat bhejta hai).
+export interface AiProviderStats {
+  calls: number; cacheHits: number; errors: number; rejects?: number;
+  p50: number | null; p95: number | null;
+  breakerOpen: boolean; threshold: number; model: string; hasKey: boolean;
+  name?: string; url?: string;
+}
+
 export interface BotCard {
-  bot: string; arm: 'rules' | 'gated' | 'jev' | string;
+  // v21.2.0: laya | consensus | auto naye arms (dual-provider plan §3.1)
+  bot: string; arm: 'rules' | 'gated' | 'jev' | 'laya' | 'consensus' | 'auto' | string;
   mode: 'PAPER' | 'LIVE' | string;
   killSwitch: boolean;
   heartbeat: { at: number; bars: number; note: string } | null;
@@ -34,7 +44,9 @@ export interface BotCard {
 export interface BotsStatus {
   mode: string; globalPause: boolean;
   scheduler?: string;
-  jev: { calls: number; cacheHits: number; errors: number; p50: number | null; p95: number | null; breakerOpen: boolean; threshold: number; model: string; hasKey: boolean } | null;
+  ai: { jev: AiProviderStats | null; laya: AiProviderStats | null } | null;
+  aiMode?: { primary: string; shadow: string; onDown: string };
+  jev: AiProviderStats | null;
   bots: BotCard[];
   at: string;
 }
@@ -43,6 +55,8 @@ export interface BotEvent {
   bot: string; at: string; kind: string;
   symbol?: string; action?: string; reason?: string | null;
   jev?: { choice?: string | null; probs?: Record<string, number> | null; cached?: boolean; latencyMs?: number } | null;
+  // v21.2.0 (dual-provider): per-provider telemetry (consensus/auto/shadow)
+  ai?: Record<string, { choice?: string | null; probs?: Record<string, number> | null; cached?: boolean; latencyMs?: number | null; note?: string | null; shadow?: boolean } | null> | null;
   candidate?: { side?: string; entry?: number; stop?: number; target?: number };
   reasons?: string[];
   mode?: string;
@@ -72,22 +86,37 @@ const num = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
-function coerceStatus(s: BotsStatus | null): BotsStatus | null {
+// v21.2.0 (dual-provider): ek provider stats block ko num-safe coerce —
+// server shape drift per-desk ErrorBoundary se zyada door rahe.
+function coerceProvider(p: AiProviderStats | null | undefined): AiProviderStats | null {
+  if (!p || typeof p !== 'object') return p ?? null;
+  // v21.2.0: !!'false' === TRUE tha — string booleans (drifted frames) ko
+  // honest boolean me coerce karo, truthy-string poison nahi.
+  const bool = (v: unknown): boolean => v === true || v === 'true' || v === 1 || v === '1';
+  return {
+    ...p,
+    calls: num(p.calls) ?? 0,
+    cacheHits: num(p.cacheHits) ?? 0,
+    errors: num(p.errors) ?? 0,
+    rejects: num(p.rejects) ?? 0,
+    p50: num(p.p50),
+    p95: num(p.p95),
+    threshold: num(p.threshold) ?? 0,
+    breakerOpen: bool(p.breakerOpen),
+    hasKey: bool(p.hasKey),
+    model: String(p.model ?? ''),
+  };
+}
+// v21.2.0 (dual-provider): exported for the parse contract test — status
+// frames ka numeric coercion (server shape drift guard) ab test-locked hai.
+export function coerceStatus(s: BotsStatus | null): BotsStatus | null {
   if (!s || typeof s !== 'object') return s;
-  const jev = s.jev && typeof s.jev === 'object' ? s.jev : null;
+  const jev = coerceProvider(s.jev);
+  const aiRaw = s.ai && typeof s.ai === 'object' ? s.ai : null;
   return {
     ...s,
-    jev: jev ? {
-      ...jev,
-      calls: num(jev.calls) ?? 0,
-      cacheHits: num(jev.cacheHits) ?? 0,
-      errors: num(jev.errors) ?? 0,
-      p50: num(jev.p50),
-      p95: num(jev.p95),
-      threshold: num(jev.threshold) ?? 0,
-      breakerOpen: !!jev.breakerOpen,
-      hasKey: !!jev.hasKey,
-    } : jev,
+    jev,
+    ai: aiRaw ? { jev: coerceProvider(aiRaw.jev), laya: coerceProvider(aiRaw.laya) } : aiRaw,
     bots: Array.isArray(s.bots) ? s.bots.map((b) => {
       if (!b || typeof b !== 'object') return b;
       const a = b.account && typeof b.account === 'object' ? b.account : null;
@@ -260,15 +289,21 @@ export function useBots({ limit = 120 } = {}) {
     }
   }, [patchBot]);
 
-  const setArm = useCallback(async (bot: string, arm: string): Promise<{ ok?: boolean; error?: string; arm?: string } | null> => {
+  const setArm = useCallback(async (bot: string, arm: string): Promise<{ ok?: boolean; error?: string; arm?: string; provider?: string; hint?: string } | null> => {
     try {
       const r = await apiFetch(`/api/bots/arm/${bot}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ arm }),
       });
-      if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
-      const j = await r.json();
+      // v21.2.0 (dual-provider): 409 provider_unavailable ka server body
+      // (error + provider + hint) surface karo — sirf "HTTP 409" nahi,
+      // warna user ko nahi pata Laya/laya-serve ka issue hai ya arm ka.
+      const j = await r.json().catch(() => null);
+      if (!r.ok) {
+        const hint = j?.hint ? ` — ${j.hint}` : '';
+        return { ok: false, error: `HTTP ${r.status}${j?.error ? `: ${j.error}${j?.provider ? ` (${j.provider})` : ''}` : ''}${hint}` };
+      }
       if (typeof j?.arm === 'string') patchBot(bot, { arm: j.arm });
       return j;
     } catch (e) {

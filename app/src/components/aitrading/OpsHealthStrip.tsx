@@ -21,6 +21,11 @@ interface HealthSnap {
     staleSources?: string[];
     ws?: Record<string, WsFeedEntry>;
   };
+  // v21.2.0 (dual-provider): AI providers health — Bot Lab ka jev/laya.
+  ai?: {
+    jev?: { configured?: boolean; reachable?: boolean; breakerOpen?: boolean; p95?: number | null; rejects?: number };
+    laya?: { configured?: boolean; reachable?: boolean; breakerOpen?: boolean; p95?: number | null; rejects?: number };
+  };
   kills?: {
     aiDesk?: { enabled?: boolean };
     exec?: { level?: number; reason?: string | null };
@@ -88,6 +93,17 @@ export const OpsHealthStrip = memo(function OpsHealthStrip() {
   const botPause = snap.kills?.botLab?.globalPause === true || snap.bots?.globalPause === true;
   const anyKill = aiKill || execLvl > 0 || botPause;
 
+  // ---- AI providers (v21.2.0 dual-provider) ----
+  // Chip: "AI: L ✓ · J ✓" — configured+healthy green, breaker-open red,
+  // not-configured grey (dim). Bot Lab ke selected-arm providers hi
+  // alerting ke liye healthMonitor me hain; ye chip dono dikhata hai.
+  const aiJev = snap.ai?.jev;
+  const aiLaya = snap.ai?.laya;
+  const anyAi = !!(aiJev?.configured || aiLaya?.configured);
+  const aiBreaker = !!(aiJev?.breakerOpen || aiLaya?.breakerOpen);
+  const provLabel = (p: { configured?: boolean; breakerOpen?: boolean } | undefined, short: string) =>
+    !p?.configured ? `${short} –` : p.breakerOpen ? `${short} ⚠` : `${short} ✓`;
+
   // ---- persist ----
   const hbAge = snap.persist?.execHeartbeat?.ageSec ?? null;
   const dirsOk = snap.persist?.dataDirWritable !== false; // undefined (unarmed) bhi dim-OK
@@ -123,6 +139,14 @@ export const OpsHealthStrip = memo(function OpsHealthStrip() {
           ? `Kill active — AI desk: ${aiKill ? 'ON' : 'off'} · Exec: L${execLvl} (${snap.kills?.exec?.reason || 'no reason'}) · BotLab global pause: ${botPause ? 'ON' : 'off'} — live entries blocked`
           : 'Teeno kill layers clear (AI desk / exec / Bot Lab)',
         'kills')}
+      {anyAi && chip(
+        aiBreaker ? 'bad' : 'ok',
+        `AI: ${provLabel(aiLaya, 'L')} · ${provLabel(aiJev, 'J')}`,
+        aiBreaker
+          ? `AI provider BREAKER OPEN — Laya: ${aiLaya?.breakerOpen ? 'DOWN' : aiLaya?.configured ? 'ok' : 'n/a'} · Jev: ${aiJev?.breakerOpen ? 'DOWN' : aiJev?.configured ? 'ok' : 'n/a'} — auto-arm failover / single-arm WAIT active hai`
+          : `Bot Lab AI providers — Laya: ${aiLaya?.configured ? (aiLaya?.reachable ? 'reachable' : 'unreachable') : 'not configured (local laya-serve)'} · Jev: ${aiJev?.configured ? (aiJev?.reachable ? 'reachable' : 'unreachable') : 'not configured (TYPESAFE_API_KEY)'}`,
+        'ai',
+      )}
       {snap.bots?.mode && chip(snap.bots.globalPause ? 'warn' : 'dim', `BOTS ${String(snap.bots.mode).toUpperCase()}`, `Bot Lab mode: ${snap.bots.mode}${snap.bots.globalPause ? ' · GLOBAL PAUSE' : ''}`, 'bots')}
       {chip(hbAge != null && hbAge > 30 ? 'bad' : dirsOk ? 'ok' : 'bad',
         hbAge != null ? `HB ${hbAge}s` : (dirsOk ? 'DISK OK' : 'DISK FAIL'),

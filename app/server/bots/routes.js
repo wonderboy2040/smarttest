@@ -19,23 +19,26 @@
 // bars cap + pWin persistence, /smoke in-flight dedupe, 2s status
 // cache, absolute stateDir default (botRunner.js).
 // ============================================================
-import { BotRunner, botsEnabled, STRATEGIES, runThreeArmBacktest } from './botRunner.js';
+import { BotRunner, botsEnabled, STRATEGIES, runArmsBacktest } from './botRunner.js';
 import { loadBotState, saveBotState, setKillSwitch, killSwitchActive as _killSwitchActive } from './botState.js';
 import { smokeAll } from './smoke.js';
-import { createJev, jevConfig } from './jevEngine.js';
+import { buildProviders, providerHealth } from './aiProviders.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_STATE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data/bots');
 const SSE_MAX_CLIENTS = 8;          // bounded subscribers (sseCap convention)
 const SSE_BACKPRESSURE_BYTES = 1 << 20;
+// v21.2.0 (dual-provider plan Step-5): allowed arms — UI dropdown isi se
+// render hota hai; provider availability 409 ke through enforce hoti hai.
+const ARMS_ALLOWED = ['rules', 'gated', 'jev', 'laya', 'consensus', 'auto'];
 
 let _runner = null;
 
 /** v21.1.0 (Phase-3): PEEK — runner banao NAHI, sirf existing return.
  *  healthMonitor ka /api/health snapshot isse use karta hai: getBotRunner()
  *  call karta to singleton null-candleProvider ke saath ban jata aur index.js
- *  ki asli wiring (candleProvider/jev) hamesha ke liye ignore ho jaati. */
+ *  ki asli wiring (candleProvider/ai providers) hamesha ke liye ignore ho jaati. */
 export function peekBotRunner() { return _runner; }
 let _smokeCache = { at: 0, result: null };
 let _smokeInFlight = null;
@@ -44,17 +47,19 @@ let _statusCache = { at: 0, data: null };
 
 export function getBotRunner(opts = {}) {
   if (!_runner) {
-    // Jev instance only when a key exists — otherwise the jev arm
-    // degrades to gated (recorded in events, never silent).
-    const jcfg = jevConfig(opts.env || process.env);
-    const stateDir = opts.stateDir || (opts.env || process.env).BOT_STATE_DIR || DEFAULT_STATE_DIR;
-    const jev = jcfg.apiKey ? createJev({ ...jcfg, cachePath: path.join(stateDir, 'jev_cache.jsonl') }) : null;
+    const env = opts.env || process.env;
+    const stateDir = opts.stateDir || env.BOT_STATE_DIR || DEFAULT_STATE_DIR;
+    // v21.2.0 (dual-provider plan Step-2): provider REGISTRY — jev
+    // (TYPESAFE_API_KEY) + laya (LAYA_ENABLED=1 + LAYA_API_KEY). Purana
+    // opts.jev override (tests) ai.jev ko replace karta hai.
+    const providers = buildProviders(env, { stateDir });
+    if (opts.jev !== undefined) providers.jev = opts.jev;
     _runner = new BotRunner({
       stateDir,
-      env: opts.env || process.env,
+      env,
       candleProvider: opts.candleProvider || null,
       markPriceProvider: opts.markPriceProvider || null,
-      jev: opts.jev !== undefined ? opts.jev : jev,
+      ai: providers,
       telegram: { enabled: false, env: null, ...opts.telegram },
     });
   }
@@ -168,10 +173,33 @@ export function registerBotRoutes(app, opts = {}) {
     const { bot } = req.params;
     const arm = String(req.body?.arm || '');
     if (!STRATEGIES[bot]) return res.status(404).json({ error: 'unknown bot' });
-    if (!['rules', 'gated', 'jev'].includes(arm)) return res.status(400).json({ error: 'arm must be rules|gated|jev' });
+    if (!ARMS_ALLOWED.includes(arm)) return res.status(400).json({ error: `arm must be ${ARMS_ALLOWED.join('|')}` });
+    // v21.2.0 (dual-provider plan Step-5): provider availability ENFORCED.
+    // Requested arm ka provider configured nahi to 409 provider_unavailable
+    // — UI clear message dikhaata hai; silently accept karke phir arm_fallback
+    // events se bharna (silent behaviour change) kabhi nahi.
+    const ai = runner.ai || { jev: null, laya: null };
+    if (arm === 'jev' && !ai.jev) {
+      return res.status(409).json({ error: 'provider_unavailable', provider: 'jev', hint: 'TYPESAFE_API_KEY .env me set karo' });
+    }
+    if (arm === 'laya' && !ai.laya) {
+      return res.status(409).json({ error: 'provider_unavailable', provider: 'laya', hint: 'LAYA_ENABLED=1 + LAYA_API_KEY — local laya-serve chalu hai?' });
+    }
+    if (arm === 'consensus' && !(ai.jev && ai.laya)) {
+      return res.status(409).json({ error: 'provider_unavailable', provider: ai.jev ? 'laya' : 'jev', hint: 'consensus ke liye dono providers chahiye' });
+    }
+    if (arm === 'auto' && !(ai.jev || ai.laya)) {
+      return res.status(409).json({ error: 'provider_unavailable', provider: 'ai', hint: 'auto ke liye kam se kam ek provider chahiye' });
+    }
     const st = loadBotState(runner.stateDir, bot) || {};
     saveBotState(runner.stateDir, bot, { ...st, arm });
     res.json({ bot, arm });
+  });
+
+  // v21.2.0 (dual-provider plan Step-5): per-provider AI health —
+  // reachable/breaker/p50/p95/rejects/model/urlHost. Auth ke andar.
+  app.get('/api/bots/ai/health', (_req, res) => {
+    res.json(providerHealth(runner.ai || {}));
   });
 
   // v20.8.1 FIX (M): single-flight — concurrent POSTs piled up
@@ -229,7 +257,14 @@ export function registerBotRoutes(app, opts = {}) {
     }
     try {
       const strategy = STRATEGIES[botId].factory();
-      const arms = await runThreeArmBacktest({ strategy, bars, symbol: req.body?.symbol || botId, jev: null });
+      // v21.2.0 (dual-provider): runArmsBacktest — jev ho to jev arm bhi,
+      // laya ho to laya arm bhi, dono ho to consensus bhi (rules/gated
+      // hamesha). Purana runThreeArmBacktest (jev-only) wrapper me hai.
+      const ai = runner.ai || { jev: null, laya: null };
+      const arms = await runArmsBacktest({
+        strategy, bars, symbol: req.body?.symbol || botId,
+        providers: ai, primary: runner.aiCfg?.primary || 'laya',
+      });
       const summary = {};
       for (const [arm, r] of Object.entries(arms)) summary[arm] = { metrics: r.metrics, pass: r.pass, meta: { ambiguousShare: r.meta.ambiguousShare, decisions: r.meta.decisions } };
       // v20.8.1 FIX (M): persist pWin into bot state — the fee gate's

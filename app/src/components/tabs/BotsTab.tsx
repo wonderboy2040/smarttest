@@ -21,10 +21,25 @@ const fmtMoney = (v: number | null | undefined, cur: string) =>
 const fmtNum = (v: number | null | undefined, d = 2) =>
   v == null || !Number.isFinite(v) ? '—' : v.toFixed(d);
 
+// v21.2.0 (dual-provider): 6 arms — jev/laya single, consensus (dono
+// approve), auto (primary + failover). Availability `avail` prop se aati
+// hai (status.ai.{jev,laya}) — unavailable option DISABLED + tooltip.
 const ARM_LABEL: Record<string, string> = {
   rules: 'RULES (baseline)',
   gated: 'GATED (control)',
-  jev: 'JEV (filter)',
+  jev: 'JEV (cloud)',
+  laya: 'LAYA (local · $0)',
+  consensus: 'BOTH (consensus)',
+  auto: 'AUTO (primary + failover)',
+};
+
+const ARM_HINT: Record<string, string> = {
+  rules: 'Har candidate lo — baseline arm',
+  gated: 'Hand-written gates — control arm (AI isi se compare hota hai)',
+  jev: 'Sirf Jev approve/veto kare (TypeSafe cloud)',
+  laya: 'Sirf Laya approve/veto kare (local, free)',
+  consensus: 'Dono take bolein tabhi entry — max precision, kam trades',
+  auto: 'AI_PRIMARY provider; down pe dusra — reliability',
 };
 
 const BOT_LABEL: Record<string, string> = {
@@ -37,8 +52,9 @@ const BOT_LABEL: Record<string, string> = {
   ensemble: 'ENSEMBLE · site STRONG adapter',
 };
 
-const BotCardView = memo(function BotCardView({ bot, onStop, onArm, busy }: {
+const BotCardView = memo(function BotCardView({ bot, avail, onStop, onArm, busy }: {
   bot: BotCard;
+  avail: { jev: boolean; laya: boolean };
   onStop: (bot: string, on: boolean) => void;
   onArm: (bot: string, arm: string) => void;
   busy?: boolean;
@@ -89,7 +105,22 @@ const BotCardView = memo(function BotCardView({ bot, onStop, onArm, busy }: {
           className="bg-slate-900/80 border border-slate-700 rounded-lg px-2 py-1 text-slate-300 font-bold disabled:opacity-50"
           aria-label={`decider arm for ${bot.bot}`}
         >
-          {Object.entries(ARM_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          {/* v21.2.0 (dual-provider): unavailable options disabled + tooltip —
+              server 409 provider_unavailable deta hai, UI pehle hi honest
+              hint dikhata hai (e.g. "Laya server not reachable"). */}
+          {Object.entries(ARM_LABEL).map(([k, v]) => {
+            const needLaya = k === 'laya' || k === 'consensus';
+            const needJev = k === 'jev' || k === 'consensus';
+            const needAny = k === 'auto';
+            const disabled = (needLaya && !avail.laya) || (needJev && !avail.jev)
+              || (needAny && !avail.jev && !avail.laya);
+            const why = k === 'consensus'
+              ? `dono providers chahiye — ${avail.jev ? 'laya' : 'jev'} configured nahi`
+              : k === 'auto'
+                ? 'kam se kam ek AI provider chahiye'
+                : `${k} server not reachable / configured nahi`;
+            return <option key={k} value={k} disabled={disabled} title={disabled ? why : ARM_HINT[k]}>{v}</option>;
+          })}
         </select>
         <button
           onClick={() => onStop(bot.bot, !bot.killSwitch)}
@@ -132,9 +163,20 @@ const DecisionRow = memo(function DecisionRow({ e }: { e: BotEvent }) {
     ? (e.ok === false ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold')
     : e.action === 'take' ? 'text-emerald-400 font-bold' : 'text-slate-500';
   const t = e.at ? new Date(e.at).toLocaleTimeString('en-GB', { hour12: false }) : '';
-  const probs = e.jev?.probs;
+  // v21.2.0 (dual-provider): AI probs column ab per-provider — consensus
+  // rows me dono ki mini-chips (agree ✓ / disagree ✕), auto rows me
+  // deciding provider + failover reason, shadow ○ marker. Purane jev-arm
+  // events ka e.jev fallback waise hi chalta hai.
+  const aiP = (e.ai && typeof e.ai === 'object' ? e.ai : null) as Record<string, NonNullable<NonNullable<BotEvent['ai']>[string]> | undefined> | null;
+  const aiRec: Record<string, NonNullable<NonNullable<BotEvent['ai']>[string]> | undefined> = aiP ?? {};
+  const provs = (['laya', 'jev'] as const).filter((k) => aiRec[k]);
+  const side = e.candidate?.side ? String(e.candidate.side).toLowerCase() : '';
+  const agreeOf = (choice?: string | null) =>
+    choice ? (side ? choice === `enter_${side}` : choice !== 'wait') : null;
+  const fmtProbs = (p?: Record<string, number> | null) =>
+    p ? Object.entries(p).slice(0, 2).map(([k, v]) => `${k.slice(0, 5)}:${Number(v).toFixed(2)}`).join(' ') : '';
   return (
-    <div className="grid grid-cols-[70px_60px_1fr_90px_110px] gap-2 items-center text-[10px] font-mono px-2 py-1.5 border-b border-slate-800/40">
+    <div className="grid grid-cols-[70px_60px_1fr_90px_150px] gap-2 items-center text-[10px] font-mono px-2 py-1.5 border-b border-slate-800/40">
       <span className="text-slate-500">{t}</span>
       <span className={e.kind === 'risk_block' ? 'text-amber-400' : isOrder ? 'text-cyan-300' : e.kind === 'settle' ? 'text-emerald-300' : 'text-slate-400'}>{e.kind}</span>
       <span className="text-slate-300 truncate">
@@ -144,11 +186,23 @@ const DecisionRow = memo(function DecisionRow({ e }: { e: BotEvent }) {
         {e.reasons?.length ? <span className="text-amber-500/80">· {e.reasons.join(', ')}</span> : null}
       </span>
       <span className={verdictClass}>{verdict}</span>
-      <span className="text-slate-500 text-right">
-        {/* v20.8.1 FIX (L): Number() guard — a string value in the probs map
-            used to throw and take the whole desk down with it. */}
-        {probs ? Object.entries(probs).map(([k, v]) => `${k.slice(0, 5)}:${Number(v).toFixed(2)}`).join(' ') : ''}
-        {e.jev?.cached ? ' ⛁' : ''}{e.jev?.latencyMs != null ? ` ${e.jev.latencyMs}ms` : ''}
+      <span className="text-slate-500 text-right flex flex-wrap gap-x-1.5 justify-end">
+        {provs.length > 0 ? provs.map((k) => {
+          const d = aiRec[k];
+          const ok = agreeOf(d?.choice);
+          return (
+            <span key={k} className={ok === true ? 'text-emerald-300' : ok === false ? 'text-rose-400' : 'text-slate-500'} title={`${k}: ${d?.choice || '—'}${d?.note ? ` (${d.note})` : ''}${d?.shadow ? ' [shadow]' : ''}`}>
+              {k === 'laya' ? 'L' : 'J'}{ok === true ? '✓' : ok === false ? '✕' : '·'}{d?.shadow ? '○' : ''} {fmtProbs(d?.probs)}{d?.latencyMs != null ? ` ${d.latencyMs}ms` : ''}
+            </span>
+          );
+        }) : (
+          <>
+            {/* v20.8.1 FIX (L): Number() guard — a string value in the probs
+                map used to throw and take the whole desk down with it. */}
+            {e.jev?.probs ? Object.entries(e.jev.probs).map(([k, v]) => `${k.slice(0, 5)}:${Number(v).toFixed(2)}`).join(' ') : ''}
+            {e.jev?.cached ? ' ⛁' : ''}{e.jev?.latencyMs != null ? ` ${e.jev.latencyMs}ms` : ''}
+          </>
+        )}
       </span>
     </div>
   );
@@ -199,7 +253,14 @@ export default function BotsTab() {
   }, [runSmoke]);
 
   const decisionEvents = useMemo(() => [...events].reverse().slice(0, 60), [events]);
-  const jev = status?.jev;
+  // v21.2.0 (dual-provider): per-provider panels ka data — status.ai se,
+  // jev panel purane status.jev pe fallback (compat).
+  const jevStats = status?.ai?.jev ?? status?.jev ?? null;
+  const layaStats = status?.ai?.laya ?? null;
+  const avail = {
+    jev: !!jevStats,
+    laya: !!layaStats,
+  };
 
   return (
     <section className="p-3 sm:p-4 space-y-4 max-w-7xl mx-auto">
@@ -244,7 +305,7 @@ export default function BotsTab() {
 
       {/* -------- bot cards -------- */}
       <div className="grid gap-3 md:grid-cols-2">
-        {(status?.bots || []).map((b) => <BotCardView key={b.bot} bot={b} onStop={onStop} onArm={onArm} busy={!!actionBusy[b.bot]} />)}
+        {(status?.bots || []).map((b) => <BotCardView key={b.bot} bot={b} avail={avail} onStop={onStop} onArm={onArm} busy={!!actionBusy[b.bot]} />)}
         {(!status || status.bots.length === 0) && (
           <div className="quantum-panel rounded-2xl p-6 text-center text-slate-500 text-xs">
             {/* v20.8.1 FIX (L): honest empty-state copy — unset BOTS_ENABLED
@@ -257,26 +318,56 @@ export default function BotsTab() {
         )}
       </div>
 
-      {/* -------- jev panel -------- */}
-      <div className="quantum-panel rounded-2xl p-4">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xs font-black uppercase tracking-wider text-cyan-300">Jev (TypeSafe System One)</h3>
-          {jev && <span className={`text-[10px] font-mono ${jev.breakerOpen ? 'text-rose-400' : 'text-slate-500'}`}>{jev.breakerOpen ? 'BREAKER OPEN' : 'healthy'}</span>}
+      {/* -------- AI provider panels (v21.2.0 dual-provider) -------- */}
+      <div className="grid gap-3 md:grid-cols-2">
+        {/* Jev panel (cloud) */}
+        <div className="quantum-panel rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-cyan-300">Jev (TypeSafe System One) · cloud</h3>
+            {jevStats && <span className={`text-[10px] font-mono ${jevStats.breakerOpen ? 'text-rose-400' : 'text-slate-500'}`}>{jevStats.breakerOpen ? 'BREAKER OPEN' : 'healthy'}</span>}
+          </div>
+          {jevStats ? (
+            <div className="grid grid-cols-3 gap-2">
+              <Stat label="Model" value={jevStats.model || '—'} />
+              <Stat label="Threshold" value={jevStats.threshold.toFixed(2)} sub="gate on probs[chosen]" />
+              <Stat label="Calls" value={String(jevStats.calls)} sub={`${jevStats.cacheHits} cached`} />
+              <Stat label="p50 / p95" value={`${fmtNum(jevStats.p50, 0)} / ${fmtNum(jevStats.p95, 0)} ms`} />
+              <Stat label="Rejects (4xx)" value={String(jevStats.rejects ?? 0)} className={(jevStats.rejects ?? 0) > 0 ? 'text-amber-300' : ''} sub="no breaker trip" />
+              <Stat label="Key" value={jevStats.hasKey ? 'configured' : 'ABSENT'} className={jevStats.hasKey ? '' : 'text-rose-300'} />
+            </div>
+          ) : (
+            <div className="text-[11px] text-slate-500">
+              Jev not configured — set <code className="text-cyan-400">TYPESAFE_API_KEY</code> in server .env. Rules vs gated comparison stays valid without it.
+            </div>
+          )}
         </div>
-        {jev ? (
-          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
-            <Stat label="Model" value={jev.model} />
-            <Stat label="Threshold" value={jev.threshold.toFixed(2)} sub="gate on probs[chosen]" />
-            <Stat label="Calls" value={String(jev.calls)} sub={`${jev.cacheHits} cached`} />
-            <Stat label="p50 / p95" value={`${fmtNum(jev.p50, 0)} / ${fmtNum(jev.p95, 0)} ms`} />
-            <Stat label="Errors" value={String(jev.errors)} className={jev.errors > 0 ? 'text-amber-300' : ''} />
-            <Stat label="Key" value={jev.hasKey ? 'configured' : 'ABSENT'} className={jev.hasKey ? '' : 'text-rose-300'} />
+
+        {/* Laya panel (local, $0) — v21.2.0 NEW */}
+        <div className="quantum-panel rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-black uppercase tracking-wider text-emerald-300">Laya · local open-weight</h3>
+            <span className="text-[10px] font-mono text-slate-600">Local · $0</span>
+            {layaStats && <span className={`text-[10px] font-mono ml-2 ${layaStats.breakerOpen ? 'text-rose-400' : 'text-slate-500'}`}>{layaStats.breakerOpen ? 'BREAKER OPEN' : 'healthy'}</span>}
           </div>
-        ) : (
-          <div className="text-[11px] text-slate-500">
-            Jev not configured — set <code className="text-cyan-400">TYPESAFE_API_KEY</code> in server .env. Rules vs gated comparison stays valid without it.
+          {layaStats ? (
+            <div className="grid grid-cols-3 gap-2">
+              <Stat label="Model" value={layaStats.model || '(default)'} sub="model field omit = default" />
+              <Stat label="Threshold" value={layaStats.threshold.toFixed(2)} sub="separate tune" />
+              <Stat label="Calls" value={String(layaStats.calls)} sub={`${layaStats.cacheHits} cached`} />
+              <Stat label="p50 / p95" value={`${fmtNum(layaStats.p50, 0)} / ${fmtNum(layaStats.p95, 0)} ms`} />
+              <Stat label="Errors" value={String(layaStats.errors)} className={layaStats.errors > 0 ? 'text-amber-300' : ''} />
+              <Stat label="Rejects (4xx)" value={String(layaStats.rejects ?? 0)} className={(layaStats.rejects ?? 0) > 0 ? 'text-amber-300' : ''} sub="no breaker trip" />
+            </div>
+          ) : (
+            <div className="text-[11px] text-slate-500">
+              Laya not configured — <code className="text-emerald-400">LAYA_ENABLED=1</code> + <code className="text-emerald-400">LAYA_API_KEY</code> in .env + local <code className="text-emerald-400">laya-serve</code> chalu (README § Laya install).
+            </div>
+          )}
+          {/* v21.2.0: AI mode line — primary/shadow/onDown ek jagah dikhta hai */}
+          <div className="mt-2 text-[9px] font-mono text-slate-600">
+            AI_PRIMARY={status?.aiMode?.primary || 'laya'} · AI_SHADOW={status?.aiMode?.shadow || 'off'} · CONSENSUS_ON_DOWN={status?.aiMode?.onDown || 'wait'}
           </div>
-        )}
+        </div>
       </div>
 
       {/* -------- decision stream -------- */}
@@ -284,8 +375,8 @@ export default function BotsTab() {
         <h3 className="text-xs font-black uppercase tracking-wider text-cyan-300 mb-2">Decision stream (append-only)</h3>
         <div className="overflow-x-auto">
           <div className="min-w-[640px]">
-            <div className="grid grid-cols-[70px_60px_1fr_90px_110px] gap-2 text-[9px] uppercase tracking-wider text-slate-500 font-bold px-2 pb-1 border-b border-slate-800">
-              <span>time</span><span>kind</span><span>candidate / reason</span><span>verdict</span><span className="text-right">jev probs · lat</span>
+            <div className="grid grid-cols-[70px_60px_1fr_90px_150px] gap-2 text-[9px] uppercase tracking-wider text-slate-500 font-bold px-2 pb-1 border-b border-slate-800">
+              <span>time</span><span>kind</span><span>candidate / reason</span><span>verdict</span><span className="text-right">AI probs · lat (L=laya J=jev)</span>
             </div>
             {decisionEvents.length === 0 && <div className="text-[11px] text-slate-600 px-2 py-3">No decisions yet — bots tick on 5-min bar closes.</div>}
             {/* v20.8.2 FIX (M): stable keys — the old `${at}-${reversed-index}-bot`
@@ -299,8 +390,8 @@ export default function BotsTab() {
       {/* -------- honesty contract -------- */}
       <div className="quantum-panel rounded-2xl p-4 text-[10px] text-slate-500 leading-relaxed">
         <span className="text-slate-400 font-black">Ground rules (engine-enforced, not prompt-enforced):</span>{' '}
-        strategies propose · deciders (rules/gated/jev) only approve or wait · hard risk rules override everything ·
-        Jev never flips sides, never sizes, never sets SL/TP · default mode is PAPER · gross AND net always shown together ·
+        strategies propose · deciders (rules/gated/jev/laya/consensus/auto) only approve or wait · hard risk rules override everything ·
+        AI approves or waits — never flips side, sizes, or sets SL/TP · default mode is PAPER · gross AND net always shown together ·
         t-stat on mean R with train/test halves is the only scoreboard · edge nahi dikha to bot band, tuning nahi.
       </div>
     </section>

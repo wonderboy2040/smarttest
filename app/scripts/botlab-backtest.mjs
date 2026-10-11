@@ -6,20 +6,24 @@
 //   node scripts/botlab-backtest.mjs --bot orb_crypto_utc --arm all
 //   node scripts/botlab-backtest.mjs --bot orb_in --bars state/bots/backtest-in.json
 //   node scripts/botlab-backtest.mjs --bot lvl --synth 5000   (synthetic sanity data)
+//   node scripts/botlab-backtest.mjs --bot lvl --arm laya     (v21.2.0 dual-provider)
+//   node scripts/botlab-backtest.mjs --bot lvl --arm consensus
+//   node scripts/botlab-backtest.mjs --sweep laya            (per-provider threshold sweep)
 //
-// Runs the honest 3-arm harness (rules | gated | jev) with the
-// REAL tradingCosts friction, prints the §7.3 metric set + §7.4
-// pass criteria + mechanical audit (N/N) per arm. Without a bars
-// file it runs on deterministic synthetic data so the harness
-// itself is always verifiable end-to-end (real data via candle
-// store: see server/bots/core/candleStore.js).
+// Runs the honest N-arm harness (rules | gated | jev | laya |
+// consensus | auto) with the REAL tradingCosts friction, prints the
+// §7.3 metric set + §7.4 pass criteria + mechanical audit (N/N) per
+// arm. Without a bars file it runs on deterministic synthetic data so
+// the harness itself is always verifiable end-to-end (real data via
+// candle store: see server/bots/core/candleStore.js).
 // ============================================================
 import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BotRunner, STRATEGIES, runThreeArmBacktest } from '../server/bots/botRunner.js';
-import { createJev, jevConfig } from '../server/bots/jevEngine.js';
+import { STRATEGIES, runArmsBacktest } from '../server/bots/botRunner.js';
+import { buildProviders, aiModeConfig } from '../server/bots/aiProviders.js';
+import { createJev, providerConfig } from '../server/bots/jevEngine.js';
 import { auditTrades, auditLine } from '../server/bots/core/audit.js';
 import { sweepThreshold } from '../server/bots/core/engine.js';
 
@@ -32,16 +36,25 @@ const botId = argOf('bot', 'orb_crypto_utc');
 const armSel = argOf('arm', 'all');
 const barsFile = argOf('bars');
 const synth = Number(argOf('synth', barsFile ? 0 : 5000));
-const doSweep = args.includes('--sweep');
+// v21.2.0 (dual-provider): --sweep [laya|jev] — per-provider threshold
+// sweep (confidence formulas alag hain, thresholds alag tune hote hain).
+const sweepArgIdx = args.indexOf('--sweep');
+const doSweep = sweepArgIdx >= 0;
+const sweepProvider = doSweep && args[sweepArgIdx + 1] && !args[sweepArgIdx + 1].startsWith('--') ? args[sweepArgIdx + 1] : (doSweep ? 'jev' : null);
 
 if (!STRATEGIES[botId]) {
   console.error(`Unknown bot '${botId}'. Available: ${Object.keys(STRATEGIES).join(', ')}`);
   process.exit(1);
 }
 // v20.8.1 FIX (M): arm validation — a typo'd --arm used to surface as a
-// raw makeDecider stack trace.
-if (armSel !== 'all' && !['rules', 'gated', 'jev'].includes(armSel)) {
-  console.error(`Unknown arm '${armSel}'. Available: rules | gated | jev | all`);
+// raw makeDecider stack trace. v21.2.0: laya/consensus/auto bhi.
+const ARMS = ['rules', 'gated', 'jev', 'laya', 'consensus', 'auto'];
+if (armSel !== 'all' && !ARMS.includes(armSel)) {
+  console.error(`Unknown arm '${armSel}'. Available: ${ARMS.join(' | ')} | all`);
+  process.exit(1);
+}
+if (doSweep && !['jev', 'laya'].includes(sweepProvider)) {
+  console.error(`Unknown sweep provider '${sweepProvider}'. Available: jev | laya`);
   process.exit(1);
 }
 
@@ -88,32 +101,43 @@ if (barsFile) {
 }
 
 const strategy = STRATEGIES[botId].factory();
-const jcfg = jevConfig();
+// v21.2.0 (dual-provider): provider REGISTRY — jev (TYPESAFE_API_KEY) +
+// laya (LAYA_ENABLED=1 + LAYA_API_KEY). Cache files provider-wise hain —
+// replay free (Laya) / sasta (Jev).
 // v20.8.2 FIX (L): CWD-relative cache path split the cache when the CLI
 // ran from the repo root vs app/ — resolve against the script location.
 const _repoStateDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'server', 'data', 'bots');
-const jev = jcfg.apiKey ? createJev({ ...jcfg, cachePath: path.join(_repoStateDir, 'jev_cache.jsonl') }) : null;
-if (!jev) console.log('No TYPESAFE_API_KEY — jev arm skipped (rules vs gated still meaningful: plan §4.4)');
+const providers = buildProviders(process.env, { stateDir: _repoStateDir });
+const aiCfg = aiModeConfig(process.env);
+if (!providers.jev) console.log('No TYPESAFE_API_KEY — jev arm skipped (rules vs gated still meaningful: plan §4.4)');
+if (!providers.laya) console.log('Laya not configured (LAYA_ENABLED=1 + LAYA_API_KEY + laya-serve) — laya/consensus arms skipped');
+if (providers.laya) console.log(`Laya provider ON — endpoint ${providers.laya.config().url}, model ${JSON.stringify(providers.laya.config().model || '(omit)')}`);
 
-const armsWanted = armSel === 'all' ? ['rules', 'gated', ...(jev ? ['jev'] : [])] : [armSel];
-const runArms = async () => {
-  const out = {};
-  for (const arm of armsWanted) {
-    const { runBacktest } = await import('../server/bots/core/engine.js');
-    const { makeDecider } = await import('../server/bots/deciders.js');
-    const { estimateRoundTripCost } = await import('../server/ai/tradingCosts.js');
-    const decider = makeDecider({ arm, strategy, jev: jev || undefined });
-    out[arm] = await runBacktest({
-      rows: strategy.prepare(bars), strategy, decider,
-      costFn: (a) => estimateRoundTripCost(a) || { total: 0 },
-      symbol: botId, instrumentType: strategy.instrumentType, lotSize: strategy.lotSize,
-      squareOff: strategy.desk === 'india' ? { enabled: true, ist: '15:10' } : null,
-    });
-  }
-  return out;
-};
+const armsWanted = armSel === 'all'
+  ? ['rules', 'gated', ...(providers.jev ? ['jev'] : []), ...(providers.laya ? ['laya'] : []), ...(providers.jev && providers.laya ? ['consensus'] : [])]
+  : [armSel];
 
-const arms = await runArms();
+// v21.2.0 FIX: explicitly requested AI arm without its provider → HONEST
+// pre-check (pehle makeDecider ka raw stack trace crash karta tha).
+const _needs = { jev: (x) => x === 'jev' || x === 'consensus', laya: (x) => x === 'laya' || x === 'consensus' };
+if (_needs.jev(armSel) && !providers.jev) {
+  console.error(`arm '${armSel}' needs a jev provider — TYPESAFE_API_KEY .env me set karo (ya --arm rules|gated|laya chuno).`);
+  process.exit(1);
+}
+if (_needs.laya(armSel) && !providers.laya) {
+  console.error(`arm '${armSel}' needs a laya provider — LAYA_ENABLED=1 + LAYA_API_KEY + local laya-serve (ya --arm rules|gated|jev chuno).`);
+  process.exit(1);
+}
+if (armSel === 'auto' && !(providers.jev || providers.laya)) {
+  console.error("arm 'auto' needs at least one AI provider — koi bhi configured nahi hai.");
+  process.exit(1);
+}
+
+const arms = await runArmsBacktest({
+  strategy, bars, symbol: botId,
+  providers, primary: aiCfg.primary, shadow: aiCfg.shadow, onDown: aiCfg.onDown,
+  arms: armsWanted,
+});
 
 const fmt = (v, d = 2) => (v == null ? '  n/a' : v.toFixed(d));
 console.log(`\n=== ${botId} — ${armsWanted.join(' vs ')} ===`);
@@ -158,16 +182,20 @@ function istMinutesOf(tsMs) {
   return Math.floor((t + 330 * 60000) / 60000) % 1440;
 }
 
-if (doSweep && jev) {
-  console.log('\n=== Jev threshold sweep (0.20-0.60) ===');
+if (doSweep && providers[sweepProvider]) {
+  // v21.2.0 (dual-provider): PER-PROVIDER sweep — Laya ki confidence
+  // formula Jev se alag hai, threshold alag tune hote hain (plan §4).
+  console.log(`\n=== ${sweepProvider.toUpperCase()} threshold sweep (0.20-0.60) ===`);
   const { runBacktest } = await import('../server/bots/core/engine.js');
   const { makeDecider } = await import('../server/bots/deciders.js');
   const { estimateRoundTripCost } = await import('../server/ai/tradingCosts.js');
   const sweep = await sweepThreshold({
     thresholds: [0.2, 0.3, 0.4, 0.5, 0.6],
     runOne: async (th) => {
-      const j2 = createJev({ ...jcfg, threshold: th, cachePath: path.join(_repoStateDir, 'jev_cache.jsonl') });
-      const decider = makeDecider({ arm: 'jev', strategy, jev: j2 });
+      const cfg = providerConfig(sweepProvider, process.env);
+      const p2 = createJev({ ...cfg, threshold: th, cachePath: path.join(_repoStateDir, `${sweepProvider}_cache.jsonl`) });
+      const provs = sweepProvider === 'laya' ? { jev: providers.jev, laya: p2 } : { jev: p2, laya: providers.laya };
+      const decider = makeDecider({ arm: sweepProvider, strategy, providers: provs });
       const r = await runBacktest({
         rows: strategy.prepare(bars), strategy, decider,
         costFn: (a) => estimateRoundTripCost(a) || { total: 0 },
@@ -178,6 +206,8 @@ if (doSweep && jev) {
   });
   for (const s of sweep) console.log(`  th=${s.threshold.toFixed(2)}  n=${s.trades}  avgR=${fmt(s.avgR)}  t=${fmt(s.tStat)}  netR=${fmt(s.netR)}`);
   console.log('  (plan §18: best-looking threshold ko same data pe report karna = overfitting; sweep sirf out-of-sample pe validate)');
+} else if (doSweep) {
+  console.log(`\n(sweep skipped — ${sweepProvider} not configured)`);
 }
 
 // v20.8.1 FIX (M): the CLI always exited 0 — a FAILing backtest could

@@ -1,4 +1,4 @@
-# SMARTAI PRO — PHASE-2 LIVE FLOW CHECKLIST (v21.1.2)
+# SMARTAI PRO — PHASE-2 LIVE FLOW CHECKLIST (v21.2.0)
 
 > Ye wo manual verification items hain jo **sirf aapke laptop/Render pe, real
 > network + real keys ke saath** ho sakte hain (sandbox me impossible).
@@ -72,6 +72,34 @@
 - [ ] Max position size: config se 1 pe set karke verify
 - [ ] **Go-live gate (v21.1.0 naya)**: LIVE mode on karne se PEHLI paper stats
   (100+ trades, +expectancy, DD limit) — `StrategyHealthPanel` me LIVE LOCKED/UNLOCKED chip
+
+## E2. Dual AI provider — Jev + Laya (v21.2.0 NAYA — laptop pe manual)
+
+- [ ] **R0-a Laya install** (PowerShell, repo ke bahar): venv + `pip install
+  "laya[serve]==<pinned>"` + `LAYA_DEVICE=cpu LAYA_PRELOAD=1 LAYA_MODELS=english
+  LAYA_HOST=127.0.0.1 LAYA_PORT=8000 LAYA_API_KEY=<32+ random> laya-serve`
+- [ ] **R0-b `node scripts/laya-ping.mjs`** → `VERDICT: PASS` + latency
+  (CPU p95 < 1s target; pehli call preload se slow aa sakti hai — 2nd run dekho)
+- [ ] **T1 model compat**: `LAYA_MODEL=jev-latest` karke laya-ping → 422 aaye
+  to model name Laya supported nahi → `LAYA_MODEL=` (omit) pe wapas aao
+- [ ] **T2 model omit**: default (`LAYA_MODEL=` khaali) → ping PASS
+- [ ] **T3 score criteria shape**: 422 aaye to jevPrompt criteria ko array-form
+  check karo (Laya har level ko description chahta hai) — sandbox me verify
+  nahi ho saka (laya-serve sandbox me nahi), YE TUMHARE LAPTOP PE HOGA
+- [ ] `.env` me `LAYA_ENABLED=1` + wahi key → Bot Lab me LAYA option ENABLED
+  + OpsHealthStrip `AI: L ✓`
+- [ ] **Arm switch live**: dropdown se `LAYA` / `AUTO` / (dono keys ho to)
+  `BOTH (consensus)` — bina restart, state persist ho
+- [ ] **409 check**: sirf ek provider ke saath `BOTH (consensus)` chunna →
+  UI me disabled + direct API pe 409 `provider_unavailable`
+- [ ] **Auto-failover drill**: arm=AUTO + primary chalu → primary ka process
+  band karo (laya-serve kill) → agle decisions `failover(...)` reason ke saath
+  dusre provider se (events stream me dikhta hai); OpsHealthStrip AI chip red
+- [ ] **Shadow week setup (R3)**: `AI_SHADOW=<non-primary>` + arm=gated →
+  decision events me `ai.<provider>.shadow=true` entries — `npm run calibrate`
+  me per-ARM table aana chahiye
+- [ ] **Rollback drill**: `LAYA_ENABLED=0` → Laya arms gated pe degrade
+  (arm_fallback event file me) — jev arm unaffected
 
 ## F. Restart persistence
 

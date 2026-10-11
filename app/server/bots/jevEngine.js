@@ -3,8 +3,9 @@
 // ------------------------------------------------------------
 // Jev (TypeSafe System One) client — plan §8, contract-faithful:
 //
-//   POST https://api.typesafe.ai/v1/systemone
-//   { model, state, questions: { action: {type:'choice',...}, ... } }
+//   POST <provider-url>            (default https://api.typesafe.ai/v1/systemone;
+//                                    Laya: LAYA_BASE_URL -> .../v1/systemone)
+//   { [model], state, questions: { action: {type:'choice',...}, ... } }
 //   -> { answers: { action: { choice, confidence, probabilities } }, usage }
 //
 // DECISION RULES (plan §8.2 — code-enforced, not prompt-enforced):
@@ -57,6 +58,17 @@ function _armJevExitHook() {
 
 export const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 
+/** v21.2.0 (dual-provider): base-URL -> full systemone endpoint resolver.
+ * `LAYA_BASE_URL=http://127.0.0.1:8000` ya `JEV_BASE_URL=https://api.typesafe.ai`
+ * dono chalega; jo base pehle se `/v1/systemone` pe khatam hota hai use
+ * as-is accept karte hain (full-endpoint override bhi valid hai). */
+export function resolveProviderEndpoint(base) {
+  const b = String(base || '').replace(/\/+$/, '');
+  return b.endsWith('/v1/systemone') ? b : `${b}/v1/systemone`;
+}
+
+const hostOf = (u) => { try { return new URL(u).host; } catch { return String(u || '').slice(0, 40); } };
+
 export const JEV_DEFAULTS = {
   model: 'jev-latest',
   threshold: 0.30,
@@ -69,31 +81,58 @@ export const JEV_DEFAULTS = {
   maxCacheEntries: 20000,
 };
 
-/** Env-driven config with sane defaults (plan §17). */
-export function jevConfig(env = process.env) {
+/** v21.2.0 (dual-provider plan Step-1.7): per-provider env config.
+ * `jevConfig` wrapper purani API ke liye rakha gaya hai (back-compat). */
+export function providerConfig(name = 'jev', env = process.env) {
+  if (name === 'laya') {
+    return {
+      ...JEV_DEFAULTS,
+      name: 'laya',
+      url: resolveProviderEndpoint(env.LAYA_BASE_URL || 'http://127.0.0.1:8000'),
+      // '' = field OMIT (T1/T2 compat) — env se 'english' etc. set kar sakte ho
+      model: env.LAYA_MODEL ?? '',
+      threshold: numOr(env.LAYA_THRESHOLD, JEV_DEFAULTS.threshold),
+      fallback: 'wait',                    // Laya kabhi rule-fallback nahi
+      apiKey: env.LAYA_API_KEY || '',
+      timeoutMs: numOr(env.LAYA_TIMEOUT_MS, 1500),   // local — jaldi fail
+      retries: numOr(env.LAYA_RETRIES, 1),
+    };
+  }
   return {
     ...JEV_DEFAULTS,
+    name: 'jev',
+    url: env.JEV_URL || resolveProviderEndpoint(env.JEV_BASE_URL || 'https://api.typesafe.ai'),
     model: env.JEV_MODEL || JEV_DEFAULTS.model,
     threshold: numOr(env.JEV_THRESHOLD, JEV_DEFAULTS.threshold),
     fallback: env.JEV_FALLBACK === 'rule' ? 'rule' : 'wait',
     apiKey: env.TYPESAFE_API_KEY || '',
+    timeoutMs: numOr(env.JEV_TIMEOUT_MS, JEV_DEFAULTS.timeoutMs),
+    retries: numOr(env.JEV_RETRIES, JEV_DEFAULTS.retries),
   };
+}
+
+/** Env-driven Jev config (purani API — unchanged behaviour). */
+export function jevConfig(env = process.env) {
+  return providerConfig('jev', env);
 }
 
 function numOr(v, d) { const n = Number(v); return Number.isFinite(n) ? n : d; }
 
 const keyOf = (p) => crypto.createHash('sha256').update(JSON.stringify(p)).digest('hex').slice(0, 32);
 
-/** Build the exact payload Jev expects from a snapshot + prompt. */
+/** Build the exact payload the provider expects from a snapshot + prompt.
+ * v21.2.0 (dual-provider): falsy `model` -> field OMIT (Laya T2 compat —
+ * `model:"jev-latest"` bhejne pe 422 aa sakta hai jab tak T1 verify na ho). */
 export function buildPayload({ model, snap, prompt }) {
-  return {
-    model,
+  const out = {
     state: (snap.contextLines || []).join('\n'),
     questions: {
       action: { type: 'choice', instructions: prompt.instructions, criteria: prompt.criteria },
       ...(prompt.extra || {}),
     },
   };
+  if (model) out.model = model;
+  return out;
 }
 
 /**
@@ -102,7 +141,9 @@ export function buildPayload({ model, snap, prompt }) {
  *   (tests inject fetchImpl; production uses global fetch)
  */
 export function createJev(opts = {}) {
-  const cfg = { ...JEV_DEFAULTS, ...opts };
+  const cfg = { name: 'jev', ...JEV_DEFAULTS, ...opts };
+  const name = String(cfg.name || 'jev');          // 'jev' | 'laya'
+  const url = cfg.url || JEV_URL;                  // v21.2.0: provider endpoint override
   const apiKey = cfg.apiKey || '';
   const doFetch = cfg.fetchImpl || ((...a) => fetch(...a));
   const cache = new Map();
@@ -125,7 +166,7 @@ export function createJev(opts = {}) {
   } catch { /* read-only fs etc: cache is an optimization, not a dependency */ }
 
   const stats = {
-    calls: 0, cacheHits: 0, errors: 0,
+    calls: 0, cacheHits: 0, errors: 0, rejects: 0,
     latencies: [], usage: { inputTokens: 0, outputTokens: 0 },
     breaker: { fails: 0, openedAt: null, trips: 0 },
   };
@@ -159,7 +200,7 @@ export function createJev(opts = {}) {
   async function post(payload) {
     for (let i = 0; i <= cfg.retries; i++) {
       try {
-        const r = await doFetch(JEV_URL, {
+        const r = await doFetch(url, {
           method: 'POST',
           headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
@@ -170,7 +211,10 @@ export function createJev(opts = {}) {
         const j = await r.json();
         return { ok: true, json: j };
       } catch (e) {
-        if (i === cfg.retries) return { ok: false, error: String(e?.message || e) };
+        // v21.2.0 (dual-provider): 5xx retry-exhaustion par status saath
+        // lautta hai — decide() `http_5xx` note bana paata hai (auto-arm
+        // failover usi pe trigger hota hai; generic network_error nahi).
+        if (i === cfg.retries) return { ok: false, error: String(e?.message || e), status: e?.status };
         await new Promise((res) => setTimeout(res, 300 * 2 ** i));
       }
     }
@@ -227,7 +271,9 @@ export function createJev(opts = {}) {
    */
   async function decide(snap, prompt) {
     const payload = buildPayload({ model: cfg.model, snap, prompt });
-    const key = keyOf(payload);
+    // v21.2.0 (dual-provider): cache key ab provider-aware hai — same
+    // payload Jev vs Laya (ya model '' vs 'english') ke liye alag key.
+    const key = keyOf({ provider: name, model: cfg.model || '', payload });
     const t0 = Date.now();
 
     // ---- breaker: fail fast while Jev is down ----
@@ -248,10 +294,22 @@ export function createJev(opts = {}) {
       const r = await post(payload);
       if (!r.ok) {
         stats.errors++;
-        breakerFail();
+        // v21.2.0 (dual-provider plan Step-1.4 — BREAKER FIX): HTTP 4xx
+        // provider-DOWN nahi hai. Ek lambi chali hui state / null-score
+        // level 400/422 de sakti hai — breaker usse 10 min ke liye band
+        // kar deta tha (failover ko bhi roka jaata tha). Ab 4xx sirf
+        // `rejects` counter + note; breaker sirf 5xx/429/network pe.
+        if (r.fatal) {
+          stats.rejects++;
+        } else {
+          breakerFail();
+        }
+        const note = r.fatal
+          ? `http_${r.status}`
+          : (Number(r.status) >= 500 ? `http_${r.status}` : 'network_error');
         return {
           action: cfg.fallback === 'rule' ? snap.proposed : 'wait',
-          note: r.fatal ? `http_${r.status}` : 'network_error',
+          note,
           cached: false, latencyMs: Date.now() - t0,
         };
       }
@@ -323,6 +381,8 @@ export function createJev(opts = {}) {
   decide.stats = () => ({
     ...stats,
     latencies: undefined,
+    name,                                     // v21.2.0: 'jev' | 'laya'
+    url: hostOf(url),                         // host only — full URL/keys kabhi expose nahi
     p50: pct(0.5), p95: pct(0.95),
     cacheSize: cache.size,
     breakerOpen: breakerOpen(),
@@ -331,7 +391,7 @@ export function createJev(opts = {}) {
     fallback: cfg.fallback,
     hasKey: !!apiKey,
   });
-  decide.config = () => ({ ...cfg, apiKey: apiKey ? '***' : '' });
+  decide.config = () => ({ ...cfg, name, url, apiKey: apiKey ? '***' : '' });
   decide.__cache = cache;   // test hook
   decide.__breakerFail = breakerFail; // test hook
   decide.__persist = persistCache;
@@ -352,38 +412,41 @@ export function createJev(opts = {}) {
 
 /**
  * JEV PING (plan §4.2 smoke): one real call, full response printed.
+ * v21.2.0: url/model/name override — layaPing isi ko wrap karta hai.
  */
-export async function jevPing({ apiKey, fetchImpl } = {}) {
+export async function jevPing({ apiKey, url, model, name = 'jev_ping', fetchImpl } = {}) {
   const key = apiKey || process.env.TYPESAFE_API_KEY || '';
-  if (!key) return { name: 'jev_ping', status: 'SKIPPED', reason: 'no TYPESAFE_API_KEY in .env' };
+  const endpoint = url || JEV_URL;
+  if (!key) return { name, status: 'SKIPPED', reason: 'no API key configured' };
   const doFetch = fetchImpl || ((...a) => fetch(...a));
   const t0 = Date.now();
   try {
-    const r = await doFetch(JEV_URL, {
+    const body = {
+      state: 'Test: NIFTY broke above the 15-minute opening range with volume 1.4x average. ATR range 0.9. Trend up.',
+      questions: {
+        action: {
+          type: 'choice',
+          instructions: 'Should the breakout long be taken?',
+          criteria: { enter_long: 'Take the long breakout', wait: 'Stand aside' },
+        },
+      },
+    };
+    if (model) body.model = model;
+    const r = await doFetch(endpoint, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'jev-latest',
-        state: 'Test: NIFTY broke above the 15-minute opening range with volume 1.4x average. ATR range 0.9. Trend up.',
-        questions: {
-          action: {
-            type: 'choice',
-            instructions: 'Should the breakout long be taken?',
-            criteria: { enter_long: 'Take the long breakout', wait: 'Stand aside' },
-          },
-        },
-      }),
+      body: JSON.stringify(body),
       signal: AbortSignal.timeout(8000),
     });
     const j = await r.json().catch(() => null);
     return {
-      name: 'jev_ping', status: r.ok ? 'PASS' : 'FAIL',
+      name, status: r.ok ? 'PASS' : 'FAIL',
       http: r.status, latencyMs: Date.now() - t0,
       choice: j?.answers?.action?.choice ?? null,
       probabilities: j?.answers?.action?.probabilities ?? null,
       usage: j?.usage ?? null,
     };
   } catch (e) {
-    return { name: 'jev_ping', status: 'FAIL', error: String(e?.message || e), latencyMs: Date.now() - t0 };
+    return { name, status: 'FAIL', error: String(e?.message || e), latencyMs: Date.now() - t0 };
   }
 }

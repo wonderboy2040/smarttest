@@ -4,6 +4,47 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.2.0 — LAYA + JEV DUAL-PROVIDER AI (Bot Lab)
+
+**1) Bot Lab me ab 6 arms hain** (per-bot dropdown): `Rules / Gated / Jev / Laya / Both (consensus) / Auto`
+- Jev = cloud (TYPESAFE_API_KEY) · Laya = **local, free** (tumhare laptop pe `laya-serve`)
+- Consensus = dono take bolein tabhi entry · Auto = primary provider, down pe dusra
+- AI sirf entry approve/veto karta hai — **side flip / sizing / SL/TP kabhi nahi**; hard risk sab se upar
+
+**2) Laya local install (ek baar, PowerShell — repo ke bahar):**
+```powershell
+python -m venv laya-env ; .\laya-env\Scripts\Activate.ps1
+python -m pip install "laya[serve]==<pinned>"     # pehle: pip index versions laya
+$env:LAYA_DEVICE="cpu"; $env:LAYA_PRELOAD="1"; $env:LAYA_MODELS="english"
+$env:LAYA_HOST="127.0.0.1"; $env:LAYA_PORT="8000"; $env:LAYA_API_KEY="<32+ char random>"
+laya-serve
+```
+Phir `app/.env` me (naya section template me hai):
+```env
+LAYA_ENABLED=1
+LAYA_BASE_URL=http://127.0.0.1:8000
+LAYA_API_KEY=<wahi 32+ char key jo laya-serve ko di>
+```
+**Verify:** `node scripts/laya-ping.mjs` → `VERDICT: PASS` (choice + probabilities + latency)
+
+**3) Kaise use kare:**
+- Bot Lab kholo → bot card me arm dropdown → `LAYA (local · $0)` (ya `BOTH (consensus)` / `AUTO`)
+- Laya panel (Jev panel ke side me) me model/threshold/calls/p95/rejects/breaker dikhta hai; "Local · $0"
+- OpsHealthStrip me `AI: L ✓ · J ✓` chip — breaker open = red, not-configured = grey
+- Arm change **bina server restart** kaam karta hai (state file me persist)
+
+**4) Recommended rollout (PAPER pehle, hamesha):**
+- `AI_SHADOW=laya` + arm=`gated` chalao → dono providers ke decisions log hote hain (trade pe zero asar) → `npm run calibrate` me per-ARM table dekho → jo arm `gated` se behtar ho tabhi uspe switch karo
+- `node scripts/botlab-backtest.mjs --arm all --sweep laya` — per-provider threshold sweep
+
+**5) Troubleshooting:**
+- Arm dropdown me Laya disabled + "409 provider_unavailable" → `LAYA_ENABLED`/`LAYA_API_KEY`/`laya-serve` teeno check
+- `laya-ping` me 422 → payload contract mismatch (model name / criteria shape) — `LAYA_MODEL=` khaali rakho (field omit, safe default)
+- Laptop band = Laya down → `auto` arm Jev pe failover karta hai; single `laya` arm WAIT (trade nahi)
+- **Rollback:** `LAYA_ENABLED=0` → Laya arms `gated` pe degrade (event log me record) — jev arm + purana flow bilkul unchanged
+
+---
+
 ## 🎯 v21.1.0 — PHASE 1-4 RELIABILITY UPGRADE (user plan implemented)
 
 **1) LIVE trading ab GO-LIVE GATE ke peeche hai (sabse zaroori change):**

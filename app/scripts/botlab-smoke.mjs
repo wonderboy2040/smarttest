@@ -33,6 +33,9 @@ for (const r of results) {
 console.log('--- Decision matrix (plan §4.4) ---');
 console.log(`India desk : ${verdict.indiaDesk}`);
 console.log(`Jev arm    : ${verdict.jevArm}`);
+// v21.2.0 (dual-provider): Laya verdict — R0 gate se pehle hi pata chalta
+// hai ki local laya-serve reachable hai ya nahi.
+console.log(`Laya arm   : ${verdict.layaArm}`);
 console.log(`Crypto desk: ${verdict.cryptoDesk}`);
 
 const failed = results.filter(r => r.status === 'FAIL').length;

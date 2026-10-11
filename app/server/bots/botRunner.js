@@ -23,6 +23,7 @@ import { loadAccount, saveAccount, applyTrade, accountStats } from './accounts.j
 import { loadBotState, saveBotState, appendEvent, readEvents, killSwitchActive, globalPauseActive, setKillSwitch } from './botState.js';
 import { botRiskCheck, botRiskPreCheck, botRiskConfig, expectedGross, sizePosition, validatedPWin } from './botRisk.js';
 import { makeDecider } from './deciders.js';
+import { aiModeConfig } from './aiProviders.js';
 import { runBacktest, ENGINE_DEFAULTS } from './core/engine.js';
 import { nn, istDayKey } from './core/features.js';
 import { istMinutes } from './core/engine.js';
@@ -67,7 +68,8 @@ export class BotRunner {
     env = process.env,
     candleProvider = null,     // async (symbol, desk, botId) -> bars|null
     markPriceProvider = null,  // (symbol, desk) -> price|null (sync or async)
-    jev = null,                // createJev(...) instance
+    jev = null,                // createJev(...) instance (BACK-COMPAT — ai.jev pe map hota hai)
+    ai = null,                 // v21.2.0: { jev, laya } provider registry (buildProviders se)
     execPort = null,           // PaperPort-like (open/setProtection/close)
     telegram = { enabled: false },
   } = {}) {
@@ -94,7 +96,17 @@ export class BotRunner {
     }
     this.candleProvider = candleProvider;
     this.markPriceProvider = markPriceProvider;
-    this.jev = jev;
+    // v21.2.0 (dual-provider plan Step-4): provider registry. Purana `jev`
+    // param back-compat ke liye ai.jev pe map hota hai — existing callers
+    // (tests, scripts) aise hi chalte rahenge.
+    this.ai = {
+      jev: (ai && ai.jev) || jev || null,
+      laya: (ai && ai.laya) || null,
+    };
+    this.jev = this.ai.jev; // back-compat alias
+    // v21.2.0: AI_PRIMARY / AI_SHADOW / AI_CONSENSUS_ON_DOWN (safe defaults:
+    // primary=laya, shadow=off, onDown=wait).
+    this.aiCfg = aiModeConfig(env);
     this.execPort = execPort;
     this.telegram = telegram;
     this.heartbeats = {};   // bot -> { at, bars, note }
@@ -165,9 +177,37 @@ export class BotRunner {
       // v20.8.0 graceful degradation: arm=jev without a Jev instance
       // (no TYPESAFE_API_KEY) falls back to gated — loudly recorded in
       // the event log, never a silent behavior change.
-      if (arm === 'jev' && !this.jev) {
+      // v21.2.0 (dual-provider plan Step-4): availability-resolve ab HAR
+      // AI arm ke liye — laya / consensus / auto. Hamesha event file me
+      // record hota hai, silent kabhi nahi.
+      if (arm === 'jev' && !this.ai.jev) {
         appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'jev', to: 'gated', reason: 'no_jev_instance' });
         arm = 'gated';
+      } else if (arm === 'laya' && !this.ai.laya) {
+        appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'laya', to: 'gated', reason: 'no_laya_instance' });
+        arm = 'gated';
+      } else if (arm === 'consensus') {
+        if (!this.ai.jev && !this.ai.laya) {
+          appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'consensus', to: 'gated', reason: 'no_ai_providers' });
+          arm = 'gated';
+        } else if (!this.ai.jev || !this.ai.laya) {
+          const missing = this.ai.jev ? 'laya' : 'jev';
+          // arm stays 'consensus' — aiDecider HAR decision pe AI_CONSENSUS_ON_DOWN
+          // policy apply karta hai (wait = safe default; single = bacha hua
+          // provider decide kare) — per-decision degradation events me dikhti
+          // hai (consensus_provider_down / consensus_degraded_single).
+          appendEvent(this.stateDir, botId, { kind: 'arm_note', arm: 'consensus', note: `${missing} provider absent — onDown=${this.aiCfg.onDown} (per-decision policy, reason stamped)` });
+        }
+      } else if (arm === 'auto') {
+        if (!this.ai.jev && !this.ai.laya) {
+          appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'auto', to: 'gated', reason: 'no_ai_providers' });
+          arm = 'gated';
+        } else if (!this.ai[this.aiCfg.primary]) {
+          // primary absent: arm stays 'auto' — aiDecider primary ke
+          // provider_unavailable note pe secondary pe failover karta hai.
+          const sec = this.aiCfg.primary === 'jev' ? 'laya' : 'jev';
+          appendEvent(this.stateDir, botId, { kind: 'arm_note', arm: 'auto', note: `primary ${this.aiCfg.primary} absent — decisions failover to ${sec}` });
+        }
       }
       let decider;
       try {
@@ -182,11 +222,11 @@ export class BotRunner {
             return null;
           }
         };
-        decider = makeDecider({ arm, strategy, jev: this.jev, eventGuardCheck: _egWrapped });
+        decider = makeDecider({ arm, strategy, jev: this.jev, providers: this.ai, primary: this.aiCfg.primary, shadow: this.aiCfg.shadow, onDown: this.aiCfg.onDown, eventGuardCheck: _egWrapped });
       } catch (e) {
         appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: arm, to: 'rules', reason: String(e?.message || e) });
         arm = 'rules';
-        decider = makeDecider({ arm, strategy, jev: this.jev, eventGuardCheck });
+        decider = makeDecider({ arm, strategy, jev: this.jev, providers: this.ai, eventGuardCheck });
       }
 
       // open-position counts (v20.8.1 FIX H1: getPositions is ASYNC —
@@ -358,6 +398,10 @@ export class BotRunner {
             kind: 'decision', symbol, arm,
             action: verdict.action, reason: verdict.reason || null,
             jev: verdict.jev || null,
+            // v21.2.0 (dual-provider): per-provider telemetry — consensus/
+            // auto/shadow analysis (agreement %, failover counts) isi se
+            // hoti hai. e.jev compat field upar wale verdict.jev se aata hai.
+            ai: verdict.ai || null,
             candidate: { side: cand.side, entry: cand.entry, stop: cand.stop, target: cand.target },
           });
           if (verdict.action !== 'take') { bumpAction('wait'); continue; }
@@ -450,6 +494,10 @@ export class BotRunner {
               maxHoldBars: cand.maxHoldBars ?? null,
               squareOffIST: strategy.desk === 'india' ? '15:10' : null,
               desk: strategy.universe || (STRATEGIES[botId]?.universe) || 'crypto',
+              // v21.2.0 (dual-provider): kis arm ne entry approve ki — settle
+              // events per-arm calibration tables (botlab-calibrate) isi se
+              // banati hain. Degraded arm bhi honest stamp hota hai.
+              arm,
             },
           });
           appendEvent(this.stateDir, botId, {
@@ -911,6 +959,10 @@ export class BotRunner {
         appendEvent(this.stateDir, accOwner, {
           kind: 'settle', symbol: p.pair,
           exitWhy: stopHit ? 'stop' : tpHit ? 'target' : timeStop ? 'time_stop' : 'square_off',
+          // v21.2.0 (dual-provider): arm jo entry leta tha (position meta se
+          // — restart-safe). Purane positions me null (calibrate gracefully
+          // 'unknown' bucket me daalta hai).
+          arm: p.meta?.arm || null,
           ...trade,
         });
         settled.push({ botId: accOwner, symbol: p.pair, ...trade });
@@ -935,7 +987,7 @@ export class BotRunner {
     const strategy = this.strategyFor(botId);
     if (!strategy) return { error: 'unknown_bot' };
     const useArm = arm || this.armFor(botId);
-    const decider = makeDecider({ arm: useArm, strategy, jev: this.jev, eventGuardCheck });
+    const decider = makeDecider({ arm: useArm, strategy, jev: this.jev, providers: this.ai, primary: this.aiCfg.primary, shadow: this.aiCfg.shadow, onDown: this.aiCfg.onDown, eventGuardCheck });
     const out = [];
     const state = { droppedByNaN: [] };
     const rows = strategy.prepare(bars);
@@ -972,6 +1024,13 @@ export class BotRunner {
       mode: this.cfg.mode,
       globalPause: globalPauseActive(this.stateDir),
       scheduler: this._schedTimer ? 'running' : 'stopped',
+      // v21.2.0 (dual-provider): per-provider stats. Purana `jev` field
+      // compat ke liye untouched (UI/purane consumers).
+      ai: {
+        jev: this.ai.jev?.stats?.() || null,
+        laya: this.ai.laya?.stats?.() || null,
+      },
+      aiMode: { ...this.aiCfg },
       jev: this.jev?.stats?.() || null,
       bots,
       at: new Date().toISOString(),
@@ -994,9 +1053,25 @@ export class BotRunner {
 /**
  * Backtest one strategy over bars with all three arms (plan §7.1).
  * costFn wired to the REAL tradingCosts (friction honesty).
+ * v21.2.0 (dual-provider): runArmsBacktest() ka thin wrapper — purane
+ * callers (routes /api/bots/backtest, tests) untouched chalte hain.
  */
 export async function runThreeArmBacktest({ strategy, bars, symbol = '?', jev = null, cfg = {}, instrumentType = null, lotSize = null }) {
+  return runArmsBacktest({
+    strategy, bars, symbol, cfg, instrumentType, lotSize,
+    providers: { jev: jev || null, laya: null },
+    arms: ['rules', 'gated', ...(jev ? ['jev'] : [])],
+  });
+}
+
+/**
+ * v21.2.0 (dual-provider plan Step-7): N-arm backtest harness.
+ * Default arms: rules, gated + har configured AI provider + consensus
+ * jab dono present hon. `--arm auto` CLI se explicitly maanga ja sakta hai.
+ */
+export async function runArmsBacktest({ strategy, bars, symbol = '?', providers = null, jev = null, arms = null, cfg = {}, instrumentType = null, lotSize = null, primary = 'laya', shadow = 'off', onDown = 'wait' }) {
   const costFn = (a) => estimateRoundTripCost(a) || { total: 0 };
+  const provs = providers || { jev: jev || null, laya: null };
   // v20.8.4 FIX (M — fee-model honesty): allow the CALLER to override
   // instrumentType/lotSize. The ensemble adapter's descriptor hardcodes
   // 'crypto' while its candidates carry the market-correct type — an
@@ -1004,15 +1079,21 @@ export async function runThreeArmBacktest({ strategy, bars, symbol = '?', jev = 
   // fees instead of the India cost stack (STT/txn/GST/stamp).
   const iType = instrumentType || strategy.instrumentType;
   const lSize = lotSize != null ? lotSize : strategy.lotSize;
-  const arms = {};
-  for (const arm of ['rules', 'gated', ...(jev ? ['jev'] : [])]) {
-    const decider = makeDecider({ arm, strategy, jev: jev || undefined, eventGuardCheck });
-    arms[arm] = await runBacktest({
+  const armList = arms || [
+    'rules', 'gated',
+    ...(provs.jev ? ['jev'] : []),
+    ...(provs.laya ? ['laya'] : []),
+    ...(provs.jev && provs.laya ? ['consensus'] : []),
+  ];
+  const out = {};
+  for (const arm of armList) {
+    const decider = makeDecider({ arm, strategy, jev: provs.jev || undefined, providers: provs, primary, shadow, onDown, eventGuardCheck });
+    out[arm] = await runBacktest({
       rows: strategy.prepare(bars), strategy, decider, costFn, symbol,
       instrumentType: iType, lotSize: lSize,
       squareOff: strategy.desk === 'india' ? { enabled: true, ist: '15:10' } : null,
       cfg,
     });
   }
-  return arms;
+  return out;
 }

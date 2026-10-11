@@ -9,9 +9,15 @@
 //   5. breaker: consecutive failures open a cooldown window
 //   6. 4xx not retried; 429/5xx retried with backoff
 //   7. usage tokens + latency percentiles recorded
+// v21.2.0 dual-provider additions:
+//   8. URL override (JEV_URL / provider url) reaches the wire
+//   9. falsy model = field OMIT (Laya T2 compat)
+//  10. 4xx ≠ breaker (rejects counter only); 5xx/network = breaker
+//  11. cache key provider-aware (jev vs laya alag)
+//  12. Laya-shaped contract fixture parse
 // ============================================================
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createJev, jevPing, buildPayload } from '../server/bots/jevEngine.js';
+import { createJev, jevPing, buildPayload, providerConfig, resolveProviderEndpoint } from '../server/bots/jevEngine.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -181,5 +187,123 @@ describe('v20.8 jevPing — Phase 0 smoke', () => {
   it('FAIL on HTTP error', async () => {
     const r = await jevPing({ apiKey: 'k', fetchImpl: async () => { throw new Error('no route'); } });
     expect(r.status).toBe('FAIL');
+  });
+});
+
+describe('v21.2.0 dual-provider — provider-aware engine', () => {
+  it('8. URL override: createJev({url}) hits THAT endpoint, not the hardcoded default', async () => {
+    const seen = [];
+    const jev = createJev({
+      apiKey: 'k', url: 'http://127.0.0.1:9999/v1/systemone',
+      cachePath: path.join(tmpDir, 'c.jsonl'),
+      fetchImpl: async (u) => { seen.push(String(u)); return mkResp('enter_long', { enter_long: 0.55, wait: 0.45 }); },
+    });
+    const v = await jev(snap(), prompt);
+    expect(v.action).toBe('enter_long');
+    expect(seen[0]).toBe('http://127.0.0.1:9999/v1/systemone');
+    expect(jev.stats().url).toBe('127.0.0.1:9999'); // host only
+  });
+
+  it('8b. providerConfig: JEV_URL > JEV_BASE_URL > default chain', () => {
+    expect(providerConfig('jev', { JEV_URL: 'https://x.example/one' }).url).toBe('https://x.example/one');
+    expect(providerConfig('jev', { JEV_BASE_URL: 'https://x.example' }).url).toBe('https://x.example/v1/systemone');
+    expect(providerConfig('jev', {}).url).toBe('https://api.typesafe.ai/v1/systemone');
+    // full-endpoint base accepted as-is
+    expect(resolveProviderEndpoint('https://x.example/v1/systemone/')).toBe('https://x.example/v1/systemone');
+  });
+
+  it('8c. providerConfig laya: base default 127.0.0.1:8000, model OMIT default, fast timeout', () => {
+    const c = providerConfig('laya', {});
+    expect(c.url).toBe('http://127.0.0.1:8000/v1/systemone');
+    expect(c.model).toBe('');           // '' = field omit (T2 safe default)
+    expect(c.timeoutMs).toBe(1500);
+    expect(c.retries).toBe(1);
+    expect(providerConfig('laya', { LAYA_BASE_URL: 'http://localhost:9000', LAYA_MODEL: 'english' }).model).toBe('english');
+  });
+
+  it('9. falsy model = field OMIT; truthy model = present', () => {
+    const noModel = buildPayload({ model: '', snap: snap(), prompt });
+    expect('model' in noModel).toBe(false);
+    const withModel = buildPayload({ model: 'english', snap: snap(), prompt });
+    expect(withModel.model).toBe('english');
+  });
+
+  it('10a. HTTP 422 does NOT trip the breaker — rejects counter + honest note, provider usable on next call', async () => {
+    let calls = 0;
+    const jev = createJev({
+      apiKey: 'k', retries: 0, breakerThreshold: 1, breakerCooldownMs: 60_000,
+      cachePath: path.join(tmpDir, 'c.jsonl'),
+      fetchImpl: async () => { calls++; return { ok: false, status: 422, json: async () => ({}) }; },
+    });
+    const v = await jev(snap(), prompt);
+    expect(v.action).toBe('wait');
+    expect(v.note).toBe('http_422');
+    expect(jev.stats().rejects).toBe(1);
+    // THE fix: breaker OPEN NAHI hua — agli call wire pe jaati hai (4xx
+    // provider-down nahi hai; pehle ek 422 poore provider ko 10 min band karti thi)
+    expect(jev.stats().breakerOpen).toBe(false);
+    await jev(snap('enter_short'), prompt);
+    expect(calls).toBe(2); // no fail-fast — wire hit again
+  });
+
+  it('10b. HTTP 500 (retry-exhausted) DOES trip the breaker — note http_5xx', async () => {
+    const jev = createJev({
+      apiKey: 'k', retries: 0, breakerThreshold: 1, breakerCooldownMs: 60_000,
+      cachePath: path.join(tmpDir, 'c.jsonl'),
+      fetchImpl: async () => { throw Object.assign(new Error('HTTP 503'), { status: 503 }); },
+    });
+    const v = await jev(snap(), prompt);
+    expect(v.action).toBe('wait');
+    expect(v.note).toBe('http_503');   // failover-triggerable note (auto arm)
+    expect(jev.stats().breakerOpen).toBe(true);
+  });
+
+  it('11. cache key is provider-aware: same payload, jev vs laya = 2 wire calls; same provider = 1', async () => {
+    let calls = 0;
+    const mk = (name) => createJev({
+      apiKey: 'k', name,
+      cachePath: path.join(tmpDir, `${name}.jsonl`),
+      fetchImpl: async () => { calls++; return mkResp('enter_long', { enter_long: 0.55, wait: 0.45 }); },
+    });
+    const jev = mk('jev');
+    const laya = mk('laya');
+    await jev(snap(), prompt);
+    await laya(snap(), prompt); // SAME payload — alag provider, wire chahiye
+    expect(calls).toBe(2);
+    await jev(snap(), prompt);  // cache hit
+    await laya(snap(), prompt); // cache hit
+    expect(calls).toBe(2);
+    expect(jev.stats().cacheHits).toBe(1);
+    expect(laya.stats().cacheHits).toBe(1);
+    expect(jev.stats().name).toBe('jev');
+    expect(laya.stats().name).toBe('laya');
+  });
+
+  it('12. Laya-shaped contract fixture: answers.action.{choice,confidence,probabilities} + usage parse hota hai', async () => {
+    // Laya (systemone-compatible) response — usage field names same, choice
+    // field same. Provider name se koi fark nahi padta — createJev engine
+    // contract-faithful hai.
+    const layaResp = {
+      ok: true, status: 200,
+      json: async () => ({
+        answers: {
+          action: { choice: 'enter_long', confidence: 0.71, probabilities: { enter_long: 0.62, wait: 0.38 } },
+        },
+        usage: { input_tokens: 300, output_tokens: 20 },
+      }),
+    };
+    const laya = createJev({
+      apiKey: 'lk', name: 'laya', model: '', url: 'http://127.0.0.1:8000/v1/systemone',
+      threshold: 0.30, cachePath: path.join(tmpDir, 'laya.jsonl'),
+      fetchImpl: async () => layaResp,
+    });
+    const v = await laya(snap(), prompt);
+    expect(v.action).toBe('enter_long');
+    expect(v.probs.enter_long).toBeCloseTo(0.62);
+    expect(v.confidence).toBeCloseTo(0.71);
+    const s = laya.stats();
+    expect(s.name).toBe('laya');
+    expect(s.usage.inputTokens).toBe(300);
+    expect(s.hasKey).toBe(true);
   });
 });
