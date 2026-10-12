@@ -70,6 +70,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { disableQuickEditMode } from './ai/consoleGuard.js';
+import { createLayaSidecar } from './layaSidecar.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.join(__dirname, '..');
@@ -205,6 +206,21 @@ export function createSupervisor(opts = {}) {
     try { deps.logFn(text + '\n'); } catch { /* never fatal */ }
     if (knobs.logFilePath) _appendLog(text + '\n');
   }
+
+  // v21.4.0 LAYA SIDECAR (plan §3.2): supervisor-managed local AI —
+  // adopt/spawn/ready-poll/hang-detect/crash-restart/clean-shutdown.
+  // Inject-able via opts.layaSidecar (unit tests). Supervisor khud
+  // .env load NAHI karta (dotenv-free boot ground-rule) — sidecar LAYA_*
+  // keys apne mini-parser se app/.env me se padhta hai. HAR failure path
+  // non-fatal hai: Laya ka koi masla site ke boot/restart flow ko kabhi
+  // nahi chhedta (Laya band = AI layer kam, trading untouched).
+  const sidecar = opts.layaSidecar || createLayaSidecar({
+    env,
+    appRoot: deps.appRoot,
+    log: (line) => log(line),
+    journal: (entry) => journal(entry),
+    deps,
+  });
 
   // ---------------- child stdout relay + file log ----------------
   function _appendLog(line) {
@@ -839,6 +855,12 @@ export function createSupervisor(opts = {}) {
     log('  ye window khuli rakho (minimize OK). Ctrl+C = clean band.');
     log('============================================================');
     _boot();
+    // v21.4.0: Laya sidecar PARALLEL me — site kabhi iska intezaar nahi
+    // karti (plan §3.1 ground-rule). Adopt-first: haath se chali hui Laya
+    // window double nahi hoti.
+    try {
+      Promise.resolve(sidecar.start()).catch(() => { /* never fatal */ });
+    } catch { /* never fatal */ }
     if (knobs.probesOn) {
       state.probeTimer = setInterval(() => {
         probeOnce().then((r) => { try { onProbeResult(r); } catch { /* never fatal */ } }).catch(() => { /* probe never fatal */ });
@@ -899,6 +921,9 @@ export function createSupervisor(opts = {}) {
       state.child = null;
     }
     journal({ ev: 'watchdog-clean-shutdown', reason: 'supervisor-stop' });
+    // v21.4.0: OWNED Laya tree-kill (orphan nahi bachta); ADOPTED process
+    // chhod diya jata hai (user ne haath se chalaya tha). Never fatal.
+    try { await sidecar.stop(); } catch { /* never fatal */ }
     releaseLock();
     log('[watchdog] supervisor band. Site wapas laane ke liye Start-SmartAI-Watchdog.bat dobara chalao.');
   }
@@ -907,7 +932,7 @@ export function createSupervisor(opts = {}) {
     start,
     stop,
     _i: {
-      state, knobs, deps,
+      state, knobs, deps, sidecar,
       probeOnce, onProbeResult, startChild, _restartTick,
       _scheduleRestart, _onChildExit, forceKill, journal,
       _emitLine, _appendLog,

@@ -4,6 +4,52 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.4.0 — LAYA SIDECAR (Watchdog ke saath Laya auto-boot)
+
+**1) Ab `Start-SmartAI-Watchdog.bat` double-click = site + Laya dono up.**
+- `.env` me bas ye line confirm karo (template me already hai):
+```env
+LAYA_AUTOSTART=1
+LAYA_HOME=C:\laya-env
+```
+- Supervisor ab Laya ko bhi waise hi manage karta hai jaise site ko:
+  **adopt** (pehle se chal raha ho to double nahi) → **spawn** → `/health` ready-poll →
+  **hang detect** (3 fail = force-kill + restart) → **crash backoff** (5s→60s) →
+  **10 restarts/hour budget pause** → **Ctrl+C par clean tree-kill** (orphan process nahi bachta).
+- **Site kabhi Laya ka intezaar nahi karti** — Laya band ho to bhi site 100% normal
+  (Bot Lab `laya` arm WAIT, `auto` arm Jev failover, board AI-confirm NEUTRAL).
+- Watchdog window me `[laya] ...` lines = Laya ka relay output (API key kabhi nahi dikhti).
+
+**2) Rollout (plan ke phased steps):**
+- **P0 (already included):** bat me Laya start-block — `.env` me `LAYA_AUTOSTART` off ho
+  ya sidecar kisi wajah se na chale, tab bhi `start "Laya AI" /min` fallback Laya chala dega
+  (health-check ke baad — double start kabhi nahi).
+- **P1 (already included):** supervisor-managed sidecar + full test-suite.
+- **P2 — Soak 48h checklist:**
+  - [ ] Bat double-click → Laya + site dono up; `[laya] READY` log dikhe
+  - [ ] Haath se chalayi Laya window pehle se ho → `laya-adopted`, double process nahi
+  - [ ] Task Manager me `laya-serve.exe` kill → auto-restart (~1 min)
+  - [ ] Watchdog Ctrl+C → Laya bhi band (Task Manager me nahi bachna chahiye)
+  - [ ] Laptop sleep→resume → dono recover
+  - [ ] Laya band rehte Bot Lab `laya` arm WAIT — trading/risk gates normal
+- **P3 (optional):** `Win+R` → `shell:startup` → bat ka shortcut ("Start in" = app folder).
+
+**3) Sidecar env-knobs** (sab optional, defaults sahi hain):
+`LAYA_SERVE_CMD` (exe override) · `LAYA_THREADS` (empty = physical cores − 2) ·
+`LAYA_READY_TIMEOUT_MS=900000` (pehli baar weights) · `LAYA_PROBE_MS=30000` ·
+`LAYA_DEVICE=cpu` · `LAYA_MODELS=english`
+
+**4) Troubleshooting:**
+- `[laya] laya-serve nahi mila (...)` → `dir C:\laya-env\Scripts\laya-serve.exe` check karo;
+  path alag ho to `LAYA_HOME` (ya `LAYA_SERVE_CMD`) set karo.
+- `[laya] LAYA_BASE_URL non-loopback hai — REFUSED` → security: autostart sirf 127.0.0.1.
+- Windows Ctrl+C shared-console: soak me confirm karo ki Laya bhi band hua (nahi to
+  Task Manager se band karo — next boot me sidecar khud handle karega).
+- **Rollback:** `LAYA_AUTOSTART=0` (ya line delete) → supervisor purane behaviour par;
+  Laya haath se `app\start-laya.cmd` se chalao. Site/Bot Lab code unchanged.
+
+---
+
 ## 🎯 v21.3.0 — 7-ISSUE FIXES (server down · board accuracy · AI confirm · live pre-flight · equity prices)
 
 **1) Server stability (Issue-1)**
