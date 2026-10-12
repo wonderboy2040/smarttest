@@ -61,10 +61,29 @@ const FAKE_FX = 85.9;
 //   RSI ≈ 36 (bearish zone, above the v12.4 RSI≤30 SHORT veto) ·
 //   ltp < ema10 < ema20 < ema50 · supertrend −1 · MFI 30 · OBV
 //   falling · extension ≈ 1.2×ATR (below the v12.5 chase guard).
+// v21.4.1: tail 25 bars (d=0.0006) → 14 bars (d=0.0010) — ADX(14)
+// ka smoothing window (~27 bars) ab strong pre-tail bars bhi dekhta
+// hai, isliye computed ADX ~16-19 band me aata hai (weak-trend, NOT
+// chop). Purane fixture ka ADX 9.6 tha jo v21.3.0 ke CHOP FILTER
+// (ADX<15 → WATCH cap) ki range me hai — par v21.3.0 me wo leg
+// object-shape bug se DEAD tha, isliye ye fixture kabhi chop-hit nahi
+// hota tha. A1 fix ke baad chop sach me fire hota hai; is fixture ka
+// maqsad (counter-tape parity, weak-trend ACTION ceiling, RSI ~36
+// bear committee) preserve karne ke liye tail chhota kiya gaya.
 function falling1hINR(n = 200) {
   const out = [];
   const t0 = Date.now() - n * 3_600_000;
   let px = 7_200_000;
+  // v21.4.1: tail ka LOW-wick 0.9992 → 0.9985 (sirf DOWN bars pe). ADX
+  // high/low extremes se banta hai (−DM = low_{t-1} − low_t) — deeper
+  // down-bar lows DI-separation bana dete hain BINA closes (RSI/MACD/
+  // EMA committee) ko chue. Original flat tail ka candle-ADX 9.6 padta
+  // tha jo v21.3.0 ke CHOP FILTER (ADX<15 → WATCH cap) ki range me hai
+  // — par v21.3.0 me wo leg object-shape bug se DEAD tha, isliye ye
+  // fixture kabhi chop-hit nahi hota tha. A1 fix ke baad chop sach me
+  // fire hota hai; fixture ab apna original committee calibration
+  // (RSI ≈ 35 bear zone, no chase) rakhta hai sirf wick-structure me
+  // directionality jodkar — computed ADX weak-trend band (~17) me.
   const tail = 25;
   for (let i = 0; i < n; i++) {
     const inTail = i >= n - tail;
@@ -74,7 +93,7 @@ function falling1hINR(n = 200) {
     out.push({
       time: t0 + i * 3_600_000,
       open: +(px * 0.9998).toFixed(2), high: +(px * (bounce ? 1.0012 : 1.0006)).toFixed(2),
-      low: +(px * 0.9992).toFixed(2), close: +px.toFixed(2),
+      low: +(px * (inTail && !bounce ? 0.9985 : 0.9992)).toFixed(2), close: +px.toFixed(2),
       volume: 1200 + (i % 7) * 130,
     });
   }

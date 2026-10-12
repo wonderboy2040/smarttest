@@ -34,6 +34,10 @@ export interface TradePlan {
   /** v6.12: the SL sits behind a verified swing level (probrain). */
   structure?: { level: number | null; barsAgo: number | null };
   rrBelowFloor?: boolean;
+  /** v21.3.0 (rendered v21.4.1): sub-noise stop floor laga tha — SL was
+   *  tightened up to 0.6×ATR minimum so noise-wiggle stops don't fire.
+   *  Chip renders on the card so the user knows the SL is floor-raised. */
+  stopFloored?: boolean;
 }
 
 /** v6.12 PRO TRADER BRAIN — the honest quality layer on every signal:
@@ -51,6 +55,12 @@ export interface SignalQuality {
   veto?: string | null;
   stopStyle?: string | null;
   reasons?: string[];
+  /** v21.3.0 hard-veto stamps (rendered since v21.4.1 — pehle backend
+   *  bhejta tha par UI kabhi nahi dikhati thi): counter-HTF veto = signal
+   *  side 1d/4h consensus ke against → WATCH cap + aiScore ≤62. */
+  counterHtfVeto?: boolean;
+  /** chop filter laga — 6-TF SPLIT phase ya ADX<15 (range) → WATCH cap. */
+  chopRange?: boolean;
 }
 
 /** v10.5 — one timeframe's compact tape read (5m / 15m / 1h). */

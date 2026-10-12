@@ -76,7 +76,21 @@ export function flushTrackRecordState() {
   saveJSON(FILE, _state);
 }
 
-function _id(symbol, market = 'INDIA') { return `${symbol}:${dayKeyFor(market)}`; }
+function _id(symbol, market = 'INDIA') { return `${symbol}:${market}:${dayKeyFor(market)}`; } // v21.4.1 [B4]: market-qualified — CRYPTO aur FUTURES ek hi base (BTC…) pe alag desks hain
+
+/** v21.4.1 [B5]: sub-cent price rounding — toFixed(2) SHIB/PEPE/BONK-class
+ * (aur micro USDT perp) levels ko 0 bana deta tha: exit 0.000170 → 0.00 →
+ * _computePnl full-qty LOSS book karta tha (fake −₹25,000 disciplined PnL
+ * on a ₹1,000-risk trade). |x| ≥ 1 → 2dp (pehle jaisa); sub-1 → 4
+ * significant digits (0.000166 round-trip safe). Kabhi 0 nahi banta jab
+ * input khud non-zero hai. */
+function _pxRound(x) {
+  const n = Number(x);
+  if (!Number.isFinite(n)) return null;
+  if (Math.abs(n) >= 1) return +n.toFixed(2);
+  const r = +n.toPrecision(4);
+  return (r === 0 && n !== 0) ? n : r;
+}
 
 export function trackedSymbolsForToday() {
   return _state.signals
@@ -140,8 +154,16 @@ export function recordSignals(signals) {
     // v11.4 recheck: dedup must match PARTIAL rows too — once a row booked
     // T1 it escaped the OPEN-only lookup and the next scan opened a SECOND
     // row with the SAME id (symbol:dayKey), double-counting the trade.
+    // v21.4.1 [B4]: dedup ab MARKET-scoped bhi hai — CRYPTO (INR spot) aur
+    // FUTURES (USDT perp) dono boards same base symbols (BTC/ETH/SOL…)
+    // scan karte hain aur dono same UTC dayKey use karte hain. Purana
+    // symbol+dayKey dedup: (a) same-direction pe doosre desk ki row ko
+    // "refresh" me swallow kar leta tha (futures outcome feedback ZERO),
+    // (b) opposite-direction pe doosre desk ke USDT price pe INR row
+    // FLIP-close kar deta tha (domain-mix → catastrophic fake PnL).
     const existing = _state.signals.find(
-      s => s.symbol === sig.symbol && s.dayKey === sigDay && (s.status === 'OPEN' || s.status === 'PARTIAL')
+      s => s.symbol === sig.symbol && s.dayKey === sigDay
+        && (s.status === 'OPEN' || s.status === 'PARTIAL') && _marketOf(s) === market
     );
     if (existing) {
       if (existing.direction !== sig.direction) {
@@ -152,7 +174,9 @@ export function recordSignals(signals) {
         // (40/day cap burn, journal noise, whichever system polled last
         // "owned" the trade). A genuine flip still goes through (once per
         // symbol per 30 min); the churn between polls does not.
-        const flipKey = `${sig.symbol}|${sigDay}`;
+        // v21.4.1 [B4]: flip-guard key bhi market-scoped (cross-desk
+        // disagreement genuine flips ko mute nahi karti).
+        const flipKey = `${market}|${sig.symbol}|${sigDay}`;
         const lastFlip = _flipGuard.get(flipKey) || 0;
         if (Date.now() - lastFlip > 30 * 60_000) {
           _flipGuard.set(flipKey, Date.now());
@@ -203,7 +227,7 @@ function _openRow(sig, today, events, isFlip) {
     entry: sig.entry, stopLoss: sig.stopLoss,
     target1: sig.target1, target2: sig.target2,
     qtyPerLakh: sig.qtyPerLakh || 0,
-    risk: +(Math.abs(sig.entry - sig.stopLoss)).toFixed(2),
+    risk: _pxRound(Math.abs(sig.entry - sig.stopLoss)) ?? 0, // v21.4.1 [B5]: sub-cent safe
     confidence: sig.confidence, quantConfidence: sig.quantConfidence,
     aiModel: sig.aiModel || '', aiNote: sig.aiNote || '',
     counterTrend: !!sig.counterTrend,
@@ -216,8 +240,10 @@ function _openRow(sig, today, events, isFlip) {
     events: [{ ts: Date.now(), type: 'OPEN', price: sig.ltp }],
     exitPrice: null, closedAt: null,
     realizedPnlPerLakh: null, disciplinedPnlPerLakh: null, rMultiple: null,
-    // CRYPTO is 24/7 — there is no 15:00 IST fresh-entry cutoff.
-    lateEntry: market === 'CRYPTO' ? false : istMinutes() >= 15 * 60,
+    // CRYPTO/FUTURES/GLOBALFUTURES 24/7 hain — 15:00 IST fresh-entry cutoff
+    // sirf NSE ke liye hai (v21.4.1 [B5]: pehle sirf CRYPTO exempt tha —
+    // FUTURES/GLOBALFUTURES perp desks ko galat lateEntry mil raha tha).
+    lateEntry: (market === 'CRYPTO' || market === 'FUTURES' || market === 'GLOBALFUTURES') ? false : istMinutes() >= 15 * 60,
   };
   _state.signals.push(row);
   events.push({ type: isFlip ? 'FLIP' : 'OPEN', symbol: row.symbol, direction: row.direction, price: row.entry, confidence: row.confidence, market });
@@ -226,7 +252,7 @@ function _openRow(sig, today, events, isFlip) {
 
 function _closeRow(row, exitPrice, reason, events) {
   row.status = reason;
-  row.exitPrice = +(+exitPrice).toFixed(2);
+  row.exitPrice = _pxRound(exitPrice); // v21.4.1 [B5]: sub-cent exit 0.00 → fake full-loss ban
   row.closedAt = Date.now();
   row.lastPrice = row.exitPrice;
   row.events.push({ ts: Date.now(), type: reason, price: row.exitPrice });
@@ -263,7 +289,7 @@ function _computePnl(row) {
 // NOTE: uses LTP (not day high/low) because the swing stop sits
 // below the day low by construction — dayLow would false-trigger.
 // ------------------------------------------------------------
-export function evaluateTracked(quotes, events) {
+export function evaluateTracked(quotes, events, mktQuotes = null) {
   const m = istMinutes();
 
   // v11.4 recheck: RUNTIME reconcile — reconcileStale used to run at BOOT
@@ -281,10 +307,16 @@ export function evaluateTracked(quotes, events) {
     // Per-market day key: IST for NSE, UTC for crypto. Stale rows are
     // handled by reconcile — never mid-session here.
     if (row.dayKey !== dayKeyFor(market)) continue;
-    const q = quotes[row.symbol];
+    // v21.4.1 [B7]: market-qualified quote lookup — stream watcher ab per-desk
+    // keys (`FUTURES|BTC`) bhi bhejta hai. CRYPTO (INR spot) aur FUTURES
+    // (USDT perp) dono tracked rows same base symbol pe ho sakti hain;
+    // plain-key map first-write-wins INR de deta tha → futures row pe fake
+    // SL_HIT (8.6M vs 102k domain mix). Qualified key first, legacy plain
+    // key fallback (purane callers/tests).
+    const q = (mktQuotes && mktQuotes[`${market}|${row.symbol}`]) || quotes[row.symbol];
     const price = q?.price;
     if (!(price > 0)) continue;
-    row.lastPrice = +price.toFixed(2);
+    row.lastPrice = _pxRound(price);
 
     const isLong = row.direction === 'LONG';
     const hitSL = isLong ? price <= row.stopLoss : price >= row.stopLoss;

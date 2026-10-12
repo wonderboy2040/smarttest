@@ -346,7 +346,13 @@ export function expertScoreFactors({ tv, ltf, regime, market, smc = null, struct
   if (emaStackUp) trend += 30;
   else if (emaStackDown) trend -= 30;
   if (ltp > (num(ind.ema20) ?? ltp)) trend += 12; else trend -= 12;
-  const adx = num(ind.adx);
+  // v21.4.1 [B1]: ADX bhi MACD jaisa hi SHAPE trap tha — TV rows NUMBER
+  // dete hain, computeIndicatorsFromCandles OBJECT ({adx, plusDI, minusDI}).
+  // Merge ke baad LTF ka object tv ka number clobber karta tha → num(object)
+  // → NaN → null → ADX trend leg (±18/±10/−10) candles wale path pe KABHI
+  // nahi chalta tha. Dono shapes ab normalize hote hain.
+  const adxObj = ind.adx && typeof ind.adx === 'object' ? ind.adx : null;
+  const adx = adxObj ? num(adxObj.adx) : num(ind.adx);
   if (adx != null) trend += adx > 30 ? 18 : adx > 22 ? 10 : adx < 15 ? -10 : 0;
   trend = clamp(trend);
 
@@ -816,8 +822,16 @@ async function _runScan(mkt, opts = {}) {
         consensus: { confidence: scored.score, agreement: null, side: scored.side },
         votes: [{ dir: scored.side === 'LONG' ? 1 : -1, conf: scored.score }],
         ltp: scored.ltp, changePct: row?.changePct ?? null,
-        rsi: ltfInd?.rsi ?? null, adx: ltfInd?.adx ?? null,
+        // v21.4.1 [B1]: rsi/adx bhi object-shape normalize karke pass karo
+        // (ltfInd.adx ek {adx,…} OBJECT hai — probrain ko seedha dete the).
+        rsi: num(ltfInd?.rsi),
+        adx: (ltfInd?.adx && typeof ltfInd.adx === 'object') ? num(ltfInd.adx.adx) : num(ltfInd?.adx),
         atr, candles, regime, htf: ltfInd, ltf: ltfInd, ltfLabel: '15m', now: Date.now(),
+        // v21.4.1 [B2]: expert pick apne aap me 8-FACTOR composite hai —
+        // board ka single-voter quorum penalty (−25 + WATCH cap) is
+        // envelope pe apply hi nahi hota. Regime/extension/MTF/counter-tape
+        // ladders pehle ki tarah lagti hain (wahi intended tha).
+        quorumExempt: true,
       });
       // confAdj range is roughly [-25, +6]; apply to the score (the
       // 80+ STRONG bar becomes harder to clear when the setup fights
@@ -856,7 +870,11 @@ async function _runScan(mkt, opts = {}) {
       // filter hi expert picks pe port — same rule, same honesty.
       // ----------------------------------------------------------------
       let _chopCapped = false;
-      const _adxNow = ltfInd?.adx ?? null;
+      // v21.4.1 [B1]: _adxNow bhi object-shape normalize — ltfInd.adx HAMESHA
+      // {adx, plusDI, minusDI} object hota hai, purana `ltfInd?.adx < 15`
+      // NaN-compare (false) tha — isliye ye chop cap KABHI fire nahi hota
+      // tha aur ≈ CHOP chip kabhi render nahi hota tha.
+      const _adxNow = (ltfInd?.adx && typeof ltfInd.adx === 'object') ? num(ltfInd.adx.adx) : num(ltfInd?.adx);
       if (_adxNow != null && _adxNow < 15 && finalScore > 78) {
         finalScore = 78;
         _chopCapped = true;
@@ -871,6 +889,9 @@ async function _runScan(mkt, opts = {}) {
       return {
         symbol: base, market: mkt, side: scored.side, score: finalScore,
         grade: finalGrade,
+        // v21.4.1 [B6]: chop-cap marker — boardAiConfirm ka +2 confirm bump
+        // capped pick ko 80+ (STRONG badge bar) se PAAR nahi jaane deta.
+        __chopCapped: _chopCapped,
         ltp: pR(scored.ltp), changePct: row?.changePct ?? null,
         factors: scored.factors,
         smcReasons,

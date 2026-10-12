@@ -465,7 +465,7 @@ function SuperIntelStrip({ signal, si }: { signal: AISignal; si: SuperIntel }) {
 
 /** v6.12 PRO TRADER BRAIN — one honest chips row: quorum, MTF, regime,
  *  extension veto, session gate, stop style. The WHY behind the grade. */
-function QualityChips({ quality, voters, total }: { quality: NonNullable<AISignal['quality']>; voters: number | null | undefined; total: number }) {
+function QualityChips({ quality, voters, total, stopFloored }: { quality: NonNullable<AISignal['quality']>; voters: number | null | undefined; total: number; stopFloored?: boolean }) {
   const chips: Array<{ label: string; cls: string; title: string }> = [];
   const v = voters ?? 0;
   // quorum
@@ -499,6 +499,15 @@ function QualityChips({ quality, voters, total }: { quality: NonNullable<AISigna
   // extension veto
   if (quality.extension?.veto) chips.push({ label: '🚫 EXTENSION VETO', cls: 'bg-red-500/15 text-red-300 border-red-500/40', title: 'move already extended / RSI exhaustion — chase mat karo' });
   else if (quality.extension?.downgrade) chips.push({ label: 'EXT ⚠ extended', cls: 'bg-amber-500/10 text-amber-300 border-amber-500/30', title: 'entry thodi extended hai' });
+  // v21.4.1: v21.3.0 ke HARD-VETO stamps — backend pehle se bhejta tha par
+  // board pe kabhi render nahi hote the (card WATCH + score ≤62 bina kisi
+  // explanation ke dikhta tha). Expert picks panel me ≈ CHOP chip hai — ab
+  // board bhi wahi honesty dikhata hai.
+  if (quality.counterHtfVeto) chips.push({ label: '⛔ HTF VETO (1d/4h against)', cls: 'bg-red-500/15 text-red-300 border-red-500/40', title: 'Daily/4H consensus is signal ke AGAINST — hard veto: WATCH cap + AI score ≤62, TOP-5/LIVE se bahar' });
+  if (quality.chopRange) chips.push({ label: '≈ CHOP (range)', cls: 'bg-amber-500/15 text-amber-300 border-amber-500/40', title: '6-TF SPLIT ya ADX<15 — range-bound, 2R target structurally unreachable. WATCH cap + score ≤62' });
+  // v21.4.1: sub-noise stop floor — SL 0.6×ATR minimum tak floor hua tha
+  // (v21.3.0 accuracy fix ka UI promise, ab poora).
+  if (stopFloored) chips.push({ label: '🔒 SL FLOORED', cls: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30', title: 'structure stop sub-noise (0.6×ATR) se neeche tha — SL floor tak utha hua hai taki random wick SL na uda de' });
   // session (India only)
   const ses = quality.session;
   if (ses && !ses.tradeable) chips.push({ label: `⏰ ${ses.phase}`, cls: 'bg-amber-500/10 text-amber-300 border-amber-500/30', title: 'abhi fresh entry ka window nahi (opening noise / square-off / closed)' });
@@ -1498,7 +1507,7 @@ export const SignalCard = memo(function SignalCard({ signal, busy, onExecute, on
       </div>
 
       {/* v6.12 PRO TRADER BRAIN — quality chips: the honest WHY behind the grade */}
-      {signal.quality && <QualityChips quality={signal.quality} voters={signal.voters ?? signal.participating} total={signal.totalModels} />}
+      {signal.quality && <QualityChips quality={signal.quality} voters={signal.voters ?? signal.participating} total={signal.totalModels} stopFloored={signal.plan?.stopFloored} />}
 
       {/* v10.5 MTF CONFLUENCE (Upgrade 1) — the 5m/15m/1h tape reads
           + agreement % (India signals with the flag ON; renders nothing

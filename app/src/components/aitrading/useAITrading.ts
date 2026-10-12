@@ -99,6 +99,12 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
   // v7.0.2: board fetch failure state — a dead API used to render NOTHING
   // between the section header and the next section (silent hole).
   const [boardError, setBoardError] = useState(false);
+  // v21.4.1 [D3]: PER-MARKET board errors — purana boardError all-or-nothing
+  // tha: CoinDcxTab dono desks (FUTURES+GLOBALFUTURES) ek hi hook se padhta
+  // hai, ek desk 500 de aur doosra 200 → boardError false rehta hai aur
+  // fail hone wale desk ka section SILENT HOLE ban jaata tha (loading bhi
+  // nahi, unreachable panel bhi nahi). Ab har desk ka apna error flag hai.
+  const [boardErrors, setBoardErrors] = useState<Record<string, boolean>>({});
   // v10.5.3 REALTIME POSITIONS: feed mode + reconnect epoch
   const [positionsLive, setPositionsLive] = useState<PositionsFeed>(null);
   const [positionsEpoch, setPositionsEpoch] = useState(0);
@@ -131,6 +137,9 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
     const jobs: Array<Promise<void>> = [];
     let anyOk = false;
     const markOk = () => { anyOk = true; };
+    const markMkt = (m: string, ok: boolean) => {
+      setBoardErrors(prev => ((prev[m] ?? false) !== ok ? { ...prev, [m]: ok } : prev));
+    };
     // v18.5 FIX: a 304 (ETag revalidation of the byte-identical cached
     // board) is NOT a failure — it means "board unchanged, server healthy".
     // The old `r.ok ? r.json() : null` treated 304 as an error: state was
@@ -140,10 +149,15 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
     const boardJob = (m: string, setter: (b: unknown) => void) =>
       apiFetch(`${getProxyBase()}/api/ai/signals?${qs(m)}`, { signal: AbortSignal.timeout(timeoutMs) })
         .then(r => {
-          if (r.status === 304) { markOk(); return null; }
-          return r.ok ? r.json() : null;
+          if (r.status === 304) { markOk(); markMkt(m, false); return 'KEEP'; } // sentinel — state stays, healthy
+          if (!r.ok) return null;
+          return r.json().catch(() => null);
         }).catch(() => null)
-        .then(j => { if (j) { setter(j); markOk(); _notifyNewStrongs(m, j); } });
+        .then(j => {
+          if (j === 'KEEP') return; // 304 revalidation — board unchanged, healthy
+          if (j) { setter(j); markOk(); markMkt(m, false); _notifyNewStrongs(m, j); }
+          else markMkt(m, true); // v21.4.1 [D3]: fetch/parse fail — sirf YE desk error me
+        });
     if (markets.includes('INDIA')) jobs.push(boardJob('INDIA', setIndia as (b: unknown) => void));
     if (markets.includes('CRYPTO')) jobs.push(boardJob('CRYPTO', setCrypto as (b: unknown) => void));
     if (markets.includes('FUTURES')) jobs.push(boardJob('FUTURES', setFutures as (b: unknown) => void));
@@ -590,6 +604,10 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
 
   return {
     india, crypto, futures, globalFut, state, positions, entries, loading, busy, boardError,
+    /** v21.4.1 [D3]: per-market board errors — ek desk fail ho aur doosra
+     *  chal raha ho to CoinDcxTab sirf FAIL desk ka honest unreachable
+     *  panel dikhata hai (silent hole nahi). Key = market name. */
+    boardErrors,
     /** v10.5.3: 'stream' = SSE live push, 'poll' = REST fallback, null = flat. */
     positionsLive,
     refresh: loadBoards, executeSignal, updateConfig, killSwitch, closePos, fetchDeep,

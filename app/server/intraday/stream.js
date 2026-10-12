@@ -51,7 +51,7 @@ const INDEX_SYMBOLS = new Set([
 // poller, so 34 symbols × every 5s is still one digit % of the cache's
 // dedupe budget.
 const MAX_WATCH_NSE = 34;
-const MAX_WATCH_CRYPTO = 14;
+const MAX_WATCH_CRYPTO = 40; // v21.4.1 [C5]: 14 → 40 — fetch ek hi batched ticker round hai, slice sirf map-lookup tha; 14 ke baad wali tracked rows kabhi evaluate hi nahi hoti thi (reconcile zombies)
 
 let _deps = null;               // { fetchGrowwNseQuote, fetchCoinDcxTickers, sendTelegramRaw, escapeHtml, dispatchOutcomeAlert }
 // v10.13 (deep-recheck M4): per-market scan sets. The old single
@@ -172,8 +172,23 @@ export function watchSetForTests() {
   return _watchSet();
 }
 
+// v21.4.1: test hook — the market-qualified quote map (byMarket) is an
+// accountability-correctness contract (cross-desk BTC rows). Read-only
+// wrapper over the internal fetcher; deps inject via initIntradayStream.
+export function __fetchQuotesForTests(symMarket) {
+  return _fetchQuotes(symMarket);
+}
+
 async function _fetchQuotes(symMarket) {
   const out = {};
+  // v21.4.1 [C1]: market-qualified quote keys — har desk ki apni entry
+  // (`INDIA|RELIANCE`, `CRYPTO|BTC`, `FUTURES|BTC`, `GLOBALFUTURES|AAPL`).
+  // Plain `out` keys UI/paper/SSE ke liye pehle jaise first-write-wins
+  // hain (paper INR priority), par evaluateTracked ab qualified keys
+  // pe truth padhta hai — CRYPTO aur FUTURES dono desks ka same base
+  // symbol (BTC) kabhi cross-domain mix nahi karega.
+  const outM = {};
+  const QK = (mkt, s) => `${mkt}|${s}`;
   const india = [];
   const crypto = [];
   const futures = [];      // v21.3.0: USDT-perp tracked board rows
@@ -205,6 +220,7 @@ async function _fetchQuotes(symMarket) {
             price: q.price, change: q.change ?? 0, ts: Date.now(), src: 'groww-live',
             ...(q.upperCircuit > 0 && q.lowerCircuit > 0 ? { upperCircuit: q.upperCircuit, lowerCircuit: q.lowerCircuit } : {}),
           };
+          if (out[sym]) outM[QK('INDIA', sym)] = out[sym]; // v21.4.1 [C1]
         } catch { /* skip */ }
       }));
     }
@@ -223,7 +239,7 @@ async function _fetchQuotes(symMarket) {
         // labeled 'yahoo-delayed' (Groww serves stocks/ETFs only, and its
         // CASH/NIFTY endpoint serves a garbage index ltp — see the v9.5 note
         // above, verified live 19425 vs 23398).
-        if (q?.price > 0) out[sym] = { price: q.price, change: q.change ?? 0, ts: Date.now(), src: 'yahoo-delayed' };
+        if (q?.price > 0) { out[sym] = { price: q.price, change: q.change ?? 0, ts: Date.now(), src: 'yahoo-delayed' }; outM[QK('INDIA', sym)] = out[sym]; }
       } catch { /* skip */ }
     }));
   }
@@ -240,6 +256,7 @@ async function _fetchQuotes(symMarket) {
         const price = parseFloat(t?.last_price);
         if (price > 0) {
           out[sym] = { price, change: parseFloat(t.change_24_hour) || 0, ts: Date.now(), src: 'coindcx-inr' };
+          outM[QK('CRYPTO', sym)] = out[sym]; // v21.4.1 [C1]
         }
       }
     } catch { /* CoinDCX transient */ }
@@ -250,6 +267,8 @@ async function _fetchQuotes(symMarket) {
   // 2s-cached round the futures board rides; Binance-fut fallback built in).
   // Unit-mismatch (INR quotes vs USDT plans) is exactly why futures rows
   // were never trackable before.
+  // v21.4.1 [C4]: ts ab honest — futures row ka apna upstream ts (deep-stale
+  // serve 3min tak ho sakta hai) Date.now() se replace karke fresh dikhana jhooth tha.
   if (futures.length > 0) {
     try {
       const { fetchFuturesPrices } = await import('../ai/futures.js');
@@ -258,10 +277,37 @@ async function _fetchQuotes(symMarket) {
       for (const sym of futures) {
         const r = byBase.get(sym);
         const price = parseFloat(r?.last ?? r?.price);
-        if (price > 0) out[sym] = { price, change: parseFloat(r?.changePct) || 0, ts: Date.now(), src: 'coindcx-fut-usdt' };
+        if (price > 0) {
+          out[sym] = { price, change: parseFloat(r?.changePct) || 0, ts: Number.isFinite(r?.ts) ? r.ts : Date.now(), src: 'coindcx-fut-usdt' };
+          outM[QK('FUTURES', sym)] = out[sym]; // v21.4.1 [C1]
+        }
       }
     } catch { /* futures feed transient — rows stay unevaluated this tick */ }
   }
+  // v21.4.1 [C1] COLLISION REPAIR — ek base symbol CRYPTO bucket me bhi ho
+  // sakta hai (paper/tracked-crypto INR first-write-wins) AUR FUTURES desk
+  // pe bhi tracked (BTC/ETH/SOL…). Upar wali futures leg use miss kar degi
+  // (bucket classification). Tracked futures symbols jo kisi aur bucket me
+  // gaye, unke liye USDT quote SIRF qualified key pe — plain `out` me INR
+  // quote paper/UI ko milti rehti hai, FUTURES row ko apna USDT truth outM
+  // se milta hai. Wahi single-flight round share hota hai — koi extra
+  // upstream cost nahi.
+  try {
+    const trackedNow = watcherSymbolsByMarket();
+    const extraFut = [...new Set([...(trackedNow.futures || [])])]
+      .map(s => String(s).toUpperCase())
+      .filter(s => symMarket.get(s) !== 'FUTURES');
+    if (extraFut.length > 0) {
+      const { fetchFuturesPrices } = await import('../ai/futures.js');
+      const rows = await fetchFuturesPrices({ maxAgeMs: 5000 }).catch(() => null);
+      const byBase = new Map((Array.isArray(rows) ? rows : []).map(x => [String(x.base).toUpperCase(), x]));
+      for (const sym of extraFut) {
+        const r = byBase.get(sym);
+        const price = parseFloat(r?.last ?? r?.price);
+        if (price > 0) outM[QK('FUTURES', sym)] = { price, change: parseFloat(r?.changePct) || 0, ts: Number.isFinite(r?.ts) ? r.ts : Date.now(), src: 'coindcx-fut-usdt' };
+      }
+    }
+  } catch { /* transient — qualified keys optional hain */ }
   // v21.3.0: GLOBALFUTURES tracked rows — the USDC quote chain (CoinDCX
   // USDC RT → candle path → Finnhub → Yahoo; 5s-cached inside the module).
   if (global.length > 0) {
@@ -272,12 +318,17 @@ async function _fetchQuotes(symMarket) {
         for (const sym of global) {
           const row = m.get(sym);
           const price = parseFloat(row?.price);
-          if (price > 0) out[sym] = { price, change: parseFloat(row?.changePct) || 0, ts: Date.now(), src: 'global-usdc' };
+          // v21.4.1 [C4]: ts honest — row ka apna ts (Yahoo frozen-close
+          // bhi ab apne real ts se aayega, globalFutures.js fix ke saath).
+          if (price > 0) {
+            out[sym] = { price, change: parseFloat(row?.changePct) || 0, ts: Number.isFinite(row?.ts) ? row.ts : Date.now(), src: 'global-usdc' };
+            outM[QK('GLOBALFUTURES', sym)] = out[sym]; // v21.4.1 [C1]
+          }
         }
       }
     } catch { /* transient */ }
   }
-  return out;
+  return { quotes: out, byMarket: outM }; // v21.4.1 [C1]: qualified map saath me
 }
 
 async function _tick() {
@@ -296,7 +347,9 @@ async function _tick() {
     if (!_inWindow() && !hasCrypto) return;
     if (symMarket.size === 0) return;
 
-    const quotes = await _fetchQuotes(symMarket);
+    const quotesPack = await _fetchQuotes(symMarket);
+    const quotes = quotesPack.quotes;
+    const byMarket = quotesPack.byMarket; // v21.4.1 [C1]: per-desk truth
     const got = Object.keys(quotes).length;
     if (got === 0) {
       _failureStreak++;
@@ -370,8 +423,10 @@ async function _tick() {
     }
 
     // Outcome evaluation (tracked signals + paper trades).
+    // v21.4.1 [C1]: evaluateTracked ko market-qualified map bhi — same
+    // base symbol cross-desk (CRYPTO INR vs FUTURES USDT) ab kabhi mix nahi.
     const events = [];
-    try { evaluateTracked(quotes, events); } catch (e) { console.warn('[intraday-stream] track eval:', e?.message); }
+    try { evaluateTracked(quotes, events, byMarket); } catch (e) { console.warn('[intraday-stream] track eval:', e?.message); }
     try { evaluatePaper(quotes, events); } catch (e) { console.warn('[intraday-stream] paper eval:', e?.message); }
     // v11.1 GAP 2: circuit-limit watch — open equity paper positions
     // drifting toward an ADVERSE circuit (LONG→lower / SHORT→upper)

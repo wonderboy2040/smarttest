@@ -251,7 +251,10 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
       if (s.superIntel && Number.isFinite(Number(s.superIntel.aiScore))) {
         s.superIntel.aiScore = Math.min(97, Math.round(Number(s.superIntel.aiScore) + 3));
       } else if (Number.isFinite(Number(s.score))) {
-        s.score = Math.min(99, Math.round(Number(s.score) + 2));
+        // v21.4.1 [B6]: chop-capped expert pick (cap 78) ka +2 bump use 79 se
+        // upar nahi le ja sakta — 80+ STRONG badge bar crossed na ho jaye.
+        const _bump = s.__chopCapped ? Math.max(0, 79 - Number(s.score)) : 2;
+        s.score = Math.min(99, Math.round(Number(s.score) + _bump));
       }
     } else if (v === 'CONFLICT') {
       conflicted++;
@@ -265,6 +268,7 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
       // layer hai; committee ka directional view board context me rehta hai)
       if (String(s.grade || '').toUpperCase() === 'STRONG') {
         s.grade = 'ACTION';
+        s.executable = false; // v21.4.1: demote ke baad kabhi executable nahi
         s.summary = `${s.summary || ''} · AI-CONFLICT (Jev/Laya ulta)`;
       }
       // v20.9.3 parity: winProb should read the SAME capped score the card shows

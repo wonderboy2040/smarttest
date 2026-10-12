@@ -405,7 +405,12 @@ export async function futuresExecutePrecheck(opts) {
     gate('CoinDCX connection', coindcxConnected(), coindcxConnected() ? 'connected' : 'connect an API key');
 
     // ---- fresh signal read (no mutation) ----
-    const signal = typeof getFreshSignal === 'function' ? await getFreshSignal(pair, { mode: 'paper' }).catch(() => null) : null;
+    // v21.4.1 [C3]: mode 'paper' → 'live' — parity with the REAL execute
+    // gauntlet. Paper mode 10-min board fallback tak allow karta tha:
+    // modal "Fresh signal ✓ · 480s old" dikha sakta tha jabki actual execute
+    // (mode live) strict fresh deep-run hi leta hai (90s, no fallback).
+    // Precheck ab wahi source padhta hai jo order fire hone par chalega.
+    const signal = typeof getFreshSignal === 'function' ? await getFreshSignal(pair, { mode: 'live' }).catch(() => null) : null;
     const sigAgeMs = signal?.generatedAt ? Date.now() - Number(signal.generatedAt) : null;
     gate('Fresh signal', !!signal, signal ? `${signal.grade ?? '—'} · conf ${signal.confidence ?? '—'}% · ${sigAgeMs != null ? `${Math.round(sigAgeMs / 1000)}s old` : 'age n/a'}` : 'no fresh signal (deep/board feed down)');
     if (signal) {
@@ -436,7 +441,16 @@ export async function futuresExecutePrecheck(opts) {
       const marginUsed = r2(notionalUSDT / effLev);
       const liquidation = effLev > 1 && plan?.stopLoss != null
         ? pRound(signal.side !== 'SHORT' ? price * (1 - 0.95 / effLev) : price * (1 + 0.95 / effLev)) : null;
-      if (saneLev != null && lev > saneLev) out.warnings.push(`leverage auto-reduced ${lev}x → ${saneLev}x (liquidation would fire before the ${r2(slDistPct)}% SL)`);
+      if (saneLev != null && lev > saneLev) {
+        out.warnings.push(`leverage auto-reduced ${lev}x → ${saneLev}x (liquidation would fire before the ${r2(slDistPct)}% SL)`);
+        // v21.4.1 [C3]: LIVE execute is requested leverage pe HARD-REJECT
+        // karta hai (futures.js gauntlet) — par precheck sirf auto-reduce
+        // dikhata tha. Blocking gate FAIL = modal hi honestly bolta hai
+        // ki order nahi jaayega jab tak leverage kam nahi kiya jaata.
+        gate('Leverage sanity', false, `${lev}x par liquidation SL se PEHLE fire karegi — max ${saneLev}x (Risk settings me kam karo)`);
+      } else if (saneLev != null) {
+        gate('Leverage sanity', true, `${lev}x OK — SL ${r2(slDistPct)}% se pehle liquidation nahi`);
+      }
       if (meta?.minQty > 0 && qty < meta.minQty) out.warnings.push(`qty ${qty} below exchange minimum ${meta.minQty} — increase margin`);
       out.ticket = {
         pair, symbol: base, side: side || signal.side || null, price: pRound(price),

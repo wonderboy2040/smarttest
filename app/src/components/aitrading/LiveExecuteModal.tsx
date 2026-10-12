@@ -111,7 +111,19 @@ export function LiveExecuteModal({ signal, onPrecheck, onExecute, onClose }: Pro
           <div className="py-8 text-center text-xs text-slate-400">Gauntlet dry-run chal raha hai… (no order)</div>
         )}
 
-        {!loading && !result && (
+        {/* v21.4.1 [D4]: precheck UNAVAILABLE — server ne answer nahi diya
+            (500/timeout/network). Pehle empty checklist + disabled button
+            dikhta tha — ab honest error. Live order kabhi bhi bina
+            precheck ke nahi jaata, isliye ye modal band hone tak block hai. */}
+        {!loading && !pre && !result && (
+          <div className="mt-4 rounded-xl border border-red-500/40 bg-red-500/10 px-4 py-4 text-center" data-testid="precheck-unavailable">
+            <div className="text-xl mb-1">📡</div>
+            <div className="text-[11px] text-red-300 font-bold">Pre-flight check unavailable</div>
+            <div className="text-[10px] text-slate-500 mt-1 leading-relaxed">Server ne precheck ka answer nahi diya (network/timeout). Live order is modal se nahi ja sakta — dobara kholo ya console check karo.</div>
+          </div>
+        )}
+
+        {!loading && pre && !result && (
           <>
             {/* gate checklist */}
             <div className="mt-4 space-y-1.5" data-testid="precheck-gates">
@@ -168,7 +180,7 @@ export function LiveExecuteModal({ signal, onPrecheck, onExecute, onClose }: Pro
                 onTouchEnd={stopHold}
                 className="relative overflow-hidden flex-1 px-4 py-3 rounded-xl text-xs font-black text-white transition-opacity disabled:opacity-40 disabled:cursor-not-allowed select-none"
                 style={{ background: 'linear-gradient(to right, #059669, #0d9488)' }}
-                title={canExec ? 'REAL ORDER ke liye 1.2s TAK DABAKE RAKHO' : (blocking.length > 0 ? 'Gates fail — pehle unhe clear karo' : '…')}
+                title={canExec ? 'REAL ORDER ke liye 1.2s TAK DABAKE RAKHO' : (blocking.length > 0 ? 'Gates fail — pehle unhe clear karo' : (pre ? '…' : 'precheck unavailable'))}
                 data-testid="hold-to-confirm"
               >
                 <span
@@ -183,6 +195,9 @@ export function LiveExecuteModal({ signal, onPrecheck, onExecute, onClose }: Pro
                 Cancel
               </button>
             </div>
+            {pre?.error && (
+              <p className="mt-2 text-[10px] text-red-300/90 font-bold">Server error: {pre.error}</p>
+            )}
             {blocking.length > 0 && (
               <p className="mt-2 text-[10px] text-red-300/90">
                 {blocking.length} blocking gate(s): {blocking.map(g => g.name).join(', ')} — inhe clear karne ke baad hi live order possible hai.

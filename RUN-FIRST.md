@@ -4,6 +4,49 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.4.1 — TRADING-SIGNALS DEEP-RECHECK (accuracy + accountability fixes)
+
+**Full-site line-by-line audit se NIKLE 12+ real bugs fix — koi naya setup step NAHI hai.**
+Extract → bat double-click — sab pehle jaisa (v21.4.0 ka Laya sidecar setup bhi waisa hi).
+
+**1) Signal accuracy fixes (automatically live):**
+- **CHOP FILTER ab sach me kaam karta hai** — ADX<15 read ek object-shape bug se
+  DEAD tha (v21.3.0 se). Ab board + deep + expert picks teeno pe ADX padha jaata hai —
+  range-bound setup ka 2R target structurally unreachable hota hai isliye grade WATCH cap.
+- **DEEP-PATH HARD VETO** — board pe v21.3.0 ka counter-HTF veto tha par DEEP path
+  (jahan se LIVE execute ka signal aata hai) pe nahi tha. Ek board-vetoed signal deep
+  re-run pe STRONG 85 ban ke execute gauntlet pass kar sakta tha — ab nahi (board == deep == live).
+- **EXPERT PICKS blanket −25 penalty hataya** — har pick ko single-voter quorum penalty
+  mil rahi thi (80+ STRONG bar unreachable, sab picks WATCH + kam score). Ab 8-factor
+  composite ko board quorum ladder apply nahi hoti; regime/extension/counter-tape ladders
+  pehle jaisi lagti hain. **Ab 80+ STRONG picks dikh sakte hain.**
+- **Expert picks ≈ CHOP chip ab render hota hai** (cap 78 + AI-confirm bump use 80+ se paar nahi).
+- Board pe vetoed cards ab **WHY dikhate hain**: ⛔ HTF VETO / ≈ CHOP / 🔒 SL FLOORED chips
+  (pehle card bas WATCH + score ≤62 tha bina explanation).
+
+**2) Track-record / PnL fixes (accountability):**
+- **CRYPTO × FUTURES cross-desk collision** — BTC dono desks pe track hota hai (INR spot
+  + USDT perp). Purane dedup se: (a) futures rows "refresh" me swallow → zero outcome feedback,
+  (b) opposite direction pe INR row USDT price pe FLIP-close → fake catastrophic PnL.
+  Ab har desk ki apni row + apne domain quotes.
+- **Sub-cent prices ka fake full-loss ban** — SHIB/PEPE/BONK class exits 0.00 round hoti
+  thi → full-qty loss book hota tha (−₹16,600 on a ₹600 trade). Ab 4-significant-digit round.
+- Tracked crypto rows cap 14 → 40 (15th row se aage kabhi evaluate nahi hote the).
+
+**3) Feed honesty fixes:**
+- USDC candle cache ab stale-prune karta hai (90s+) — frozen prices pe SL/TP evaluation band.
+- Yahoo frozen-close ab apna REAL timestamp leke aata hai (fresh dikhna jhooth tha).
+- Futures precheck (LIVE modal) ab wahi strict fresh-signal source use karta hai jo real
+  order karega + **Leverage sanity blocking gate** (liquidation SL se pehle fire karti ho).
+
+**4) Kya verify karna (2 min):**
+- [ ] Signal board khologe → jo card WATCH me demoted ho uske chips me wajah dikhegi
+- [ ] Expert Picks panel → ab 80+ STRONG picks aa sakte hain (pehle sab ~75 WATCH)
+- [ ] TOP 5 me CONFLICT signals kabhi nahi (pehle se tha — locked)
+- [ ] LIVE EXECUTE modal → "Leverage sanity" gate red dikhega agar lev zyada ho
+
+---
+
 ## 🎯 v21.4.0 — LAYA SIDECAR (Watchdog ke saath Laya auto-boot)
 
 **1) Ab `Start-SmartAI-Watchdog.bat` double-click = site + Laya dono up.**

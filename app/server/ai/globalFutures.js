@@ -515,9 +515,15 @@ export async function fetchGlobalQuotes({ maxAgeMs = 5_000 } = {}) {
       const price = num(meta?.regularMarketPrice);
       const prev = num(meta?.chartPreviousClose ?? meta?.previousClose);
       if (price > 0) {
+        // v21.4.1 [C4]: ts HONEST — regularMarketPrice US hours ke bahar
+        // FROZEN last close hai (IST trader ke liye ~18h tak). Purana
+        // `ts: Date.now()` use fresh dikha deta tha; ab meta ka apna
+        // regularMarketTime (last trade, unix sec) use hota hai — watcher
+        // staleness checks aur consumers dono ko sach dikhta hai.
+        const rt = num(meta?.regularMarketTime);
         map.set(u.symbol, {
           symbol: u.symbol, price, changePct: prev > 0 ? ((price - prev) / prev) * 100 : 0,
-          source: 'yahoo', sim: false, ts: Date.now(),
+          source: 'yahoo', sim: false, ts: (rt != null && rt > 0) ? rt * 1000 : Date.now(),
         });
       }
     } catch { /* dead ticker → skipped honestly */ }
@@ -563,9 +569,33 @@ const GLOBAL_CANDLES_URL = 'https://public.coindcx.com/market_data/candlesticks'
 const GLOB_CANDLE_TTL_MS = 10_000;
 const GLOB_CANDLE_NEG_MS = 60_000;   // 403/network fail → 1 min off
 const GLOB_CANDLE_CONCURRENCY = 6;
-let _gcCache = new Map();            // BASE → { at, price, changePct }
+// v21.4.1 [C2]: serve-side staleness gate — candle entries 90s se purani
+// ho jaayein (9 consecutive refresh rounds fail) to PRUNE. Pehle negative
+// backoff window (60s) me _gcCache entries BINA age-check ke serve hoti
+// thi — RT + candle dono hosts same hain (public.coindcx.com), WAF block
+// pe dono saath jaate hain, aur chain candle se PEHLE Finnhub try karti
+// hai → minutes-to-hours purani USDC prices 'coindcx-usdc-candles' label
+// ke saath serve hoti rehti thi (fresh Finnhub uske AAGE kabhi nahi pahunch
+// paata tha). Prune hone par leg fall-through hota hai — SL/TP frozen
+// prices pe evaluate hona band.
+const GLOB_CANDLE_STALE_MS = 90_000;
+let _gcCache = new Map();            // BASE → { at, price, changePct, ts }
 let _gcDownUntil = 0;
 let _gcInflight = null;
+
+function _gcPruneStale() {
+  const cutoff = Date.now() - GLOB_CANDLE_STALE_MS;
+  for (const [k, v] of _gcCache) {
+    if (!v || !Number.isFinite(v.at) || v.at < cutoff) _gcCache.delete(k);
+  }
+  return _gcCache;
+}
+
+/** v21.4.1: test hook — seed the candle cache directly (prune-gate tests
+ * ke liye; __resetGlobalForTests ise clear karta hai). */
+export function __seedGcCacheForTests(entries) {
+  _gcCache = new Map(Object.entries(entries || {}));
+}
 
 async function _fetchOneUsdcCandle(base) {
   try {
@@ -601,7 +631,7 @@ export async function fetchGlobalUsdcCandleQuotes({ bases = null } = {}) {
     return !(hit && Date.now() - hit.at < GLOB_CANDLE_TTL_MS);
   });
   if (Date.now() < _gcDownUntil || fresh.length === 0) {
-    return _gcCache; // negative-cache / all-fresh — serve what we have
+    return _gcPruneStale(); // v21.4.1 [C2]: negative-cache / all-fresh — STALE-PRUNED serve (fresher fallbacks ko chance)
   }
   if (_gcInflight) return _gcInflight;
   const job = (async () => {
@@ -619,7 +649,7 @@ export async function fetchGlobalUsdcCandleQuotes({ bases = null } = {}) {
     // hard-fail round (WAF block) → back off 60s so a blocked network
     // costs one probe round per minute, not one per poll
     if (ok === 0 && fail > 0) _gcDownUntil = Date.now() + GLOB_CANDLE_NEG_MS;
-    return _gcCache;
+    return _gcPruneStale(); // v21.4.1 [C2]: successful round bhi stale keys sweep
   })();
   _gcInflight = job;
   try { return await job; } finally { _gcInflight = null; }

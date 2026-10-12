@@ -90,7 +90,10 @@ describe('A. reversalEngine — LIVE leg position-id + native SL honesty [v20.9.
 describe('B. meta-ensemble — wired in production, capped in honesty [v20.9.4 H2]', () => {
   it('board FINAL aggregation site is meta-aware (aggregateVotesWithMeta)', () => {
     const boardSite = src.sig.slice(src.sig.indexOf('_computeBoard'));
-    expect(boardSite).toMatch(/aggregateVotesWithMeta\(votes, gatesFor\(depsSafe\)/);
+    // v21.4.1 [A2]: votes ab _rediscountRevivedVotes() se wrapped hain —
+    // final-loop me injected tape/pattern/sr seats bhi correlation
+    // discount pay karte hain (deep-path parity). Meta-awareness intact.
+    expect(boardSite).toMatch(/aggregateVotesWithMeta\(_rediscountRevivedVotes\(votes\), gatesFor\(depsSafe\)/);
   });
   it('deep FINAL aggregation site is meta-aware too', () => {
     const deepSite = src.sig.slice(src.sig.indexOf('_computeDeepSignal'));

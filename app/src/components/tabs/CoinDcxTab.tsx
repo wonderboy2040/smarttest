@@ -235,7 +235,7 @@ export default memo(function CoinDcxTab() {
   // board (AAPL/GOOGL/NVDA/…/SPACEX). v21.0.5 USER SPEC: SPOT (CRYPTO)
   // board fetch REMOVED — sirf Futures USDT + Equity SIM boards.
   const t = useAITrading(true, { markets: ['FUTURES', 'GLOBALFUTURES'] });
-  const { futures, globalFut, state, positions, entries, loading, busy, refresh, refreshPositions, executeFutures, futuresPrecheck, executeGlobal, updateConfig, closePos, fetchDeep, boardError, positionsLive, rescan, rescanning } = t;
+  const { futures, globalFut, state, positions, entries, loading, busy, refresh, refreshPositions, executeFutures, futuresPrecheck, executeGlobal, updateConfig, closePos, fetchDeep, boardError, boardErrors, positionsLive, rescan, rescanning } = t;
   const { fetchAlertsStatus, saveAlertsConfig, testAlert } = t;
   // v21.0.5 USER SPEC: SPOT desk COMPLETELY REMOVED — sirf GLOBAL
   // FUTURES (USDT perps) + EQUITY SIM (USDC) desks. Default: FUTURES.
@@ -661,8 +661,12 @@ export default memo(function CoinDcxTab() {
             </div>
           )}
           {/* v7.0.2: network/API failure used to render NOTHING here (silent
-              hole between sections) — now an honest unreachable panel. */}
-          {!loading && !board && boardError && (
+              hole between sections) — now an honest unreachable panel.
+              v21.4.1 [D3]: PER-DESK error — FUTURES aur GLOBALFUTURES dono
+              boards ek hi hook se aate hain; ek desk fail ho to SIRF wahi
+              section error dikhata hai (dusra desk apna data dikhata rehta
+              hai), silent hole bilkul nahi. */}
+          {!loading && !board && (boardError || boardErrors?.[desk === 'FUTURES' ? 'FUTURES' : 'GLOBALFUTURES']) && (
             <div className="quantum-panel rounded-2xl p-6 col-span-full text-center border border-red-500/20">
               <div className="text-3xl mb-2">📡</div>
               <div className="text-sm text-red-400 font-bold">Signal board unreachable</div>

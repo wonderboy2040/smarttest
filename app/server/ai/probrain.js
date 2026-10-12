@@ -368,6 +368,15 @@ export function structureStop({ candles, side, ltp, atr, maxAtrMult = 2.2, noise
 export function qualityVerdict({
   market, side, _consensus, votes, ltp, changePct, rsi, adx, atr,
   candles, regime, htf, ltf, ltfLabel, now,
+  // v21.4.1 [B2]: quorumExempt — callers jo apna MULTI-FACTOR composite
+  // score pass karte hain (expert picks ka 8-factor envelope) ek
+  // synthetic single vote ke sath. Board ka quorum ladder (≤1 voter →
+  // confAdj −25 + gradeCap WATCH) 12-model committee ke liye hai — ek
+  // composite-factors caller pe ye HAR pick ko blanket −25 de deta tha
+  // aur EXPERT_MIN_STRONG=80 unreachable ho jaata tha (sab picks WATCH).
+  // Exempt callers ko sirf wahi ladders milti hain jo unke liye meant
+  // hain: regime / extension / MTF / counter-tape / session / structure.
+  quorumExempt = false,
 }) {
   const mkt = String(market || 'INDIA').toUpperCase();
   const reasons = [];
@@ -376,8 +385,9 @@ export function qualityVerdict({
   // --- quorum (the fake-consensus killer) ---
   const voters = (votes || []).filter(v => v && v.dir !== 0 && (v.conf || 0) > 0).length;
   const total = (votes || []).length || 9;
-  flags.quorum = { voters, total };
-  if (voters <= 1) reasons.push(`⚠ sirf ${voters} model vote kar raha hai — consensus NAHI, single-factor signal`);
+  flags.quorum = { voters, total, ...(quorumExempt ? { exempt: true } : {}) };
+  if (quorumExempt) reasons.push('expert composite (multi-factor score) — board quorum ladder N/A');
+  else if (voters <= 1) reasons.push(`⚠ sirf ${voters} model vote kar raha hai — consensus NAHI, single-factor signal`);
   else if (voters === 2) reasons.push(`⚠ ${voters} models voting — weak quorum`);
   else reasons.push(`${voters}/${total} models voting — quorum OK`);
 
@@ -424,15 +434,15 @@ export function qualityVerdict({
       ? '🛑 COUNTER-TAPE hard: 15m tape momentum ke against trade — STRONG/ACTION banned, tape roll hone do (sirf WATCH)'
       : '⚠ counter-tape: 15m tape against hai par stall ho raha hai — ACTION max (STRONG banned)');
   }
-  if (voters === 2) confAdj -= 6;
-  else if (voters <= 1) confAdj -= 25;
+  if (voters === 2 && !quorumExempt) confAdj -= 6;
+  else if (voters <= 1 && !quorumExempt) confAdj -= 25;
 
   // --- grade caps (the honesty ladder) ---
   // extension veto or single-voter quorum or untradeable session or
   // hard counter-MTF → never above WATCH
   let gradeCap = 'STRONG';
   if (ext.veto) { gradeCap = 'WATCH'; flags.veto = 'extension'; }
-  else if (voters <= 1) { gradeCap = 'WATCH'; flags.veto = 'quorum'; }
+  else if (voters <= 1 && !quorumExempt) { gradeCap = 'WATCH'; flags.veto = 'quorum'; }
   if (gradeCap === 'STRONG') {
     // v6.12: 2 voters = watchlist note, not a trade (quorum cap 54
     // already keeps confidence under the ACTION line — cap it here too

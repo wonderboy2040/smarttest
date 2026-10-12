@@ -73,6 +73,31 @@ import { discoverSpotUniverse, discoverFuturesUniverse, binancePriceMap, fetchUs
 import { validateTick } from './wickFilter.js';
 
 /**
+ * v21.4.1 [deep-recheck A1]: ADX value normalizer — number | string |
+ * {adx, plusDI, minusDI} object teeno shapes se ek honest number.
+ *
+ * BUG jo ye fix karta hai: `ctx.ind.adx` har desk pe OBJECT hai
+ * ({adx, plusDI, minusDI} — tvToInd, computeIndicatorsFromCandles aur
+ * buildGlobalCtxSync teeno object form bhejte hain). Purana read
+ * `parseFloat(String(object))` → NaN → null karta tha — isliye v21.3.0
+ * ka "ADX < 15 → chop cap" leg KABHI fire nahi hota tha (sirf SPLIT
+ * phase leg kaam karta tha). Board + deep + expert picks — teeno
+ * ab isi normalizer ko padhte hain.
+ */
+export function readAdxNum(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (v && typeof v === 'object' && v.adx != null) {
+    const n = Number(v.adx);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (typeof v === 'string') {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
  * v21.1.1 [audit C2]: REVIVED VOTES ko correlation discount dobara lagao.
  * Pass-1 `applyCoreCorrelationDiscounts` pass-2 revival (smc/structure/
  * tape/pattern… splice+push) se PEHLE chalta hai — revived vote fresh
@@ -1905,7 +1930,15 @@ async function _computeBoard(mkt, deps, opts = {}) {
     // wahan weighted hi rahte hain (cost + council ko stable input).
     // Circuit breaker (5 min) service-down pe per-symbol timeout tax
     // rokta hai — sequential board loop safe.
-    let consensus2 = await aggregateVotesWithMeta(votes, gatesFor(depsSafe), {
+    let consensus2 = await aggregateVotesWithMeta(_rediscountRevivedVotes(votes), gatesFor(depsSafe), {
+      // v21.4.1 [deep-recheck A2]: FINAL board aggregation par bhi revived-vote
+      // rediscount — tape/pattern/sr/volume/council votes isi final loop me
+      // inject hote hain (pass-1 ke baad), aur _rediscountRevivedVotes sirf
+      // pass-1 (:1650) pe lagta tha — tape seat (w 1.3/1.6, trend↔tape PRIMARY
+      // dedup pair) board consensus me HAMESHA full weight pe vote karta
+      // tha. Deep path pe tape injection pre-council rediscount se PEHLE hota
+      // hai (covered tha); board ab bhi covered. Helper idempotent hai —
+      // pass-1 wale already-discounted votes untouched rehte hain.
       // v10.5 MTF CONFLUENCE CAP: a 5m/15m/1h disagreement (< 0.67)
       // bans the STRONG badge at the consensus layer (the plan's
       // "max MODERATE" — ACTION in this ladder).
@@ -2038,9 +2071,10 @@ async function _computeBoard(mkt, deps, opts = {}) {
           //  WATCH cards board pe dikhte hain (context) par 80+ badge,
           //    LIVE execute gate aur TOP-5 eligibility teeno se bahar.
           // ---------------------------------------------------------
-          const adxNow = (v => { const n = typeof v === 'number' ? v : parseFloat(String(v ?? '')); return Number.isFinite(n) ? n : null; })(c.ctx.ind?.adx);
+          const adxNow = readAdxNum(c.ctx.ind?.adx); // v21.4.1 [A1]: object-form {adx,…} bhi ab padhta hai
           const counterHtfHit = VETO_COUNTER_HTF && mtf6.counterHtf === true;
           const chopHit = VETO_CHOP && (mtf6.phase === 'SPLIT' || (adxNow != null && adxNow < 15));
+
           if (counterHtfHit || chopHit) {
             const why = counterHtfHit ? 'HTF VETO (1d/4h against)' : 'CHOP FILTER (range)';
             _htfVetoed = counterHtfHit;
@@ -2249,7 +2283,7 @@ async function _computeBoard(mkt, deps, opts = {}) {
             const patch = ultrafastGatePatch(uv, s);
             if (patch) {
               s.superIntel = patch.superIntel;
-              if (patch.grade) s.grade = patch.grade;
+              if (patch.grade) { s.grade = patch.grade; s.executable = false; } // v21.4.1: UCV-demote ke baad kabhi executable nahi
               s.ucRejected = true; // visible flag for logs/tests
               // v20.9.3 FIX (L): winProb was computed from the PRE-CAP
               // aiScore — a REJECTED card showed "aiScore 64 · P(win)
@@ -2578,7 +2612,10 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
     // ctx too — the 15m tape fetch below reads ctx.__tv for its
     // cross-domain fallback anchor (board parity: the board path always
     // passes c.ctx.__tv; the deep path used to send null).
-    if (tv?.[sym]) ctx.__tv = tv[sym];
+    // v21.4.1 [A4]: ctx NULL ho sakta hai (buildFuturesCtxSync ltp/ind
+    // unusable hone par null return karta hai) — India branch guard karta
+    // tha, ye nahi karta tha → TypeError → /api/ai/deep 500.
+    if (ctx && tv?.[sym]) ctx.__tv = tv[sym];
   } else if (mkt === 'GLOBALFUTURES') {
     // v10.4: the deep dive on a global name — quotes + candles from the
     // desk's own feed (Yahoo for the real names, synthetic for SPACEX).
@@ -2625,7 +2662,8 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
     // card HAD the tape vote (board passes c.ctx.__tv). Degraded candle
     // conditions = board ≠ gate = vetoes the user reads as "direction
     // galat". The board card and the deep card now vote identically.
-    if (tv?.[sym]) ctx.__tv = tv[sym];
+    // v21.4.1 [A4]: ctx null guard (bharosa India branch jaisa hi).
+    if (ctx && tv?.[sym]) ctx.__tv = tv[sym];
   } else {
     const tv = await fetchTVIndiaBatch([sym]).catch(() => ({}));
     if (tv[sym]) {
@@ -2940,6 +2978,9 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
   // ALIGNED). The deep conf/grade get the same adjustment ladder as the
   // board path, and the deep modal's MTF strip carries per-TF detail.
   // -----------------------------------------------------------------
+  // v21.4.1 [A5]: deep-path veto score cap (62) — computeSuperScore tak
+  // thread hota hai, bilkul board ke _scoreCap jaisa.
+  let _deepScoreCap = null;
   try {
     const mtf6 = await buildMTFSnapshot(sym, mkt, { side: consensus.side, ltp: ctx.ltp });
     if (mtf6?.ok) {
@@ -2958,6 +2999,43 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
           built.confidence = consensus.confidence;
           built.grade = consensus.grade;
           built.summary = consensus.summary;
+        }
+      }
+      // -------------------------------------------------------------
+      // v21.4.1 [deep-recheck A5] HARD HTF VETO + CHOP FILTER (deep path).
+      // Board pe v21.3.0 se ye vetoes hain (counter-htf → WATCH + cap 62;
+      // SPLIT/ADX<15 → WATCH + cap 62) par DEEP path pe sirf conf ladder
+      // thi — aur deep hi LIVE exec gauntlet ka signal source hai
+      // (getFreshSignalForExec → getDeepSignal). Ek board-vetoed signal
+      // deep re-run pe STRONG 85 ban ke execute gauntlet pass kar sakta
+      // tha — exactly the "SAB SL hit" class the veto closes. Board ==
+      // deep == live ab ek hi rulebook pe chalte hain.
+      // -------------------------------------------------------------
+      if (consensus.dir !== 0) {
+        const adxNowD = readAdxNum(ctx.ind?.adx);
+        const counterHtfHitD = VETO_COUNTER_HTF && mtf6.counterHtf === true;
+        const chopHitD = VETO_CHOP && (mtf6.phase === 'SPLIT' || (adxNowD != null && adxNowD < 15));
+        if (counterHtfHitD || chopHitD) {
+          const whyD = counterHtfHitD ? 'HTF VETO (1d/4h against)' : 'CHOP FILTER (range)';
+          const rankOfD = { NEUTRAL: 0, WATCH: 1, ACTION: 2, STRONG: 3 };
+          if ((rankOfD[consensus.grade] ?? 0) > rankOfD.WATCH) {
+            consensus = { ...consensus, grade: 'WATCH', summary: `${consensus.summary} · ${whyD}` };
+          }
+          if (quality) {
+            quality = {
+              ...quality,
+              veto: counterHtfHitD ? 'counter-htf' : 'chop-range',
+              ...(counterHtfHitD ? { counterHtfVeto: true } : {}),
+              ...(chopHitD ? { chopRange: true } : {}),
+            };
+          }
+          if (built && typeof built === 'object') {
+            built.grade = consensus.grade;
+            built.summary = consensus.summary;
+            if (quality) built.quality = quality;
+            built.executable = false; // v21.4.1: demote ke baad kabhi executable nahi
+          }
+          _deepScoreCap = 62; // superIntel cap — 80+ badge LIVE path pe bhi banned
         }
       }
       if (mtf6.structureStop?.sl && !structureStopOpt && consensus.dir !== 0) {
@@ -3014,6 +3092,9 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
         quality,
         agreement: consensus.agreement,
         counterTrend: !!(quality?.regime?.counterTrend),
+        // v21.4.1 [A5]: deep-path hard-veto cap — board jaisa hi 62 bound
+        // (deep hi LIVE exec ka signal source hai).
+        cap: _deepScoreCap,
       });
       const atrD = ltfInd?.atr ?? ctx.ind?.atr ?? null;
       const blueprintD = buildSuperBlueprint({
