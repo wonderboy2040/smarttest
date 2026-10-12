@@ -27,8 +27,13 @@ import { evaluateTracked, watcherSymbolsByMarket } from './trackRecord.js';
 import { trackSseWrite } from '../ai/bandwidth.js';
 import { evaluatePaper, paperSymbolsByMarket, injectOptionPaperQuotes, optionUnderlyingsForWatcher, paperCircuitWatch } from './paperTrading.js';
 import { getMarketRegime, getCryptoRegime } from './regime.js';
+import { growwApiLtp, growwApiArmed } from '../ai/growwApi.js';
 
-const POLL_MS = 5000;
+// v21.6 ULTRAFAST: 5s → 3s — quotes ride the SHARED micro-caches
+// (growwQuote 1.5s public / growwApi 1s official / CoinDCX 2s ticker),
+// so the faster loop costs ~zero extra upstream; outcome evaluation
+// (T1/T2/SL/trail/EOD) now reacts within 3s of a level print.
+const POLL_MS = 3000;
 const BACKOFF_MS = 30000;
 const FAILURE_STREAK_LIMIT = 3;
 // v9.5: index symbols the option paper-trades re-price from (Groww has
@@ -92,7 +97,7 @@ export function initIntradayStream(deps) {
   if (_timer) return;
   _timer = setInterval(_tick, POLL_MS);
   if (typeof _timer.unref === 'function') _timer.unref();
-  console.log('[intraday-stream] watcher initialised (5s cadence, NSE-hours gated + 24/7 CRYPTO)');
+  console.log('[intraday-stream] watcher initialised (3s cadence, NSE-hours gated + 24/7 CRYPTO)');
 }
 
 export function setScanSymbols(symbols, market = 'INDIA') {
@@ -199,20 +204,36 @@ async function _fetchQuotes(symMarket) {
     else (mkt === 'CRYPTO' ? crypto : india).push(sym);
   }
 
-  // INDIA: Groww NSE quotes (≤34 watcher symbols in ONE parallel round —
-  // the server-side Groww micro-cache de-dupes these against the
-  // /api/quote poll flood).
+  // INDIA: OFFICIAL Groww Trading-API LTP tier first (v21.6) — ONE batched
+  // call (≤50 syms) at 1s freshness when GROWW_API_KEY+SECRET are set; the
+  // per-symbol public Groww quote fills the rest (≤34 watcher symbols in
+  // ONE parallel round — the server-side Groww micro-cache de-dupes these
+  // against the /api/quote poll flood).
   // v10.12 (#1 source transparency): every quote is tagged with the
   // upstream that actually served it — the intraday signal cards render
   // the Groww·live / Yahoo·delayed pill from this field (LiveQuote.src →
-  // LiveSourceBadge). Groww → 'groww-live'; indices below → 'yahoo-delayed';
-  // crypto → 'coindcx-inr'.
+  // LiveSourceBadge). Groww → 'groww-live'; API → 'groww-api'; indices
+  // below → 'yahoo-delayed'; crypto → 'coindcx-inr'.
+  const apiLtp = (india.length && growwApiArmed())
+    ? await growwApiLtp(india.slice(0, MAX_WATCH_NSE)).catch(() => new Map())
+    : new Map();
   if (india.length && typeof _deps.fetchGrowwNseQuote === 'function') {
     for (let i = 0; i < Math.min(india.length, MAX_WATCH_NSE); i += 24) {
       const batch = india.slice(i, i + 24);
       await Promise.allSettled(batch.map(async (sym) => {
         try {
+          // Tier 1: official 1s LTP (price) + public quote (change/band)
+          const ltp = apiLtp.get(sym);
           const q = await _deps.fetchGrowwNseQuote(sym);
+          if (ltp > 0) {
+            out[sym] = {
+              price: ltp, change: q?.change ?? 0, ts: Date.now(), src: 'groww-api',
+              ...(q?.upperCircuit > 0 && q?.lowerCircuit > 0 ? { upperCircuit: q.upperCircuit, lowerCircuit: q.lowerCircuit } : {}),
+            };
+            outM[QK('INDIA', sym)] = out[sym];
+            return;
+          }
+          // Tier 2: public Groww quote
           // v11.1 GAP 2: Groww's day price band (upper/lower circuit) rides
           // the quote through to the circuit-limit watch — same fetch,
           // zero extra upstream cost. Absent bands → fields simply omitted.

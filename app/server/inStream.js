@@ -1,29 +1,28 @@
 // ============================================================
 // inStream — server-side INDIA equity/ETF push into liveFeed (/api/stream)
 // ------------------------------------------------------------
-// 2026 realtime audit (RC5): the main SSE stream previously had ZERO
-// server-side sources for Indian equities — only US_ (Finnhub) and crypto
-// IN_ (CoinDCX) ticks were written to liveFeed. India realtime relied
-// entirely on the browser TradingView WebSocket, which is blocked on many
-// office/campus networks → "India prices not streaming" in those conditions.
-//
-// This module closes that gap with the same self-managing lifecycle as
-// cryptoStream: polls Groww NSE live quotes every 3s ONLY while SSE clients
-// are connected AND the NSE window is open (09:15–15:40 IST). Indices
-// (NIFTY/BANKNIFTY/… — Groww has no index quotes) fall back to Yahoo.
-// Outside NSE hours a one-shot refresh per newly-subscribed symbol still
-// seeds the SSE snapshot so a freshly-loaded site paints India prices.
-//
-// All upstream calls go through the injected deps from index.js, which are
-// 3s micro-cached there — the 3s poll is shared with the browser pollers,
-// so N SSE clients still cost ONE upstream round-trip per symbol.
+// v21.6 ULTRAFAST REALTIME pass:
+//   • POLL_MS 3000 → 1000 — India SSE pushes at 1Hz, the same cadence
+//     as the US TV-batch and crypto spot-WS streams. Price freshness is
+//     bounded by the upstream tier, not the loop:
+//       tier 1  growwApi.js (env GROWW_API_KEY+SECRET) — OFFICIAL
+//               Trading-API batched LTP at 1s freshness for up to 50
+//               symbols per call (docs limits: 10 req/s, 300/min).
+//       tier 2  growwQuote.js public CDN per-symbol quotes, micro-
+//               cached 1.5s (live-verified 20 req/s tolerance).
+//       tier 3  Yahoo (indices + misses) — honest 'yahoo-delayed'.
+//   • Groww has NO websocket (live-verified 2026-10-12: socket.io and
+//     /v1/stream both 404; Trading API docs are REST-only) — the 1s
+//     API tier above IS the fastest direct-Groww path that exists.
 // ============================================================
 import { setTick } from './liveFeed.js';
+import { growwApiLtp, growwApiArmed, growwApiQuote } from './ai/growwApi.js';
 
-// 2026-09 ultra-fast pass: 5s → 3s — India ticks at the same cadence as the
-// US TV-batch stream. Upstream cost is absorbed by the shared 3s Groww
-// micro-cache in index.js, so N SSE clients still cost ONE round-trip/symbol.
-const POLL_MS = 3000;
+// v21.6: 1s cadence — the SSE wire's own per-symbol throttle
+// (1 update/sec in index.js) is the effective cap; this loop reads the
+// SHARED caches (growwApi 1s / growwQuote 1.5s) so N SSE clients still
+// cost ONE upstream round-trip per symbol per window.
+const POLL_MS = 1000;
 const BACKOFF_MS = 30000;
 const FAILURE_STREAK_LIMIT = 3;
 const BATCH = 24;
@@ -106,29 +105,81 @@ export function initInStream(deps) {
 }
 
 // ---------------------------------------------------------------
-// Quote fetch: Groww first (genuine NSE LTP, stocks + ETFs), Yahoo for
-// indices / Groww misses. Both are micro-cached in index.js (3s shared).
-//
-// v10.12 (#1 source transparency): every tick carries WHICH upstream
-// served it — the wire label is liveFeed's `source` field and the values
-// are the plan's canonical India tags:
-//   'groww-live'      Groww NSE served the tick (the app-parity LTP)
-//   'yahoo-delayed'   the Yahoo fallback served it (indices — Groww has
-//                     no index quotes — or a Groww miss)
-// The browser maps them to the Groww·live / Yahoo·delayed pills via
-// LiveSourceBadge; the TradingView browser socket tags its own ticks
-// 'tv-ws' (tvWebsocket.ts) so all three India paths are honest.
+// Quote fetch — the ultrafast tier ladder:
+//   1. OFFICIAL growwApi batched LTP (1s fresh) for the raw price,
+//      enriched by whatever the shared public-quote cache last served
+//      (h/l/vol/prevClose) — source 'groww-api'.
+//   2. Public Groww quote (1.5s micro-cache, genuine NSE LTP for stocks
+//      + ETFs) — source 'groww-live'.
+//   3. Yahoo for indices / Groww misses — source 'yahoo-delayed'.
+//   Wire labels are liveFeed's `source` field; the browser maps them to
+//   the LiveSourceBadge pills (Groww·live / Yahoo·delayed etc).
 // ---------------------------------------------------------------
+// v21.6: the API tier's last successful batch (symbol -> ltp), kept by
+// _tick() — a per-symbol enrich source for high/low/prevClose so the
+// 1s API ticks still carry full quote context without a quote call each.
+const _apiLast = new Map(); // sym -> { price, at }
+
 async function _fetchInQuote(sym) {
   // v10.12.1: indices skip Groww ENTIRELY (garbage stale ltp — see the
   // INDEX_SYMBOLS note above) and go straight to the Yahoo fallback, which
   // serves them honestly labeled 'yahoo-delayed'.
-  if (!INDEX_SYMBOLS.has(sym) && typeof _deps?.fetchGrowwNseQuote === 'function') {
+  if (INDEX_SYMBOLS.has(sym)) {
+    if (typeof _deps?.fetchYahooQuote === 'function' && typeof _deps?.toYahooSymbol === 'function') {
+      try {
+        const ysym = _deps.toYahooSymbol(sym, 'IN');
+        const q = await _deps.fetchYahooQuote(ysym);
+        if (q && q.price > 0) return { q, source: 'yahoo-delayed' };
+      } catch { /* give up this round */ }
+    }
+    return null;
+  }
+  // ---- tier 1: official Trading-API LTP (1s fresh) ----
+  if (growwApiArmed()) {
+    const ltp = _apiLast.get(sym);
+    if (ltp && ltp.price > 0 && Date.now() - ltp.at <= 2500) {
+      // Enrich with h/l/vol/prevClose — the OFFICIAL quote endpoint first
+      // (30s-cached in growwApi, so the paid tier does the work), the
+      // public per-symbol quote only when the API quote missed. A bare
+      // LTP is still a complete-enough tick for the 1s push.
+      let base = {
+        price: ltp.price, change: 0, high: ltp.price, low: ltp.price,
+        volume: 0, time: ltp.at, prevClose: undefined,
+      };
+      try {
+        const apiQ = await growwApiQuote(sym);
+        if (apiQ && apiQ.price > 0) {
+          base = {
+            ...base,
+            change: apiQ.change || 0,
+            high: apiQ.high || base.high,
+            low: apiQ.low || base.low,
+            volume: apiQ.volume || 0,
+            prevClose: apiQ.prevClose,
+          };
+        } else {
+          const pub = await _deps?.fetchGrowwNseQuote?.(sym);
+          if (pub && pub.price > 0) base = {
+            ...base,
+            change: pub.change || 0,
+            high: pub.high || base.high,
+            low: pub.low || base.low,
+            volume: pub.volume || 0,
+            prevClose: pub.prevClose,
+          };
+        }
+      } catch { /* enrichment is best-effort */ }
+      return { q: base, source: 'groww-api' };
+    }
+  }
+  // ---- tier 2: public Groww quote ----
+  if (typeof _deps?.fetchGrowwNseQuote === 'function') {
     try {
       const q = await _deps.fetchGrowwNseQuote(sym);
       if (q && q.price > 0) return { q, source: 'groww-live' };
     } catch { /* fall through */ }
   }
+  // ---- tier 3: Yahoo fallback ----
   if (typeof _deps?.fetchYahooQuote === 'function' && typeof _deps?.toYahooSymbol === 'function') {
     try {
       const ysym = _deps.toYahooSymbol(sym, 'IN');
@@ -229,13 +280,30 @@ function _stop() {
 // ---------------------------------------------------------------
 async function _tick() {
   // v10.13: a slow Groww round (24-symbol batches × retries) can exceed the
-  // 3s interval — overlapping ticks stack upstream load exactly when the
+  // poll interval — overlapping ticks stack upstream load exactly when the
   // upstream is unhealthy. Skip while one is still in flight.
   if (_ticking) return;
   _ticking = true;
   try {
     if (_activeClients === 0 || _subscribed.size === 0) return;
     if (!nseWindow()) { _stop(); _scheduleNextOpen(); return; }
+
+    // v21.6 tier-1 pre-fill: ONE official batched LTP round for every
+    // subscribed non-index symbol (≤50/call, 1s-cached, in-flight deduped
+    // in growwApi). Fresh rows win the round; misses fall through to the
+    // per-symbol tier ladder inside _fetchInQuote.
+    if (growwApiArmed()) {
+      try {
+        const stockSyms = [..._subscribed].filter(s => !INDEX_SYMBOLS.has(s));
+        if (stockSyms.length > 0) {
+          const ltpMap = await growwApiLtp(stockSyms);
+          const now = Date.now();
+          for (const [s, p] of ltpMap) {
+            if (p > 0) _apiLast.set(s, { price: p, at: now });
+          }
+        }
+      } catch { /* tier-1 dark this round — ladder continues */ }
+    }
 
     const symbols = [..._subscribed];
     let got = 0;

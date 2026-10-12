@@ -25,7 +25,7 @@ REM v20.9.0 SINGLE-INSTANCE: dusra watchdog double-click karo to wo khud
 REM band ho jayega (lock file + port check) - node_modules corruption
 REM (do npm install ek saath) aur masked crash-loop dono khatam.
 REM
-REM v21.5.0 LAYA SIDECAR: LAYA_AUTOSTART=1 (app/.env) hone par supervisor
+REM v21.6.0 LAYA SIDECAR: LAYA_AUTOSTART=1 (app/.env) hone par supervisor
 REM Laya local AI ko bhi manage karta hai (adopt/spawn/hang-restart/
 REM clean-stop). Neeche ka bat-block fallback hai - health check ke
 REM baad start hota hai, double spawn kabhi nahi.
@@ -34,7 +34,7 @@ REM USE: double-click karo, window khuli/minimized rakho.
 REM      startai.exe iske SAATH mat chalao (port 8080 clash).
 REM      Band karna = Ctrl+C ya window close.
 REM ============================================================
-title SmartAI PRO v21.5.0 - Anti-Freeze Watchdog
+title SmartAI PRO v21.6.0 - Anti-Freeze Watchdog
 cd /d "%~dp0"
 
 set "NODE_EXE="
@@ -52,7 +52,7 @@ if not defined NODE_EXE (
 )
 
 echo ============================================================
-echo  SMARTAI PRO v21.5.0 - ANTI-FREEZE SUPERVISOR
+echo  SMARTAI PRO v21.6.0 - ANTI-FREEZE SUPERVISOR
 echo  Laya   : local AI sidecar (LAYA_AUTOSTART=1 hone par)
 echo  Site   : localhost:8080
 echo  Engine : %NODE_EXE%

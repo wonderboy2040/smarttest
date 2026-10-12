@@ -131,8 +131,9 @@ export interface LiveQuote {
   change?: number;
   ts?: number;
   /** v10.12 (#1): which upstream served this quote — 'groww-live' |
+   *  'groww-api' (v21.6 official Trading-API tier) |
    *  'yahoo-delayed' (indices) | 'coindcx-inr' (crypto watch symbols).
-   *  Rendered as the Groww·live / Yahoo·delayed / CoinDCX·RT pill by
+   *  Rendered as the Groww·live / Groww·API / Yahoo·delayed / CoinDCX·RT pill by
    *  LiveSourceBadge on the signal cards. */
   src?: string;
   /** v11.1 GAP 2: the day's price band (upper/lower circuit) when the

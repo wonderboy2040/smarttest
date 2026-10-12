@@ -596,8 +596,8 @@ describe('layaSidecar — SOURCE contracts (plan §3)', () => {
     expect(SERVER_SRC).toContain('LOOPBACK_HOSTS');
   });
 
-  it('Watchdog bat: Laya block (health-check + start-laya.cmd) + v21.5.0', () => {
-    expect(BAT_SRC).toContain('v21.5.0');
+  it('Watchdog bat: Laya block (health-check + start-laya.cmd) + v21.6.0', () => {
+    expect(BAT_SRC).toContain('v21.6.0');
     expect(BAT_SRC).toContain('start-laya.cmd');
     expect(BAT_SRC).toContain('curl.exe -s -m 2 http://127.0.0.1:8000/health');
     expect(BAT_SRC).toContain('start "Laya AI" /min cmd /c "%~dp0start-laya.cmd"');

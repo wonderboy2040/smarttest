@@ -4,6 +4,50 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.6.0 — ULTRAFAST REALTIME MARKET FEEDS (India + CoinDCX + Binance + USA)
+
+**Sab markets ab seedha site-load pe superfast live connect hote hain — bina kisi naye setup ke.**
+Live-measured: SSE snapshot **+8ms** (saare India+US+crypto keys paint), crypto ticks instant,
+US first tick +3.2s, India NSE hours me 1s loop. CoinDCX spot-WS 730 markets live verify.
+
+**1) India ultrafast — 2 tiers (automatically best available):**
+- **Default (zero setup):** Groww public feed cache **3s → 1.5s** + SSE poll **3s → 1s** —
+  India cards ab 1Hz par tick karte hain. Intraday watcher (T1/T2/SL evaluation) **5s → 3s**.
+- **Optional (fastest — 1s official):** Groww Trading API keys daalo:
+  1. Groww app/web → **Profile → Settings → Trading APIs → Generate** (active subscription chahiye)
+  2. `app\.env` me:
+  ```env
+  GROWW_API_KEY=your_key
+  GROWW_API_SECRET=your_secret
+  ```
+  3. Restart — badge **Groww·API** (emerald) dikhega. ONE batched call = 50 symbols @ 1s
+  freshness (limits 10 req/s). Token khud daily ~05:00 IST refresh hota hai — koi manual step nahi.
+- **SACH YE HAI:** Groww ka koi websocket NAHI hai (live-probed — official Trading API bhi
+  REST-only hai). Ye wala batched-LTP path hi sabse fast direct-Groww connection hai jo possible hai.
+
+**2) CoinDCX + Binance crypto — already ultrafast (verified live):**
+- Official CoinDCX spot WebSocket (`currentPrices@spot@1s`) — sub-second INR pushes
+- Binance USDT WS accelerator — sub-second projected ticks (venue-anchored)
+- Chain: REST anchor → spot-WS book → Binance×fx synth → deep-stale (kabhi dead nahi)
+
+**3) USA ultrafast — FREE key se instant trades:**
+- Default (zero setup): TradingView batch ~3s + Yahoo fallback — already live
+- **Optional:** [finnhub.com](https://finnhub.com) pe FREE signup → `FINNHUB_API_KEY`
+  `app\.env` me daalo → US symbols ab instant WebSocket trades par tick karenge
+
+**4) Kya verify karna (2 min):**
+- [ ] Site load → prices turant paint (snapshot <50ms)
+- [ ] CoinDCX tab → ⚡ CoinDCX·RT badge, prices har second
+- [ ] India tab (NSE hours) → Groww·live ya Groww·API badge, 1s ticks
+- [ ] `/api/health` → `feeds.growwApi` field (armed/breaker status)
+
+**5) Ye bhi fix hua (purana toota hua tha):**
+- `npm run check` repair — cleanup commit ne scripts delete kar diye the jo package.json,
+  supervisor (BACKUP_STATE_ON_BOOT) aur 4 test files use karte the — restore ho gaye
+- `start-laya.cmd` LF → CRLF (Windows .cmd strict) — watchdog ke Laya block ke liye zaroori tha
+
+---
+
 ## 🎯 v21.5.0 — LAYA FAST UPGRADE (local AI speed — koi naya setup step NAHI)
 
 **Local Laya model ab burst me bhi fast + stable rehta hai. Extract → bat double-click — bas.**

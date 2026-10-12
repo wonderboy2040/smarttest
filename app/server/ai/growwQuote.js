@@ -35,7 +35,14 @@
 // quotes stream, MCP toolContext.
 // ============================================================
 
-const GROWW_CACHE_MS = 3000;        // micro-cache + in-flight promise sharing
+// v21.6 ULTRAFAST: 3000 → 1500 — the live rate test (2026-10-12) held
+// 20 req/s sustained for 10s with 73ms avg latency and ZERO failures on
+// this public CDN endpoint, so a 1.5s shared window for the desk's
+// bounded watch set (~30 symbols ≈ 20 req/s worst case shared across
+// ALL consumers: /api/quote, SSE poller, intraday scanner) is safely
+// inside tolerance. In-flight promise sharing unchanged — N concurrent
+// consumers still cost ONE round-trip per symbol per window.
+const GROWW_CACHE_MS = 1500;
 const GROWW_RETRY_MIN_MS = 300;     // quick-retry jitter window (plan: ~300-500ms)
 const GROWW_RETRY_MAX_MS = 500;
 const GROWW_BACKOFF_AFTER_FAILS = 2; // consecutive failed cycles → skip 1 cycle

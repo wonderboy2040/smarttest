@@ -66,6 +66,16 @@ export function liveSourceBadge(src?: string | null): { label: string; cls: stri
       title: 'Groww NSE live quote — genuine exchange last-traded price (stocks & ETFs)',
     };
   }
+  // v21.6: the OFFICIAL Groww Trading-API tier — 1s-fresh batched LTP
+  // (50 symbols/call) via the user's own GROWW_API_KEY/SECRET. Emerald
+  // (venue-direct, paid tier) — distinct label from the public CDN tier.
+  if (s === 'groww-api') {
+    return {
+      label: 'Groww·API',
+      cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+      title: 'Groww Trading API — official batched LTP at 1s freshness (the ultrafast direct-Groww tier)',
+    };
+  }
   if (s === 'tv-ws') {
     return {
       label: 'TV·WS',

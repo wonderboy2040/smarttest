@@ -1,7 +1,7 @@
 {
   "name": "advance-pro-intelligence",
   "private": true,
-  "version": "21.5.0",
+  "version": "21.6.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -18,9 +18,9 @@
     "check": "npm run typecheck && npm run lint && npm run check:version && npm test && npm run build && npm run check:routes",
     "lint": "eslint server src --no-error-on-unmatched-pattern",
     "check:version": "node scripts/check-version.mjs",
+    "audit:all": "npm audit --omit=dev && npm --prefix telegram-bot audit --omit=dev",
     "calibrate": "node scripts/botlab-calibrate.mjs",
-    "backup-state": "node scripts/backup-state.mjs",
-    "audit:all": "npm audit --omit=dev && npm --prefix telegram-bot audit --omit=dev"
+    "backup-state": "node scripts/backup-state.mjs"
   },
   "dependencies": {
     "compression": "^1.8.2",

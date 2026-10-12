@@ -85,7 +85,7 @@ export async function healthSnapshot() {
       const { isNseMarketOpen } = await import('./intraday/time.js');
       nseOpen = isNseMarketOpen();
     } catch { nseOpen = null; /* time.js unavailable — unfiltered (safe) */ }
-    const INDIA_FEED_SOURCES = new Set(['groww-live', 'yahoo-delayed', 'groww', 'yahoo']);
+    const INDIA_FEED_SOURCES = new Set(['groww-live', 'yahoo-delayed', 'groww', 'yahoo', 'groww-api']);
     const staleArmed = [];
     for (const [src, a] of Object.entries(ages)) {
       out.feeds.sources[src] = { ...a, live: booleans[src] === true };
@@ -144,6 +144,15 @@ export async function healthSnapshot() {
       cooldownRemainMs: b?.cooldownActive === true ? Math.max(0, b?.cooldownRemainMs || 0) : 0,
     };
   } catch { /* binanceFutWs not armed */ }
+
+  // ---- FEEDS: v21.6 official Groww Trading-API tier (India 1s LTP) ----
+  // armed=false (no GROWW_API_KEY/SECRET) is NORMAL — the public 1.5s tier
+  // carries India then; breakerActive=true means the API tier is holding
+  // off after repeated failures (public tier unaffected).
+  try {
+    const { growwApiStatus } = await import('./ai/growwApi.js');
+    out.feeds.growwApi = growwApiStatus();
+  } catch { /* growwApi unavailable */ }
 
   // ---- KILLS: 3 layers ----
   try {
