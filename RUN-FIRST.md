@@ -4,6 +4,25 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.3.0 — 7-ISSUE FIXES (server down · board accuracy · AI confirm · live pre-flight · equity prices)
+
+**1) Server stability (Issue-1)**
+- Render/free-dyno par auto-detect: memory limits + exit-on-fatal ab platform-aware. **Laptop pe koi change nahi.**
+- **Render free tier 24x7 chahiye toh UptimeRobot (free) set karo → URL `https://<app>.onrender.com/api/ping`, har 5 min.** Ye code se possible nahi (Render ToS).
+- `server/data/BOOT-REFUSED.txt` — agar watchdog chal raha hai par site nahi khulti, ye file reason batayegi (APP_PIN missing etc.).
+
+**2) Signal Board accuracy (Issue-3 — "sab SL hit")**
+- **HTF VETO:** 1d/4h against signal → WATCH + score ≤62. **CHOP:** range/ADX<15 → WATCH. Off karna ho: `AI_VETO_COUNTER_HTF=0`, `AI_VETO_CHOP=0`.
+- **Stop floor:** SL ab kabhi 0.6×ATR se tight nahi hoga (`AI_MIN_STOP_ATR_FRACTION`).
+- FUTURES/GLOBALFUTURES board signals ab **track-record** me jaate hain — Track Record panel me in desks ka win-rate ab sach me dikhega.
+
+**3) Laya/Jev AI confirm (Issue-5)** — .env me `LAYA_ENABLED=1` + `LAYA_API_KEY` (ya `TYPESAFE_API_KEY`) hone par board ke top signals dono AI se confirm hote hain — card pe `🤖 AI ✓ (Jev ✓ · Laya ✓)` chip. Keys nahi hain toh layer silent off hai.
+
+**4) ⚡ EXECUTE LIVE (Issue-4)** — button ab pre-flight modal kholta hai: gate checklist + would-be ticket + **1.2s hold-to-confirm**. Real order tabhi lagta hai jab poora 1.2s dabao.
+
+**5) Equity SIM USDC (Issue-6)** — AAPL/MSFT/GOOGL ab RT fail hone par bhi CoinDCX candlestick endpoint se **24/7 perp price** lete hain (Yahoo frozen-close se pehle). Desk pe 🇺🇸 US market phase badge + FEED strip. `FINNHUB_API_KEY` (free) daalne se ek aur fallback milta hai.
+---
+
 ## 🎯 v21.2.0 — LAYA + JEV DUAL-PROVIDER AI (Bot Lab)
 
 **1) Bot Lab me ab 6 arms hain** (per-bot dropdown): `Rules / Gated / Jev / Laya / Both (consensus) / Auto`

@@ -57,12 +57,12 @@ describe('v20.2 A1 — board → track-record accountability', () => {
     }), 'INDIA')).toBeNull();
   });
 
-  it('FUTURES/GLOBALFUTURES boards are skipped honestly (unit mismatch), CRYPTO maps', () => {
-    const fut = wireBoardAccountability('FUTURES', { signals: [strongSignal({ market: 'FUTURES' })] });
-    expect(fut.tracked).toBe(0);
-    expect(fut.skipped).toMatch(/unit-mismatch/);
-    const glob = wireBoardAccountability('GLOBALFUTURES', { signals: [strongSignal({ market: 'GLOBALFUTURES' })] });
-    expect(glob.tracked).toBe(0);
+  it('v21.3.0: FUTURES/GLOBALFUTURES boards ARE tracked (USDT/USDC quote routing bridge), CRYPTO maps', () => {
+    const fut = wireBoardAccountability('FUTURES', { signals: [strongSignal({ market: 'FUTURES', symbol: 'BTC' })] });
+    expect(fut.tracked).toBe(1); // v21.3.0: stream.js routes FUTURES → USDT quotes — the unit-mismatch skip is GONE
+    expect(fut.skipped).toBeUndefined();
+    const glob = wireBoardAccountability('GLOBALFUTURES', { signals: [strongSignal({ market: 'GLOBALFUTURES', symbol: 'AAPL' })] });
+    expect(glob.tracked).toBe(1);
     // CRYPTO: qty formula uses 4-decimal crypto semantics
     // (risk 15000 → qtyRisk 1000/15000=0.0667, but the 25%-capital cap
     // 25000/900000=0.0278 binds — min of the two, mirroring engine.js)

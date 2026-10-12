@@ -36,9 +36,15 @@ import { recordSignals } from '../intraday/trackRecord.js';
 
 const ENABLED = String(process.env.AI_BOARD_ACCOUNTABILITY || '').toLowerCase() !== 'off';
 
-// The watcher's quote routing: INDIA → Groww INR, CRYPTO → CoinDCX
-// INR spot. Both match the desk's INR-denominated plans.
-const TRACKABLE_MARKETS = new Set(['INDIA', 'CRYPTO']);
+// The watcher's quote routing: INDIA → Groww INR, CRYPTO → CoinDCX INR
+// spot. v21.3.0: FUTURES → CoinDCX USDT perp RT (+Binance-fut fallback),
+// GLOBALFUTURES → the USDC quote chain — stream.js now routes each
+// market to its OWN price domain, so the old unit-mismatch block
+// (USDT/USDC plans vs INR watcher quotes) is GONE. The exact desks the
+// user trades finally feed the board Track Record (Issue-3: futures
+// board had ZERO outcome feedback — wrong-direction signals never self-
+// corrected).
+const TRACKABLE_MARKETS = new Set(['INDIA', 'CRYPTO', 'FUTURES', 'GLOBALFUTURES']);
 
 // The board's own "ACTIONABLE" bar (DeskStatsStrip) — STRONG + ACTION.
 // WATCH/NEUTRAL rows are display context, not published trade signals;
@@ -115,7 +121,7 @@ export function wireBoardAccountability(market, board) {
   const out = { enabled: ENABLED, market: mkt, tracked: 0 };
   if (!ENABLED) return out;
   if (!TRACKABLE_MARKETS.has(mkt)) {
-    out.skipped = 'unit-mismatch (USDT/USDC plans vs INR watcher quotes)';
+    out.skipped = 'market not trackable';
     return out;
   }
   const signals = Array.isArray(board?.signals) ? board.signals : [];

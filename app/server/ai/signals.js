@@ -28,6 +28,19 @@ import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandl
 // ye sync-branch chhoot gaya tha).
 import { usdInrFallback } from './lib/usdinr.js';
 import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfConfluenceEnabled, tapeVote, meshModelsEnabled, structurePro } from './models.js';
+// v21.3.0 (Issue-5): Laya + Jev dual-AI confirmation on board signals
+import { confirmBoardSignals as _confirmBoardSignals, boardAiConfirmActive as _boardAiConfirmActive } from './boardAiConfirm.js';
+
+// v21.3.0 (Issue-3: "Signal Board wrong directions — sab SL hit"):
+// HARD HTF VETO + CHOP FILTER. Pehle ek counter-4h/1d signal sirf
+// −7/−10 conf + STRONG→ACTION demote paata tha — 90% conviction wala
+// counter-trend signal phir bhi ACTION card ban ke rank karta tha.
+// Ab: (a) 1d/4h DIRECTLY against hone par grade WATCH + aiScore cap 62
+// (80+ badge namumkin); (b) SPLIT phase (6-TF weight 50/50 — no dominant
+// side) ya ADX<15 (no trend strength) = range/chop — grade cap WATCH.
+// Dono env se off kar sakte hain (back-compat / A-B testing).
+const VETO_COUNTER_HTF = String(process.env.AI_VETO_COUNTER_HTF ?? '1') !== '0';
+const VETO_CHOP = String(process.env.AI_VETO_CHOP ?? '1') !== '0';
 // v11.6 MESH-BACKED SEATS — the MCP mesh finally votes on trade
 // decisions (Phase 1A), shadow-gated (Phase 2) + honesty-gated (1B)
 // + correlation-discounted (1C), warmed at T3 cadence only (Phase 3).
@@ -978,6 +991,10 @@ export function computeTopFive(signals, regime, market = 'INDIA', limit = 5) {
     s && (s.grade === 'STRONG' || s.grade === 'ACTION')
     && (s.side === 'LONG' || s.side === 'SHORT')
     && s.plan && Number.isFinite(s.plan.entry)
+    // v21.3.0 (Issue-5): Jev/Laya CONFLICT signals kabhi TOP-5 nahi ban
+    // sakte — dono AI providers me se koi ulta side chunta ho toh headline
+    // slot usse waste nahi hoga (board card pe CONFICT chip dikhta hai).
+    && s.aiConfirm?.verdict !== 'CONFLICT'
     // v18.6.1 Fix 2 — quorum hard gate: thin/under-voted signals (the
     // 4/9 CL case) never compete for the headline top-5 slots. Unknown
     // quorum (null) passes — honest degrade, never a silent empty board.
@@ -1006,7 +1023,7 @@ export function computeTopFive(signals, regime, market = 'INDIA', limit = 5) {
       : aligned ? `${regimeLabel} ${regimeChange >= 0 ? '+' : ''}${regimeChange.toFixed(1)}% trend se ALIGNED`
       : `${regimeLabel} ke against (counter-trend)`;
     const rrTxt = Number.isFinite(s.plan?.rewardRisk) ? `R:R 1:${s.plan.rewardRisk.toFixed(1)}` : 'plan ready';
-    const reason = `${totalVoted} models me se ${votesFor} ${s.side} side pe · conf ${Math.round(conf)}% · ${rrTxt} · ${regTxt} · ${s.grade === 'STRONG' ? 'FULL committee STRONG grade' : 'ACTION grade (tradeable)'}`;
+    const reason = `${totalVoted} models me se ${votesFor} ${s.side} side pe · conf ${Math.round(conf)}% · ${rrTxt} · ${regTxt} · ${s.grade === 'STRONG' ? 'FULL committee STRONG grade' : 'ACTION grade (tradeable)'}${s.aiConfirm?.verdict === 'CONFIRMED' ? ' · AI CONFIRMED (Jev+Laya)' : s.aiConfirm?.verdict === 'CONFLICT' ? ' · AI CONFLICT' : ''}`;
     // v18.6.1 Fix 1 — staleness decay: the composite score is multiplied
     // by stalenessFactor (1.0 fresh → 0.15 at 60m+) so an un-re-confirmed
     // signal naturally drops out of the top-N instead of riding its
@@ -1713,7 +1730,17 @@ async function _computeBoard(mkt, deps, opts = {}) {
   // board AFTER it weighs in (the India pattern). Without this data
   // the tape seat abstains and the committee stays a pure 1h trend
   // echo — the 29%-win-rate disease.
-  const tapeEnrichN = mkt === 'INDIA' ? 0 : Math.min(20, Math.max(10, (opts.limit || 10) * 2));
+  // v21.3.0 (Issue-3): cap 20 → FULL board (bypass-via-env, default on).
+  // Pehle sirf top-20 candidates ko 15m tape milta tha — board ke baaki
+  // cards pure 1h-lagging committee pe chalte the (the exact wrong-
+  // direction class). Tape cache (5-min TTL per symbol) isliye cost
+  // nearly-free rehta hai; AI_TAPE_ENRICH_N=20 purana behaviour wapas
+  // deta hai.
+  const _tapeCapN = (() => {
+    const n = Number.parseInt(String(process.env.AI_TAPE_ENRICH_N ?? ''), 10);
+    return Number.isFinite(n) && n >= 0 ? Math.min(40, n) : 40;
+  })();
+  const tapeEnrichN = mkt === 'INDIA' ? 0 : Math.min(_tapeCapN, Math.max(10, (opts.limit || 10) * 2));
   const tapeEnriched = new Map();
   await Promise.all(candidates.slice(0, tapeEnrichN).map(async (c) => {
     const key = c.ctx.symbol;
@@ -1979,6 +2006,9 @@ async function _computeBoard(mkt, deps, opts = {}) {
     // Never throws; a degraded snapshot (missing sources) is a no-op.
     // -----------------------------------------------------------------
     let mtf6 = null;
+    // v21.3.0: veto/chop stamps — computeSuperScore ko cap milta hai aur
+    // buildSignal quality flags carry karta hai (UI + exec gate dono).
+    let _htfVetoed = false, _chopCapped = false;
     try {
       if (consensus2.dir !== 0 && c.consensus?.confidence >= 30) {
         mtf6 = await buildMTFSnapshot(c.ctx.symbol, mkt, { side: consensus2.side, ltp: c.ctx.ltp });
@@ -1995,6 +2025,38 @@ async function _computeBoard(mkt, deps, opts = {}) {
           if (demote) {
             const why = mtf6.alignedWithSide === false ? 'MTF-6 conflict' : 'LTF timing';
             consensus2 = { ...consensus2, grade: 'ACTION', summary: `${consensus2.summary} · ${why}` };
+          }
+          // ---------------------------------------------------------
+          // v21.3.0 (Issue-3) HARD VETOES — haircuts se aage badh ke:
+          //  • COUNTER-HTF: signal side 1d/4h consensus ke SIDDA against
+          //    hai → grade WATCH + aiScore cap 62. 4-5 paper trades sab
+          //    SL hit is class me the (1h committee late-confirm karta
+          //    hai, 1d/4h ulta hota hai, mean-reversion stop uda deti hai).
+          //  • CHOP: 6-TF SPLIT (koi dominant side nahi = range) ya
+          //    ADX < 15 (trend strength hi nahi) → grade cap WATCH —
+          //    range me 2R targets structurally unreachable hote hain.
+          //  WATCH cards board pe dikhte hain (context) par 80+ badge,
+          //    LIVE execute gate aur TOP-5 eligibility teeno se bahar.
+          // ---------------------------------------------------------
+          const adxNow = (v => { const n = typeof v === 'number' ? v : parseFloat(String(v ?? '')); return Number.isFinite(n) ? n : null; })(c.ctx.ind?.adx);
+          const counterHtfHit = VETO_COUNTER_HTF && mtf6.counterHtf === true;
+          const chopHit = VETO_CHOP && (mtf6.phase === 'SPLIT' || (adxNow != null && adxNow < 15));
+          if (counterHtfHit || chopHit) {
+            const why = counterHtfHit ? 'HTF VETO (1d/4h against)' : 'CHOP FILTER (range)';
+            _htfVetoed = counterHtfHit;
+            _chopCapped = !counterHtfHit && chopHit;
+            const rankOf = { NEUTRAL: 0, WATCH: 1, ACTION: 2, STRONG: 3 };
+            if ((rankOf[consensus2.grade] ?? 0) > rankOf.WATCH) {
+              consensus2 = { ...consensus2, grade: 'WATCH', summary: `${consensus2.summary} · ${why}` };
+            }
+            if (quality) {
+              quality = {
+                ...quality,
+                veto: counterHtfHit ? 'counter-htf' : (chopHit ? 'chop-range' : null),
+                ...(counterHtfHit ? { counterHtfVeto: true } : {}),
+                ...(chopHit ? { chopRange: true } : {}),
+              };
+            }
           }
           if (mtf6.structureStop?.sl && !quality?.stopStyle && plan2) {
             const rebuilt = buildTradePlan(consensus2, c.ctx, mkt, {
@@ -2014,6 +2076,8 @@ async function _computeBoard(mkt, deps, opts = {}) {
         }
       }
     } catch { /* MTF-6 never breaks the board */ }
+    // v21.3.0: per-signal stamp for the superIntel cap + wire payload.
+    const _scoreCap = _htfVetoed || _chopCapped ? 62 : null;
     const sig = buildSignal({
       symbol: c.ctx.symbol, market: mkt, ctx: c.ctx, votes, consensus: consensus2, plan: plan2, aiNote, quality,
     });
@@ -2060,6 +2124,10 @@ async function _computeBoard(mkt, deps, opts = {}) {
         quality,
         agreement: consensus2.agreement,
         counterTrend: !!(quality?.regime?.counterTrend),
+        // v21.3.0 (Issue-3): HTF-veto / chop-capped signals kabhi 80+ badge
+        // nahi le sakte — cap 62 pe score bound hota hai (UCV-reject 64 se
+        // bhi sakht, kyunki ye class documented SL-hit class hai).
+        cap: _scoreCap,
       });
       const atr = enr?.ltfInd?.atr ?? c.ctx.ind?.atr ?? null;
       const blueprint = buildSuperBlueprint({
@@ -2096,6 +2164,8 @@ async function _computeBoard(mkt, deps, opts = {}) {
   // deadline (honest degrade: winProb still computes without perp
   // fields); the next 30s board cycle reads it hot.
   // -----------------------------------------------------------------
+  // v21.3.0 (Issue-5): confirm-layer meta — payload superIntelMeta surface
+  let aiConfirmMeta = null;
   if (signals.some(s => s.superIntel)) {
     try {
       const scored = signals.filter(s => s.superIntel && (s.side === 'LONG' || s.side === 'SHORT'));
@@ -2207,6 +2277,22 @@ async function _computeBoard(mkt, deps, opts = {}) {
         } catch { /* one symbol's UC failure never breaks the board */ }
       }));
     } catch { /* UC layer never breaks the board */ }
+  }
+
+  // -----------------------------------------------------------------
+  // v21.3.0 (Issue-5) LAYA + JEV DUAL-AI CONFIRMATION LAYER — the board's
+  // top STRONG/ACTION 75+ signals go to BOTH AI providers (Jev cloud +
+  // Laya local; the same dual-provider registry Bot Lab uses). Verdicts:
+  // both AGREE → aiScore +3 (CONFIRMED); any provider picks the OPPOSITE
+  // side → aiScore −8 + STRONG→ACTION (CONFLICT). Soft 4.5s deadline —
+  // unresolved verdicts memo-warm and stamp the NEXT cycle (the council
+  // "warming" pattern). AI kabhi side/size/SL nahi badalta — confirm ya
+  // demote only. Unconfigured → honest no-op (sandbox / no keys).
+  // -----------------------------------------------------------------
+  if (_boardAiConfirmActive()) {
+    try {
+      aiConfirmMeta = await _confirmBoardSignals(signals, mkt);
+    } catch { /* never breaks the board */ }
   }
 
   // v9: the board is ranked by the SUPERINTELLIGENCE AI score (the
@@ -2332,6 +2418,9 @@ async function _computeBoard(mkt, deps, opts = {}) {
       strongCount: signals.filter(s => (s.superIntel?.aiScore ?? 0) >= 80).length,
       eliteCount: signals.filter(s => (s.superIntel?.aiScore ?? 0) >= 85).length,
       scored: signals.filter(s => !!s.superIntel).length,
+      // v21.3.0 (Issue-5): Jev/Laya board-confirmation meta (null jab
+      // koi provider configured nahi — sandbox / no-keys honest no-op).
+      ...(aiConfirmMeta ? { aiConfirm: aiConfirmMeta } : {}),
     },
     topFive,
     // v11.0: the Global Market Council meta — enabled/model/stamped +

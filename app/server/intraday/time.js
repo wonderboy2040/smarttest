@@ -101,7 +101,11 @@ export function isMarketOpenFor(market = 'INDIA', date = new Date()) {
  * candle day — avoids an IST-midnight "new day" reset mid-session).
  */
 export function dayKeyFor(market = 'INDIA', date = new Date()) {
-  if (String(market).toUpperCase() === 'CRYPTO') {
+  // v21.3.0: FUTURES/GLOBALFUTURES bhi 24/7 UTC-day markets hain (USDT/USDC
+  // perps) — board-accountability rows unka session boundary UTC midnight
+  // hona chahiye, IST nahi (IST-midnight reset mid-US-session hota hai).
+  const m = String(market).toUpperCase();
+  if (m === 'CRYPTO' || m === 'FUTURES' || m === 'GLOBALFUTURES') {
     return new Date(date).toLocaleDateString('sv-SE', { timeZone: 'UTC' });
   }
   return istDayKey(date);

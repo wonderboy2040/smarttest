@@ -87,6 +87,17 @@ import compression from 'compression';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+
+// v21.3.0 (Issue-1: "baar baar server down"): Express 4 async-rejection
+// guard — sub-routers register through this proxy so an async handler
+// throw becomes an honest 500 (next(err)) instead of a HUNG socket.
+// Only AsyncFunction handlers with <4 args are wrapped; sync handlers,
+// router objects, middleware factories and settings getters pass through
+// byte-for-byte unchanged.
+import { withAsyncRouteGuard } from './lib/asyncGuard.js';
+const routesApp = withAsyncRouteGuard(app, {
+  onError: (err) => { try { console.error('[async-guard] route handler rejected:', String(err?.message || err).slice(0, 160)); } catch { /* noop */ } },
+});
 const PORT = process.env.PORT || 8080;
 const DEFAULT_USD_INR = 83.5;
 
@@ -583,7 +594,7 @@ app.get('/api/chart', async (req, res) => {
 //   coindcxOrders.js     LIVE order execution + safety gates
 //   routes.js            endpoint registration (below)
 // ============================================================
-registerAITradingRoutes(app, {
+registerAITradingRoutes(routesApp, {
   KEYS,
   OPENAI_COMPAT,
   TG,
@@ -777,7 +788,7 @@ async function provideBotsCandles(symbol, desk) {
   return r ? r.bars : null;
 }
 
-registerBotRoutes(app, {
+registerBotRoutes(routesApp, {
   // v20.9.1 [H2]: risk-block / order / protection-flatten telegram alerts
   // ab WIRED hain — pehle routes.js default {enabled:false} + index.js kabhi
   // telegram pass hi nahi karta tha (v20.9.0 ka flagship alert feature
@@ -862,7 +873,7 @@ const fetchOptionChainFor = async (underlying) => {
   } catch { return null; }
 };
 
-registerIntradayRoutes(app, {
+registerIntradayRoutes(routesApp, {
   fetchGrowwNseQuote,
   fetchCoinDcxTickers,
   fetchIndexSpot,
@@ -922,7 +933,7 @@ try { startIndmPortfolioScheduler(); } catch (e) { console.warn('[mcp/portfolioS
 // when the council/mesh query invokes them. Missing key = agent
 // honestly absent — never fake data.
 // ============================================================
-try { registerMeshRoutes(app); } catch (e) { console.warn('[mcp/mesh] route registration failed:', e?.message || e); }
+try { registerMeshRoutes(routesApp); } catch (e) { console.warn('[mcp/mesh] route registration failed:', e?.message || e); }
 
 // ------------------------------------------------------------
 // Accuracy-plan Phase 1: MCP MESH BOOT HEALTH — one line in the
@@ -3189,6 +3200,17 @@ function validateEnv() {
   for (const w of warnings) console.warn(`[wealth-ai] WARNING: ${w}`);
   for (const e of errors) console.error(`[wealth-ai] ERROR: ${e}`);
   if (errors.length > 0) {
+    // v21.3.0 (Issue-1): BOOT-REFUSED marker — the watchdog restarts
+    // this process up to 20x/hour with a 10-min budget pause, and the
+    // ONLY place the reason lived was the (usually closed) console
+    // window. A one-line marker file next to the data dirs makes
+    // "watchdog chal raha hai par site kabhi nahi khulti" self-
+    // diagnosing — supervisor console + user dono padh sakte hain.
+    try {
+      const marker = path.join(__dirname, 'data', 'BOOT-REFUSED.txt');
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(marker, `[${new Date().toISOString()}] Server refused to start due to config errors:\n${errors.map((e) => `  - ${e}`).join('\n')}\n\nFix app/.env (APP_PIN etc.) and restart. Ye file successful boot par delete ho jaati hai.\n`);
+    } catch { /* marker is diagnostics — never blocks exit */ }
     console.error('[wealth-ai] Refusing to start due to configuration errors.');
     process.exit(1);
   }
@@ -3334,10 +3356,39 @@ _httpServer = app.listen(PORT, () => {
   // stale thi) — /api/ping `v`, /health `version` aur ye line ab ek hi source se.
   console.log(`[smartai] v${SERVER_VERSION} THREE-DESK TERMINAL — India Intraday + CoinDCX + JEV Bot Lab · lean frontend · zero-polling shell`);
 
+  // v21.3.0 (Issue-1): a previous successful boot clears the refusal marker.
+  try { const m = path.join(__dirname, 'data', 'BOOT-REFUSED.txt'); if (fs.existsSync(m)) fs.rmSync(m); } catch { /* noop */ }
+
   // No self-ping keepalive (Render ToS violation).
   // For 24x7 uptime on free tier, use an EXTERNAL uptime monitor
   // (e.g. UptimeRobot) that pings /health every 5 min.
 });
+
+// v21.3.0 (Issue-1: EADDRINUSE zombie fix) — app.listen() ka koi 'error'
+// handler nahi tha. Ek port conflict (doosra npm start / restart race /
+// orphaned child) uncaughtException fires karta tha, selfHeal ka
+// STAY-ALIVE policy use ZINDA rakhta tha, aur process hamesha ke liye
+// SUNN (kabhi listen nahi karta) reh jaata tha — the "server down"
+// symptom that never heals. Ab bind-fail honest exit(1) + journal karta
+// hai taaki supervisor ka restart/backoff turant engage ho.
+try {
+  _httpServer.on('error', (err) => {
+    const code = String(err?.code || '');
+    try {
+      console.error(`[smartai] HTTP SERVER ERROR (${code}): ${err?.message || err}`);
+      if (code === 'EADDRINUSE') {
+        console.error(`[smartai] Port ${PORT} pehle se kisi aur process ke paas hai — purana Start-SmartAI server band karo (ya Task Manager me node.exe close karo) aur dobara start karo.`);
+      }
+    } catch { /* console best-effort */ }
+    // journal via the selfHeal module (best-effort; never blocks exit)
+    try {
+      import('./ai/selfHeal.js').then((m) => {
+        try { m.selfHealNoteShutdown(`http-server-error ${code}`); } catch { /* noop */ }
+        process.exit(1);
+      }).catch(() => process.exit(1));
+    } catch { process.exit(1); }
+  });
+} catch { /* listener attach best-effort */ }
 
 // Start Telegram bot with auto-restart (after listen — the webhook
 // route + long-poll bot need the express app wired and serving).

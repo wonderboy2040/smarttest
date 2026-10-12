@@ -131,18 +131,21 @@ export function getLatestQuotes() {
 // ------------------------------------------------------------
 function _watchSet() {
   const symMarket = new Map();
-  const mark = (sym, isCrypto) => {
+  // v21.3.0: `mark` ab market-string leta hai (INDIA/CRYPTO/FUTURES/
+  // GLOBALFUTURES) — futures board rows USDT quotes pe evaluate hote hain,
+  // global USDC pe; INR routing galat units se fake SL_HIT deti thi.
+  const mark = (sym, mkt) => {
     if (!sym) return;
     const s = String(sym).toUpperCase();
-    if (!symMarket.has(s)) symMarket.set(s, isCrypto ? 'CRYPTO' : 'INDIA');
+    if (!symMarket.has(s)) symMarket.set(s, mkt === 'CRYPTO' || mkt === 'FUTURES' || mkt === 'GLOBALFUTURES' ? mkt : (mkt ? 'INDIA' : 'CRYPTO'));
   };
   const paper = paperSymbolsByMarket();
-  paper.india.forEach(s => mark(s, false));
-  paper.crypto.forEach(s => mark(s, true));
+  paper.india.forEach(s => mark(s, 'INDIA'));
+  paper.crypto.forEach(s => mark(s, 'CRYPTO'));
   // v9.5: open OPTION paper trades need their UNDERLYING index spot
   // (NIFTY/SENSEX) for the BS premium re-pricing below. Indices skip
   // the Groww equity feed, so _fetchQuotes routes them to Yahoo.
-  optionUnderlyingsForWatcher().forEach(s => mark(s, false));
+  optionUnderlyingsForWatcher().forEach(s => mark(s, 'INDIA'));
   // v11.4 recheck: TRACKED rows come BEFORE the scan set. _fetchQuotes
   // slices to MAX_WATCH_NSE (34) — with tracked LAST, a busy day (10 paper
   // + 5 scan + 40 tracked) starved the last ~21 tracked rows of quotes,
@@ -151,12 +154,14 @@ function _watchSet() {
   // position — same priority class as a paper trade; the scan set is a
   // signal-refresh nicety and can absorb the cut.
   const tracked = watcherSymbolsByMarket();
-  tracked.india.forEach(s => mark(s, false));
-  tracked.crypto.forEach(s => mark(s, true));
+  (tracked.india || []).forEach(s => mark(s, 'INDIA'));
+  (tracked.crypto || []).forEach(s => mark(s, 'CRYPTO'));
+  (tracked.futures || []).forEach(s => mark(s, 'FUTURES'));   // v21.3.0 (defensive: legacy mocks/tests)
+  (tracked.global || []).forEach(s => mark(s, 'GLOBALFUTURES'));
   // v10.13 (M4): union of BOTH markets' scan sets — neither scan evicts the
   // other's symbols any more.
-  _scanIndia.forEach(s => mark(s, false));
-  _scanCrypto.forEach(s => mark(s, true));
+  _scanIndia.forEach(s => mark(s, 'INDIA'));
+  _scanCrypto.forEach(s => mark(s, 'CRYPTO'));
   return symMarket;
 }
 
@@ -171,8 +176,12 @@ async function _fetchQuotes(symMarket) {
   const out = {};
   const india = [];
   const crypto = [];
+  const futures = [];      // v21.3.0: USDT-perp tracked board rows
+  const global = [];       // v21.3.0: USDC equity-perp tracked board rows
   for (const [sym, mkt] of symMarket.entries()) {
-    (mkt === 'CRYPTO' ? crypto : india).push(sym);
+    if (mkt === 'FUTURES') futures.push(sym);
+    else if (mkt === 'GLOBALFUTURES') global.push(sym);
+    else (mkt === 'CRYPTO' ? crypto : india).push(sym);
   }
 
   // INDIA: Groww NSE quotes (≤34 watcher symbols in ONE parallel round —
@@ -235,6 +244,39 @@ async function _fetchQuotes(symMarket) {
       }
     } catch { /* CoinDCX transient */ }
   }
+
+  // v21.3.0 (Issue-3: FUTURES/GLOBALFUTURES board accountability): tracked
+  // futures rows need USDT quotes (CoinDCX perp RT — the SAME single-flight
+  // 2s-cached round the futures board rides; Binance-fut fallback built in).
+  // Unit-mismatch (INR quotes vs USDT plans) is exactly why futures rows
+  // were never trackable before.
+  if (futures.length > 0) {
+    try {
+      const { fetchFuturesPrices } = await import('../ai/futures.js');
+      const rows = await fetchFuturesPrices({ maxAgeMs: 5000 }).catch(() => null);
+      const byBase = new Map((Array.isArray(rows) ? rows : []).map(x => [String(x.base).toUpperCase(), x]));
+      for (const sym of futures) {
+        const r = byBase.get(sym);
+        const price = parseFloat(r?.last ?? r?.price);
+        if (price > 0) out[sym] = { price, change: parseFloat(r?.changePct) || 0, ts: Date.now(), src: 'coindcx-fut-usdt' };
+      }
+    } catch { /* futures feed transient — rows stay unevaluated this tick */ }
+  }
+  // v21.3.0: GLOBALFUTURES tracked rows — the USDC quote chain (CoinDCX
+  // USDC RT → candle path → Finnhub → Yahoo; 5s-cached inside the module).
+  if (global.length > 0) {
+    try {
+      const { fetchGlobalLtpMap } = await import('../ai/globalFutures.js');
+      const m = await fetchGlobalLtpMap().catch(() => null);
+      if (m) {
+        for (const sym of global) {
+          const row = m.get(sym);
+          const price = parseFloat(row?.price);
+          if (price > 0) out[sym] = { price, change: parseFloat(row?.changePct) || 0, ts: Date.now(), src: 'global-usdc' };
+        }
+      }
+    } catch { /* transient */ }
+  }
   return out;
 }
 
@@ -246,8 +288,11 @@ async function _tick() {
   _ticking = true;
   try {
     const symMarket = _watchSet();
-    const hasCrypto = [...symMarket.values()].includes('CRYPTO');
-    // Run while the NSE window is open OR any crypto symbol is watched (24/7).
+    // v21.3.0: FUTURES/GLOBALFUTURES tracked rows bhi 24/7 hain — NSE
+    // window band hone par watcher band nahi hota jab perp rows open hon.
+    const vals = [...symMarket.values()];
+    const hasCrypto = vals.includes('CRYPTO') || vals.includes('FUTURES') || vals.includes('GLOBALFUTURES');
+    // Run while the NSE window is open OR any crypto/futures symbol is watched (24/7).
     if (!_inWindow() && !hasCrypto) return;
     if (symMarket.size === 0) return;
 

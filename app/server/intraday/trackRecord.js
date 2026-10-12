@@ -28,13 +28,17 @@ import { isCryptoSymbolBase } from './engine.js';
 import { durablePut } from '../mcp/durable.js';
 
 const FILE = 'tracked-signals.json';
-const MAX_ROWS = 800;          // ~40/day × 20 days of history
-const MAX_PER_DAY = 40;
+const MAX_ROWS = 1200;         // v21.3.0: 800 → 1200 (FUTURES + GLOBALFUTURES desks ab track hote hain)
+const MAX_PER_DAY = 80;        // v21.3.0: 40 → 80 open-row cap across desks (per-day OPEN+PARTIAL)
 const EOD_SQOFF_MIN = 15 * 60 + 25; // 15:25 IST — reconcile & close
 
 const _marketOf = (rowOrSig) => {
   const m = String(rowOrSig?.market || '').toUpperCase();
   if (m === 'CRYPTO') return 'CRYPTO';
+  // v21.3.0: FUTURES (USDT perps) / GLOBALFUTURES (USDC equity perps) —
+  // board-accountability rows ab in desks se bhi aate hain; unka quote
+  // routing (USDT/USDC) INR-crypto se ALAG hai, isliye verbatim market.
+  if (m === 'FUTURES' || m === 'GLOBALFUTURES') return m;
   if (m === 'INDIA') return 'INDIA';
   // Legacy rows / engine payloads without the field: base-symbol heuristic.
   return isCryptoSymbolBase(rowOrSig?.symbol) ? 'CRYPTO' : 'INDIA';
@@ -88,15 +92,24 @@ export function watcherSymbols() {
 
 // 2026-09 multi-market: same watch set, classified per market so the
 // watcher routes INDIA → Groww and CRYPTO → CoinDCX.
+// v21.3.0: FUTURES → CoinDCX USDT perp RT (+Binance fallback);
+// GLOBALFUTURES → the global USDC quote chain. (Issue-3: FUTURES board
+// signals pehle kabhi track hi nahi hote the — the exact desk the user
+// complained about had ZERO outcome feedback.)
 export function watcherSymbolsByMarket() {
   const india = [];
   const crypto = [];
+  const futures = [];
+  const global = [];
   for (const s of _state.signals) {
     if (s.status !== 'OPEN' && s.status !== 'PARTIAL') continue;
     if (s.dayKey !== dayKeyFor(_marketOf(s))) continue; // stale rows handled by reconcile
-    (_marketOf(s) === 'CRYPTO' ? crypto : india).push(s.symbol);
+    const m = _marketOf(s);
+    if (m === 'FUTURES') futures.push(s.symbol);
+    else if (m === 'GLOBALFUTURES') global.push(s.symbol);
+    else (m === 'CRYPTO' ? crypto : india).push(s.symbol);
   }
-  return { india: [...new Set(india)], crypto: [...new Set(crypto)] };
+  return { india: [...new Set(india)], crypto: [...new Set(crypto)], futures: [...new Set(futures)], global: [...new Set(global)] };
 }
 
 // ------------------------------------------------------------
@@ -300,9 +313,10 @@ export function evaluateTracked(quotes, events) {
       if (hitTrail) { _closeRow(row, row.entry, 'BE_TRAIL_EXIT', events); continue; }
     }
 
-    // EOD square-off for anything still open — NSE only (crypto is 24/7
-    // and rolls at the UTC day boundary via reconcile).
-    const afterEod = market !== 'CRYPTO' && (m >= EOD_SQOFF_MIN || !isNseMarketOpen());
+    // EOD square-off for anything still open — NSE ONLY (crypto/futures/
+    // global perps 24/7 hain aur UTC day boundary par reconcile se roll
+    // hote hain).
+    const afterEod = market === 'INDIA' && (m >= EOD_SQOFF_MIN || !isNseMarketOpen());
     if (afterEod) { _closeRow(row, price, 'EOD_EXIT', events); }
   }
   if (events.length) _persist();

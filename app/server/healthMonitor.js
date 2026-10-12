@@ -193,6 +193,31 @@ export async function healthSnapshot() {
     }
   } catch { /* AI providers not armed */ }
 
+  // ---- v21.3.0 (Issue-5): board AI-confirmation layer status ----
+  // ai.boardConfirm: mode/providers configured + n + the provider health —
+  // "board signals AI-verified hain ya nahi" ek health call me visible.
+  try {
+    const { boardAiConfirmStatus } = await import('./ai/boardAiConfirm.js');
+    out.ai = out.ai || {};
+    out.ai.boardConfirm = boardAiConfirmStatus();
+  } catch { /* board confirm layer not armed */ }
+
+  // ---- v21.3.0 (Issue-1): selfHeal platform profile ----
+  // platformConstrained: Render/Railway/small-container detection ON hai —
+  // memory limits + exit-on-fatal ka auto-profile laga tha ya nahi.
+  try {
+    const { selfHealthSnapshot } = await import('./ai/selfHeal.js');
+    const sh = selfHealthSnapshot();
+    out.selfHeal = {
+      armed: sh.armed,
+      exitOnFatal: sh.exitOnFatal,
+      platformConstrained: sh.platformConstrained === true,
+      limitsMB: sh.memory?.limitsMB || null,
+      counts: sh.counts || null,
+      loopLagMs: sh.loopLagMs || null,
+    };
+  } catch { /* selfHeal peek best-effort */ }
+
   // ---- PERSIST: exec heartbeat (file-based dead-man switch) + data-dir writability ----
   try {
     const fs = await import('node:fs');

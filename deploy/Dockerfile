@@ -68,4 +68,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://localhost:8080/api/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 EXPOSE 8080
-CMD ["node", "server/index.js"]
+# v21.3.0 (Issue-1): V8 heap budget BEFORE the cgroup kill — Node's default
+# (~256MB usable heap inside a 512MB container) GC-thrashes right before the
+# OOM-killer fires; an explicit 384MB old-space lets GC win instead.
+CMD ["node", "--max-old-space-size=384", "server/index.js"]

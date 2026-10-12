@@ -120,6 +120,8 @@ import {
 import { runBacktest } from './backtest.js';
 // v10.8 PRO #2: NL Custom Strategy Lab — description → bounded rules → replay
 import { runCustomStrategyBacktest } from './strategyLab.js';
+// v21.3.0 (Issue-1): constrained-platform warm-up gate (Render dyno etc.)
+import { isConstrainedPlatform } from './selfHeal.js';
 // v10.9 INSTANT TELEGRAM PUSH — the price-driven sink (SL/TP touches +
 // STRONG signals) + the shared dedupe the 60s backup alerter reuses.
 import {
@@ -831,6 +833,30 @@ export function registerAITradingRoutes(app, deps) {
         sendTelegram, // v6.11: notify-mode alert sender
       });
       return res.status(result.ok ? 200 : 400).json(result);
+    } catch (e) {
+      return res.status(500).json({ ok: false, error: String(e?.message || e) });
+    }
+  });
+
+  // ---------------- v21.3.0 (Issue-4) ONE-CLICK LIVE PRE-FLIGHT ----------------
+  // READ-ONLY dry-run of the exact gauntlet + would-be ticket: kill/exec
+  // kill/go-live/strategy/mode/connection/signal gates + sizing preview
+  // (qty @ instrument precision, margin, leverage sanity, liquidation,
+  // native SL+TP pair). NO order, NO journal entry — the frontend's
+  // ⚡ EXECUTE LIVE modal isi pe ban'ta hai (hold-to-confirm flow).
+  app.post('/api/ai/futures/execute/precheck', async (req, res) => {
+    try {
+      const { symbol, side, marginUSDT, leverage } = req.body || {};
+      if (!symbol) return res.status(400).json({ ok: false, error: 'symbol required' });
+      const { futuresExecutePrecheck } = await import('./futures.js');
+      const out = await futuresExecutePrecheck({
+        symbol: String(symbol).toUpperCase().replace(/^B-/, '').replace(/_USDT$/, ''),
+        side: side ? String(side).toUpperCase() : undefined,
+        marginUSDT: marginUSDT != null ? Number(marginUSDT) : undefined,
+        leverage: leverage != null ? Number(leverage) : undefined,
+        getFreshSignal: (pair, o) => getFreshFuturesSignalForExec(pair, depsForSignals(), o),
+      });
+      return res.json(out);
     } catch (e) {
       return res.status(500).json({ ok: false, error: String(e?.message || e) });
     }
@@ -2328,7 +2354,10 @@ export function registerAITradingRoutes(app, deps) {
   if (futuresWatcher.unref) futuresWatcher.unref();
 
   // v10.4: GLOBAL EQUITY FUTURES watcher — SL/TP/trailing/partial-TP/
-  // liquidation sweep on the Yahoo-quote (or SIM) price, every 60s.
+  // liquidation sweep on the USDC perp/candle/Yahoo quote (or SIM)
+  // price. v21.3.0 (Issue-6): 60s → 30s — the futures desk ka twin cadence
+  // (SL/TP latency paper positions par bhi utni hi honi chahiye; quotes
+  // 5s-cached hain isliye extra upstream load ~zero hai).
   const globalWatcher = setInterval(async () => {
     try {
       const pass = _globGuard(() => watchGlobalPositions({ sendTelegram }));
@@ -2339,7 +2368,7 @@ export function registerAITradingRoutes(app, deps) {
         console.log(`[ai] global-futures watcher closed ${closures.length} position(s): ${closures.map(c => `${c.pair} ${c.pnlINR}`).join(', ')}`);
       }
     } catch { /* non-fatal */ }
-  }, 60_000);
+  }, 30_000);
   if (globalWatcher.unref) globalWatcher.unref();
 
   // v6.8: SUPERINTELLIGENCE AGENT loop — wallet scan → auto entry/exit,
@@ -2523,7 +2552,17 @@ export function registerAITradingRoutes(app, deps) {
   // first poll is warm. Boards first (parallel), expert scans after —
   // single-flight joins any request that arrives mid-warm. Disable
   // with WARM_ON_BOOT=0.
-  if (process.env.WARM_ON_BOOT !== '0') {
+  // v21.3.0 (Issue-1): constrained platforms (Render free dyno etc.) ab
+  // warm-up ko DEFAULT-OFF karte hain — ek 0.1-CPU 512MB dyno par boot
+  // ke turant baad 3 board scans + expert scans stack karna hi tha
+  // "wake ke baad pehla request timeout" symptom. WARM_ON_BOOT=1 se
+  // forcefully wapas ON ho jaata hai; WARM_ON_BOOT=0 hamesha OFF.
+  const _warmExplicit = String(process.env.WARM_ON_BOOT || '').trim();
+  const _warmConstrainedOff = (() => {
+    try { return isConstrainedPlatform(process.env); } catch { return false; }
+  })();
+  const _warmOn = _warmExplicit === '1' ? true : _warmExplicit === '0' ? false : !_warmConstrainedOff;
+  if (_warmOn) {
     const warmBoards = () => Promise.allSettled([
       getSignals('CRYPTO', depsForSignals()).catch(() => null),
       getSignals('FUTURES', depsForSignals()).catch(() => null),

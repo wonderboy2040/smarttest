@@ -464,6 +464,26 @@ export async function fetchGlobalQuotes({ maxAgeMs = 5_000 } = {}) {
       });
     }
   }
+  // 1b) v21.3.0 (Issue-6): USDC CANDLESTICK PATH — the RT probe failed
+  // (403/WAF/undocumented endpoint) to perp LTP ab DOCUMENTED candlesticks
+  // endpoint se aata hai (24/7, same family the futures desk uses). Ye
+  // REALTIME perp price hai — Yahoo spot-ke-frozen-close se pehle YE
+  // aata hai, isliye chain me Finnhub se UPAR.
+  const needCandles = GLOBAL_FUTURES_UNIVERSE.filter(u => !u.sim && !map.has(u.symbol));
+  if (needCandles.length > 0) {
+    try {
+      const gc = await fetchGlobalUsdcCandleQuotes({ bases: needCandles.map(u => u.symbol) }).catch(() => null);
+      for (const u of needCandles) {
+        const row = gc?.get(u.symbol);
+        if (row && row.price > 0) {
+          map.set(u.symbol, {
+            symbol: u.symbol, price: row.price, changePct: row.changePct || 0,
+            source: 'coindcx-usdc-candles', sim: false, ts: row.ts || Date.now(),
+          });
+        }
+      }
+    } catch { /* honest fallthrough to Finnhub/Yahoo */ }
+  }
   // 2) Finnhub — FIRST fallback for the symbols the RT feed didn't cover
   //    (unlisted-on-CoinDCX names, or the feed is down → full fallback).
   //    Finnhub tickers match the Yahoo `yahoo:` field for US large-caps —
@@ -517,6 +537,127 @@ export async function fetchGlobalQuotes({ maxAgeMs = 5_000 } = {}) {
 export async function fetchGlobalLtpMap() {
   const m = await fetchGlobalQuotes().catch(() => null);
   return m || new Map();
+}
+
+// ----------------------------------------------------------------
+// v21.3.0 (Issue-6: "Equity sim USDC me realtime price fetch nahi ho
+// raha") — 24/7 CANDLESTICK PRICE PATH.
+//
+// THE ROOT CAUSE: the desk's realtime chain was RT-probe → Finnhub →
+// Yahoo. The RT probe (v3/current_prices/futures/rt with USDC params)
+// is an UNDOCUMENTED endpoint that 403s on many networks — and Yahoo's
+// regularMarketPrice is the FROZEN last close outside US hours (which
+// is EXACTLY when an IST user trades — US market 20:30–02:00 IST).
+// Result: prices looked frozen, SL/TP never evaluated, positions P&L
+// stood still — "realtime price fetch nahi ho raha".
+//
+// THE FIX: when the RT probe fails, price the USDC perps from the
+// DOCUMENTED candlesticks endpoint (the same family the futures desk
+// uses — /market_data/candlesticks?pair=b-<sym>_usdc&pcode=f):
+// last 1m candle close = the perp LTP, 24/7. 10s TTL + concurrency-6
+// batching + negative backoff (403/WAF-blip ek round me hi politely
+// ruk jaata hai). Yahoo stays the LAST fallback (ab honestly
+// 'us-closed' labeled through the market-phase badge).
+// ----------------------------------------------------------------
+const GLOBAL_CANDLES_URL = 'https://public.coindcx.com/market_data/candlesticks';
+const GLOB_CANDLE_TTL_MS = 10_000;
+const GLOB_CANDLE_NEG_MS = 60_000;   // 403/network fail → 1 min off
+const GLOB_CANDLE_CONCURRENCY = 6;
+let _gcCache = new Map();            // BASE → { at, price, changePct }
+let _gcDownUntil = 0;
+let _gcInflight = null;
+
+async function _fetchOneUsdcCandle(base) {
+  try {
+    const to = Math.floor(Date.now() / 1000);
+    const from = to - 30 * 60; // last 30 min of 1m bars is plenty
+    const url = `${GLOBAL_CANDLES_URL}?pair=${encodeURIComponent(`b-${String(base).toLowerCase()}_usdc`)}&from=${from}&to=${to}&resolution=1&pcode=f`;
+    const r = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    const rows = Array.isArray(j) ? j : (Array.isArray(j?.data) ? j.data : null);
+    if (!rows || rows.length === 0) return null;
+    // sort by time asc, take the LAST candle with a positive close
+    const sorted = rows
+      .map(x => ({ t: Number(x.time) < 1e12 ? Number(x.time) * 1000 : Number(x.time), c: num(x.close), o: num(x.open) }))
+      .filter(c => c.c > 0 && c.o > 0)
+      .sort((a, b) => a.t - b.t);
+    const last = sorted[sorted.length - 1];
+    if (!last) return null;
+    const prev = sorted.length > 1 ? sorted[sorted.length - 2] : null;
+    return { price: last.c, changePct: prev && prev.c > 0 ? ((last.c - prev.c) / prev.c) * 100 : 0, ts: last.t };
+  } catch { return null; }
+}
+
+/** USDC perp LTPs from the candlestick endpoint — Map<BASE, row>.
+ *  Only called for symbols the RT probe missed. */
+export async function fetchGlobalUsdcCandleQuotes({ bases = null } = {}) {
+  const want = (Array.isArray(bases) && bases.length > 0
+    ? bases
+    : GLOBAL_FUTURES_UNIVERSE.filter(u => !u.sim).map(u => u.symbol))
+    .map(s => String(s).toUpperCase());
+  const fresh = want.filter(b => {
+    const hit = _gcCache.get(b);
+    return !(hit && Date.now() - hit.at < GLOB_CANDLE_TTL_MS);
+  });
+  if (Date.now() < _gcDownUntil || fresh.length === 0) {
+    return _gcCache; // negative-cache / all-fresh — serve what we have
+  }
+  if (_gcInflight) return _gcInflight;
+  const job = (async () => {
+    let ok = 0, fail = 0;
+    for (let i = 0; i < fresh.length; i += GLOB_CANDLE_CONCURRENCY) {
+      const slice = fresh.slice(i, i + GLOB_CANDLE_CONCURRENCY);
+      const outs = await Promise.allSettled(slice.map(_fetchOneUsdcCandle));
+      outs.forEach((o, k) => {
+        if (o.status === 'fulfilled' && o.value && o.value.price > 0) {
+          _gcCache.set(slice[k], { at: Date.now(), price: o.value.price, changePct: o.value.changePct, ts: o.value.ts });
+          ok++;
+        } else { fail++; }
+      });
+    }
+    // hard-fail round (WAF block) → back off 60s so a blocked network
+    // costs one probe round per minute, not one per poll
+    if (ok === 0 && fail > 0) _gcDownUntil = Date.now() + GLOB_CANDLE_NEG_MS;
+    return _gcCache;
+  })();
+  _gcInflight = job;
+  try { return await job; } finally { _gcInflight = null; }
+}
+
+// ----------------------------------------------------------------
+// v21.3.0 (Issue-6): US MARKET PHASE — pre/open/post/closed + countdown.
+// The equity desk perps trade 24/7 par UNDERLYING spot session nahi —
+// ye badge user ko batata hai ki quote ka matlab kya hai (perp live vs
+// spot closed). Finnhub staleness gate + Yahoo pre/post sab isi pe
+// anchor hote hain.
+// ----------------------------------------------------------------
+export function usMarketPhase(now = new Date()) {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false,
+    }).formatToParts(now).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
+    const h = Number(parts.hour) % 24; // hour12:false 24 ko hi deta hai
+    const m = Number(parts.minute);
+    const minutes = h * 60 + m;
+    const wk = String(parts.weekday || '');
+    const weekend = wk === 'Sat' || wk === 'Sun';
+    // Sat: Friday post-market ended; Sun 18:00 ET se pre-market Monday
+    if (wk === 'Sat') return { phase: 'CLOSED', label: 'US market closed (weekend)', nextChange: 'Monday 04:00 ET pre-market', isET: true };
+    if (wk === 'Sun') {
+      return minutes >= 18 * 60
+        ? { phase: 'PRE', label: 'US pre-market', nextChange: 'open 09:30 ET', isET: true }
+        : { phase: 'CLOSED', label: 'US market closed (weekend)', nextChange: 'Sunday 18:00 ET pre-market', isET: true };
+    }
+    if (weekend) return { phase: 'CLOSED', label: 'US market closed', nextChange: 'next weekday 04:00 ET', isET: true };
+    if (minutes < 4 * 60) return { phase: 'CLOSED', label: 'US market closed', nextChange: 'pre-market 04:00 ET', isET: true };
+    if (minutes < 9 * 60 + 30) return { phase: 'PRE', label: 'US pre-market', nextChange: `open ${9 * 60 + 30 - minutes}m`, isET: true };
+    if (minutes < 16 * 60) return { phase: 'OPEN', label: 'US market OPEN', nextChange: `close ${(16 * 60) - minutes}m`, isET: true };
+    if (minutes < 20 * 60) return { phase: 'POST', label: 'US after-hours', nextChange: 'closes 20:00 ET', isET: true };
+    return { phase: 'CLOSED', label: 'US market closed', nextChange: 'pre-market 04:00 ET (kal)', isET: true };
+  } catch {
+    return { phase: 'UNKNOWN', label: 'US market phase nahi mila', nextChange: null, isET: false };
+  }
 }
 
 // ---------------- candles (Yahoo 1h real / synthetic SIM) ----------------
@@ -1041,6 +1182,12 @@ export async function globalFuturesMarketsView() {
   });
   return {
     ok: true, count: rows.length, markets: rows, fetchedAt: Date.now(),
+    // v21.3.0 (Issue-6): US market phase — pre/open/post/closed badge +
+    // the honest "spot frozen / perp 24/7" context for the equity desk.
+    usMarket: usMarketPhase(),
+    // v21.3.0: quote-chain provenance summary (kitne symbols kis source
+    // se price le rahe hain — frozen-feed diagnosis at a glance).
+    priceSources: rows.reduce((acc, r) => { const s = r.source || 'none'; acc[s] = (acc[s] || 0) + 1; return acc; }, {}),
     // v10.5.3 universe provenance: seed size + CoinDCX-discovered tail
     universe: {
       seed: GLOBAL_FUTURES_SEED.length,
@@ -1054,6 +1201,8 @@ export async function globalFuturesMarketsView() {
 export function __resetGlobalForTests() {
   _quotesCache = null; _quotesAt = 0;
   _candleCache = new Map();
+  // v21.3.0: candle-quote path state resets with the rest
+  _gcCache = new Map(); _gcDownUntil = 0; _gcInflight = null;
   // v10.7: the RT feed state resets too (sticky variant + caches) so
   // every case starts from a clean probe. v10.11: the backoff streak
   // resets with it (a leaky streak would poison cadence assertions).

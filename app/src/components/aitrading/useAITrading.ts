@@ -19,7 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch, getProxyBase, getSessionToken } from '../../utils/api';
 import { createTickBatcher } from '../../utils/tickBatcher';
 import { desktopNotify, desktopNotifyPermission } from '../../utils/desktopNotify';
-import type { AISignal, OptionsDesk, OptionSignalsView, OptionsScanView, SignalBoard, TradingState, JournalPosition, JournalEntry, BacktestResult, StrategyLabResult, AlertsStatus, DhanStatus, SwingBoard, WhaleRadar, LedgerView, MorningBrief, OrderbookView, AgentView, WalletView, MarketKind, TrustView, PerfView, CorrView, SectorView, IncomeView, NarrativeView, EdgeStats, LtfSnapshot, CouncilStatusView, CouncilStamp, CouncilCalibrationView, NearMissEntry } from './types';
+import type { AISignal, OptionsDesk, OptionSignalsView, OptionsScanView, SignalBoard, TradingState, JournalPosition, JournalEntry, BacktestResult, StrategyLabResult, AlertsStatus, DhanStatus, SwingBoard, WhaleRadar, LedgerView, MorningBrief, OrderbookView, AgentView, WalletView, MarketKind, TrustView, PerfView, CorrView, SectorView, IncomeView, NarrativeView, EdgeStats, LtfSnapshot, CouncilStatusView, CouncilStamp, CouncilCalibrationView, NearMissEntry, FuturesPrecheckResult } from './types';
 
 export interface DeepSignalResult {
   ok: boolean;
@@ -506,6 +506,25 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
     } finally { setBusy(false); }
   }, [loadPositions, loadState]);
 
+  // v21.3.0 (Issue-4): READ-ONLY pre-flight for the ⚡ EXECUTE LIVE modal —
+  // the same gauntlet + would-be ticket, dry-run (koi order nahi lagta).
+  const futuresPrecheck = useCallback(async (signal: AISignal, opts?: { marginUSDT?: number; leverage?: number }): Promise<FuturesPrecheckResult | null> => {
+    try {
+      const r = await apiFetch(`${getProxyBase()}/api/ai/futures/execute/precheck`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: signal.symbol, side: signal.side,
+          ...(opts?.marginUSDT != null ? { marginUSDT: opts.marginUSDT } : {}),
+          ...(opts?.leverage != null ? { leverage: opts.leverage } : {}),
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }, []);
+
   // v10.4: GLOBAL EQUITY FUTURES SIM desk execution (AAPL/MSFT/GOOGL/
   // AMZN/NVDA/TSLA/META + SPACEX — paper/notify only; the server rejects
   // LIVE honestly because CoinDCX par ye contracts listed nahi hain).
@@ -580,7 +599,7 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
     /** v10.17: explicit positions/entries refetch (clear-closed button etc). */
     refreshPositions: loadPositions,
     executeIndia, runBacktest, runStrategyLab, fetchAlertsStatus, saveAlertsConfig, testAlert,
-    fetchDhanStatus, dhanConnect, dhanDisconnect, executeFutures, executeGlobal,
+    fetchDhanStatus, dhanConnect, dhanDisconnect, executeFutures, futuresPrecheck, executeGlobal,
   };
 }
 

@@ -235,7 +235,7 @@ export default memo(function CoinDcxTab() {
   // board (AAPL/GOOGL/NVDA/…/SPACEX). v21.0.5 USER SPEC: SPOT (CRYPTO)
   // board fetch REMOVED — sirf Futures USDT + Equity SIM boards.
   const t = useAITrading(true, { markets: ['FUTURES', 'GLOBALFUTURES'] });
-  const { futures, globalFut, state, positions, entries, loading, busy, refresh, refreshPositions, executeFutures, executeGlobal, updateConfig, closePos, fetchDeep, boardError, positionsLive, rescan, rescanning } = t;
+  const { futures, globalFut, state, positions, entries, loading, busy, refresh, refreshPositions, executeFutures, futuresPrecheck, executeGlobal, updateConfig, closePos, fetchDeep, boardError, positionsLive, rescan, rescanning } = t;
   const { fetchAlertsStatus, saveAlertsConfig, testAlert } = t;
   // v21.0.5 USER SPEC: SPOT desk COMPLETELY REMOVED — sirf GLOBAL
   // FUTURES (USDT perps) + EQUITY SIM (USDC) desks. Default: FUTURES.
@@ -536,6 +536,15 @@ export default memo(function CoinDcxTab() {
       {/* ============ 📊 DESK STATS (v6.10 — active desk one-glance) ============ */}
       <DeskStatsStrip board={board} deskLabel={desk === 'FUTURES' ? '⚡ FUTURES DESK SNAPSHOT' : '🌍 EQUITY SIM DESK SNAPSHOT'} />
 
+      {/* ============ v21.3.0 (Issue-6): EQUITY DESK US MARKET PHASE + FEED
+          PROVENANCE STRIP — pre/open/post/closed badge (underlying spot ka
+          session) + quote-chain summary (kitne symbols CoinDCX perp /
+          candle / Yahoo se price le rahe hain). Ye isliye zaroori hai:
+          US market band hone par Yahoo quote FROZEN last-close hota hai
+          jabki USDC perp 24/7 chalta hai — badge user ko batata hai ki
+          price kis cheez ki hai. */}
+      {desk === 'GLOBAL' && <GlobalDeskFeedStrip />}
+
       {/* ============ v21.0.3 LOCAL LLM (OLLAMA) MODEL STRIP ============
           India tab jaisa hi — "konsa local ollama model use ho raha hai"
           ab crypto desk par bhi top-level visible (pehle sirf collapsed
@@ -669,6 +678,7 @@ export default memo(function CoinDcxTab() {
                 liveLtp={t?.price ?? null}
                 liveSrc={t?.src ?? null}
                 onExecuteFutures={desk === 'FUTURES' ? onExecuteFutures : undefined}
+                onPrecheckFutures={desk === 'FUTURES' ? futuresPrecheck : undefined}
                 onExecuteGlobal={desk === 'GLOBAL' ? onExecuteGlobal : undefined}
                 onDeep={onDeep}
                 canLive={desk === 'GLOBAL' ? false : canLive} isNew={newSymbols.has(s.symbol)}
@@ -898,6 +908,7 @@ export default memo(function CoinDcxTab() {
                     liveLtp={deepCardTick?.price ?? null}
                     liveSrc={deepCardTick?.src ?? null}
                     onExecuteFutures={deepCardCanExec && deepExecSig!.market === 'FUTURES' ? onExecuteFutures : undefined}
+                    onPrecheckFutures={deepCardCanExec && deepExecSig!.market === 'FUTURES' ? futuresPrecheck : undefined}
                     onExecuteGlobal={deepCardCanExec && deepExecSig!.market === 'GLOBALFUTURES' ? onExecuteGlobal : undefined}
                     onDeep={onDeep}
                     canLive={canLive} busy={busy}
@@ -955,6 +966,81 @@ export default memo(function CoinDcxTab() {
           </div>
         </div>
       )}
+    </div>
+  );
+});
+
+// ============================================================
+// v21.3.0 (Issue-6) — EQUITY SIM desk US-market phase + feed strip
+// ------------------------------------------------------------
+// AAPL/MSFT/GOOGL USDC perps 24/7 trade karte hain, par UNDERLYING
+// spot sirf 20:00–02:00 IST (9:30–16:00 ET) open hota hai. Jab spot
+// band hai, Yahoo fallback = frozen last close. Ye strip dono sach
+// ek saath dikhata hai: (a) US session phase + countdown, (b) quote
+// chain provenance (CoinDCX perp RT / candle / Yahoo counts) + a
+// frozen-feed amber warning jab realtime legs down hon.
+// ============================================================
+interface GlobalMarketsPayload {
+  ok: boolean;
+  usMarket?: { phase: string; label: string; nextChange: string | null };
+  priceSources?: Record<string, number>;
+  fetchedAt?: number;
+}
+
+const PHASE_STYLE: Record<string, string> = {
+  OPEN: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  PRE: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  POST: 'bg-amber-500/10 text-amber-200 border-amber-500/30',
+  CLOSED: 'bg-slate-700/40 text-slate-300 border-slate-600/40',
+  UNKNOWN: 'bg-slate-700/40 text-slate-400 border-slate-600/40',
+};
+
+const GlobalDeskFeedStrip = memo(function GlobalDeskFeedStrip() {
+  const [data, setData] = useState<GlobalMarketsPayload | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const r = await apiFetch(`${getProxyBase()}/api/ai/global/markets`, { signal: AbortSignal.timeout(10000) });
+        if (!r.ok) return;
+        const j = await r.json().catch(() => null);
+        if (alive && j?.ok) setData(j);
+      } catch { /* honest: strip hides */ }
+    };
+    void load();
+    const t = setInterval(load, 30_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  if (!data?.usMarket) return null;
+  const ph = data.usMarket;
+  const src = data.priceSources || {};
+  const rtCount = (src['coindcx-usdc'] || 0) + (src['coindcx-usdc-candles'] || 0);
+  const yahooCount = src['yahoo'] || 0;
+  const total = Object.values(src).reduce((a, b) => a + b, 0);
+  const frozen = rtCount === 0 && yahooCount > 0 && ph.phase !== 'OPEN';
+
+  return (
+    <div className="quantum-panel rounded-2xl px-3 py-2 flex items-center gap-2 flex-wrap text-[10px] font-mono font-bold" data-testid="global-feed-strip">
+      <span className={`px-2 py-1 rounded-lg border tracking-wide ${PHASE_STYLE[ph.phase] || PHASE_STYLE.UNKNOWN}`} title={`US spot session (underlying): ${ph.label}${ph.nextChange ? ` · next: ${ph.nextChange}` : ''} — USDC PERP khud 24/7 trade hota hai`}>
+        🇺🇸 {ph.phase}{ph.nextChange ? ` · ${ph.nextChange}` : ''}
+      </span>
+      {total > 0 && (
+        <span className="text-slate-400" title="Quote-chain provenance: kitne symbols ne price kis source se li">
+          FEED: {rtCount > 0 ? <span className="text-emerald-400">{rtCount} CoinDCX perp</span> : null}
+          {rtCount > 0 && yahooCount > 0 ? ' · ' : null}
+          {yahooCount > 0 ? <span className={frozen ? 'text-red-400' : 'text-slate-300'}>{yahooCount} Yahoo{frozen ? ' (frozen)' : ''}</span> : null}
+          {src['finnhub'] ? ` · ${src['finnhub']} Finnhub` : ''}
+          {src['sim'] ? ` · ${src['sim']} SIM` : ''}
+        </span>
+      )}
+      {frozen && (
+        <span className="px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/40" title="Realtime CoinDCX USDC legs down hain + US spot band — Yahoo last-close serve ho raha hai. Perp price app me alag ho sakti hai; positions P&L dheemi update hogi. Feed wapas aane par auto-heal.">
+          ⚠ PRICES FROZEN (US closed · perp feed down)
+        </span>
+      )}
+      <span className="ml-auto text-slate-600" title="USDC perp 24/7 hai — spot band hone par bhi paper trade khol sakte ho (entry CoinDCX candle/probe price ya honest last-close se hoga)">EQUITY SIM perps 24/7</span>
     </div>
   );
 });

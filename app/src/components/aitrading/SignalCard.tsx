@@ -22,9 +22,29 @@ import { MTFConfluenceBadge } from '../intraday/MTFConfluenceBadge';
 import { CandleChart } from './CandleChart';
 import { DepthLadder } from './DepthLadder';
 import { LiveSourceBadge } from './LiveSourceBadge';
+import { LiveExecuteModal } from './LiveExecuteModal';
 import { ManualTradePrompt } from './ManualTradePrompt';
 import { liveInvalidationCheck } from './liveInvalidation';
 import type { AISignal, Side, SuperIntel, SignalVerification, UltrafastVerification } from './types';
+
+/** v21.3.0 (Issue-5): Jev/Laya dual-AI confirmation chip — the board
+ *  signal's verdict from BOTH AI providers (cloud + local). */
+function AiConfirmBadge({ v }: { v: NonNullable<AISignal['aiConfirm']> }) {
+  const confirmed = v.verdict === 'CONFIRMED';
+  const conflict = v.verdict === 'CONFLICT';
+  const bits = [
+    v.jev ? `Jev ${v.jev === 'AGREE' ? '✓' : v.jev === 'DISAGREE' ? '✗' : '○'}` : null,
+    v.laya ? `Laya ${v.laya === 'AGREE' ? '✓' : v.laya === 'DISAGREE' ? '✗' : '○'}` : null,
+  ].filter(Boolean).join(' · ');
+  return (
+    <span
+      className={`px-1.5 py-0.5 rounded text-[9px] font-black border font-mono ${confirmed ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40' : conflict ? 'bg-red-500/15 text-red-300 border-red-500/40' : 'bg-slate-700/40 text-slate-300 border-slate-600/40'}`}
+      title={`Jev (cloud) + Laya (local) dual-AI confirmation: ${bits || 'no verdict'} — ${confirmed ? 'dono ne ye side APPROVE kiya (+3 score)' : conflict ? 'koi provider ULTA side chuna (−8 score, STRONG→ACTION demote)' : 'abstain/wait — score untouched'}. AI kabhi side/size/SL nahi badalta — sirf confirm ya demote karta hai.`}
+    >
+      {confirmed ? `🤖 AI ✓ (${bits})` : conflict ? `🤖 AI ✗ (${bits})` : `🤖 AI ○ (${bits})`}
+    </span>
+  );
+}
 
 const fmt = (n: number | null | undefined, dp = 2): string => {
   if (n == null || !Number.isFinite(n)) return '—';
@@ -1103,6 +1123,11 @@ interface Props {
    *  'coindcx-fut-rt' | 'coindcx-fut-ws' | 'finnhub-global-rt' |
    *  'yahoo-global-rt' | 'binance-fut-rt' | …) → the provenance pill. */
   liveSrc?: string | null;
+  /** v21.3.0 (Issue-4): READ-ONLY pre-flight for the ⚡ EXECUTE LIVE
+   *  modal (dry-run gauntlet + would-be ticket). Injected from the desk
+   *  (useAITrading.futuresPrecheck); absent → the old direct-execute
+   *  behaviour (paper flow untouched). */
+  onPrecheckFutures?: (signal: AISignal, opts?: { marginUSDT?: number; leverage?: number }) => Promise<import('./types').FuturesPrecheckResult | null>;
 }
 
 // ---------------- v11.0: GLOBAL MARKET COUNCIL strip ----------------
@@ -1228,10 +1253,12 @@ function SignalAgeChip({ age }: { age: NonNullable<AISignal['signalAge']> }) {
   );
 }
 
-export const SignalCard = memo(function SignalCard({ signal, busy, onExecute, onExecuteIndia, onExecuteFutures, onExecuteGlobal, onDeep, canLive, canLiveIndia, isNew, orderBudgetINR, riskCapPct, maxLeverage, indiaBudgetINR, onPaperTrade, paperOpenForSymbol, liveLtp, liveSrc }: Props) {
+export const SignalCard = memo(function SignalCard({ signal, busy, onExecute, onExecuteIndia, onExecuteFutures, onExecuteGlobal, onDeep, canLive, canLiveIndia, isNew, orderBudgetINR, riskCapPct, maxLeverage, indiaBudgetINR, onPaperTrade, paperOpenForSymbol, liveLtp, liveSrc, onPrecheckFutures }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [slipOpen, setSlipOpen] = useState(false);
   const [ticketOpen, setTicketOpen] = useState(false);
+  // v21.3.0 (Issue-4): the ⚡ EXECUTE LIVE pre-flight modal state.
+  const [liveModalOpen, setLiveModalOpen] = useState(false);
   // v20.2: the price chart — lazy (fetch + render only when the user opens it)
   const [chartOpen, setChartOpen] = useState(false);
   // v10.16 S2: manual-trade record panel ("Maine ye trade liya hai")
@@ -1286,6 +1313,9 @@ export const SignalCard = memo(function SignalCard({ signal, busy, onExecute, on
                 chart ne direction verify ki ya nahi (CONFIRMED / PENDING /
                 REJECTED — the long-bola-par-short-gaya mismatch guard). */}
             {signal.ultrafast && <UltrafastBadge v={signal.ultrafast} side={signal.side} />}
+            {/* v21.3.0 (Issue-5): Jev/Laya dual-AI confirmation — CONFIRMED /
+                CONFLICT / abstain, per-provider chips ke saath. */}
+            {signal.aiConfirm && <AiConfirmBadge v={signal.aiConfirm} />}
             {(() => {
               // v10.2.1: guard like TopPicksPanel — a stale/partial signal
               // without voters would render an "undefined/undefined votes"
@@ -1701,7 +1731,10 @@ export const SignalCard = memo(function SignalCard({ signal, busy, onExecute, on
 
       {/* Execution buttons (global futures — CoinDCX perps gauntlet, v9.0.2
           one-click PAPER added: futures cards had NO quick paper button, only
-          the sized ticket — paper practice should always be one click away) */}
+          the sized ticket — paper practice should always be one click away).
+          v21.3.0 (Issue-4): ⚡ EXECUTE LIVE ab PRE-FLIGHT MODAL kholta hai
+          (dry-run gauntlet + would-be ticket + hold-to-confirm) — accidental
+          click se real order kabhi nahi lagta; paper flow frictionless hi hai. */}
       {signal.market === 'FUTURES' && onExecuteFutures && !ticketOpen && (
         <div className="mt-3 flex flex-wrap gap-2">
           <button
@@ -1712,9 +1745,13 @@ export const SignalCard = memo(function SignalCard({ signal, busy, onExecute, on
           </button>
           {signal.grade === 'STRONG' && signal.executable && (
             <button
-              onClick={() => onExecuteFutures(signal, 'live')}
+              onClick={() => {
+                if (onPrecheckFutures) setLiveModalOpen(true); // v21.3.0: pre-flight modal
+                else onExecuteFutures(signal, 'live'); // fallback: no precheck wired → direct (legacy)
+              }}
               disabled={busy || !canLive}
-              title={canLive ? 'REAL leveraged CoinDCX futures order (all gates re-verified server-side)' : 'Signal is STRONG — enable LIVE mode in the console to arm execution'}
+              title={canLive ? 'Pre-flight checklist + would-be ticket dekho — hold-to-confirm se REAL order jaata hai' : 'Signal is STRONG — enable LIVE mode in the console to arm execution'}
+              data-testid="execute-live-btn"
               className="px-4 py-2 rounded-xl text-xs font-black bg-gradient-to-r from-emerald-600 to-teal-600 text-white hover:from-emerald-500 hover:to-teal-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               ⚡ EXECUTE LIVE ₮
             </button>
@@ -1723,6 +1760,21 @@ export const SignalCard = memo(function SignalCard({ signal, busy, onExecute, on
             <span className="text-[10px] text-slate-500 self-center px-1">LIVE execution locked — needs STRONG (75%+ conf, 70%+ agreement)</span>
           )}
         </div>
+      )}
+
+      {/* v21.3.0 (Issue-4): the LIVE pre-flight modal — dry-run gauntlet +
+          would-be ticket + hold-to-confirm. Unmounts on close (state reset). */}
+      {liveModalOpen && onExecuteFutures && signal.market === 'FUTURES' && (
+        <LiveExecuteModal
+          signal={signal}
+          onPrecheck={onPrecheckFutures || (async () => null)}
+          onExecute={async (s) => {
+            const r = await onExecuteFutures(s, 'live');
+            const o = (r && typeof r === 'object') ? r : {};
+            return { ok: o.ok === true, error: o.error, note: o.note };
+          }}
+          onClose={() => setLiveModalOpen(false)}
+        />
       )}
 
       {signal.market === 'GLOBALFUTURES' && onExecuteGlobal && !ticketOpen && (

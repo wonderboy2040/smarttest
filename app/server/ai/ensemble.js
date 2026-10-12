@@ -13,6 +13,15 @@
 
 import { pRound, MAX_STOP_FRACTION } from './lib/priceRound.js';
 
+// v21.3.0 (Issue-3): sub-noise stop floor — the swing-structure stop may
+// tighten the ATR baseline stop at most to this fraction of ONE ATR. A
+// stop closer than 0.6×ATR sits inside normal fill noise (the "SAB SL
+// hit" class). Env override for traders who want the raw structure stop.
+export const MIN_STOP_ATR_FRACTION = (() => {
+  const n = Number.parseFloat(String(process.env.AI_MIN_STOP_ATR_FRACTION ?? ''), 10);
+  return Number.isFinite(n) && n > 0 && n <= 2 ? n : 0.6;
+})();
+
 
 export const DEFAULT_GATES = {
   minConfidence: 75,   // ensemble confidence ≥ this → STRONG-eligible
@@ -481,9 +490,25 @@ export function buildTradePlan(consensus, ctx, market, opts = {}) {
     const sideOk = long ? ss.sl < ltp : ss.sl > ltp;
     const tighter = long ? Math.max(stopLoss, ss.sl) : Math.min(stopLoss, ss.sl);
     if (sideOk && ((long && tighter > stopLoss && tighter < ltp) || (!long && tighter < stopLoss && tighter > ltp))) {
-      stopLoss = tighter;
-      planStyle = `${planStyle}+${ss.style || 'structure'}`;
-      structure = { level: ss.structural ?? null, barsAgo: ss.barsAgo ?? null };
+      // v21.3.0 (Issue-3: "4-5 paper trades SAB SL hit") SUB-NOISE STOP
+      // FLOOR: the structure stop takes the TIGHTER of (swing, 1.6×ATR)
+      // — a quiet-regime swing 0.2-0.3×ATR away used to put the stop
+      // INSIDE normal noise, so paper fills + the 30s watcher cadence
+      // alone stopped the trade out before any thesis could play. The
+      // stop may now tighten at most to MIN_STOP_ATR_FRACTION × ATR of
+      // distance; a would-be-tighter swing keeps the floor and the plan
+      // flags `stopFloored` (UI honesty). ATR-fallback plans (a = fake
+      // ATR) aur 1.4× India plans bhi covered — floor unhi units me hai.
+      let effStop = tighter;
+      let stopFloored = false;
+      const minDist = MIN_STOP_ATR_FRACTION * a;
+      if (Math.abs(ltp - effStop) < minDist) {
+        effStop = long ? ltp - minDist : ltp + minDist;
+        stopFloored = true;
+      }
+      stopLoss = effStop;
+      planStyle = `${planStyle}+${ss.style || 'structure'}${stopFloored ? '+floor' : ''}`;
+      structure = { level: ss.structural ?? null, barsAgo: ss.barsAgo ?? null, ...(stopFloored ? { floored: true } : {}) };
     }
   }
   // v6.4 — build-time risk cap (optional): when the caller knows the
@@ -524,6 +549,7 @@ export function buildTradePlan(consensus, ctx, market, opts = {}) {
     atrUsed: pRound(a),
     planStyle,
     ...(structure ? { structure } : {}),
+    ...(structure?.floored ? { stopFloored: true } : {}),
     ...(riskClamped ? { riskClamped: true, originalRiskPct } : {}),
   };
 }

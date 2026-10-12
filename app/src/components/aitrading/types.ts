@@ -434,6 +434,17 @@ export interface AISignal {
    *  AI_ENABLE_MTF_CONFLUENCE=true). agreement < 0.67 → the server
    *  already banned STRONG; the badge makes the conflict visible. */
   mtf?: MTFConfluence | null;
+  /** v21.3.0 (Issue-5) LAYA + JEV AI CONFIRMATION — the dual-provider
+   *  (Jev cloud + Laya local) verdict on this signal: both AGREE →
+   *  CONFIRMED (+3 aiScore); koi provider ulta side → CONFLICT (−8 +
+   *  STRONG→ACTION). NEUTRAL = abstain/wait. Present only when at least
+   *  one provider is configured (AI_BOARD_CONFIRM). */
+  aiConfirm?: {
+    jev: 'AGREE' | 'DISAGREE' | 'NEUTRAL' | null;
+    laya: 'AGREE' | 'DISAGREE' | 'NEUTRAL' | null;
+    verdict: 'CONFIRMED' | 'CONFLICT' | 'NEUTRAL';
+    at?: number;
+  } | null;
   /** v10.15 GAP 2 EVENT GUARD: the next scheduled event for this
    *  symbol/desk (⚠ Earnings in 2h / ⚠ FOMC 30m) — same truth the
    *  auto-agent's entry gauntlet vets entries against. */
@@ -1803,4 +1814,54 @@ export interface NarrativeView {
   story: string[];
   watch: string;
   asOf?: number;
+}
+
+// ============================================================
+// v21.3.0 (Issue-4) — ONE-CLICK LIVE EXECUTE PRE-FLIGHT types
+// ============================================================
+export interface PrecheckGate {
+  name: string;
+  pass: boolean;
+  detail: string | null;
+  blocking?: boolean;
+}
+
+export interface PrecheckTicket {
+  pair: string;
+  symbol: string;
+  side: string | null;
+  price: number | null;
+  stopLoss: number | null;
+  target1: number | null;
+  target2: number | null;
+  riskPct: number | null;
+  rewardRisk: number | null;
+  leverage: number;
+  leverageRequested: number;
+  maxSaneLeverage: number | null;
+  marginUSDT: number;
+  marginUsedUSDT: number;
+  marginINR: number | null;
+  qty: number;
+  notionalUSDT: number;
+  notionalINR: number | null;
+  liquidation: number | null;
+  grade: string | null;
+  confidence: number | null;
+  aiScore: number | null;
+  aiConfirm: string | null;
+  nativeProtection: { stopLoss: number; takeProfit: number } | null;
+  minQty: number | null;
+  qtyPrecision: number | null;
+}
+
+export interface FuturesPrecheckResult {
+  ok: boolean;
+  symbol: string;
+  pair?: string;
+  side?: string | null;
+  gates: PrecheckGate[];
+  ticket: PrecheckTicket | null;
+  warnings: string[];
+  error?: string;
 }

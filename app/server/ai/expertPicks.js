@@ -847,6 +847,21 @@ async function _runScan(mkt, opts = {}) {
         if (typeof guarded.confidence === 'number') finalScore = guarded.confidence;
         if (guarded.grade) finalGrade = guarded.grade;
       }
+      // ----------------------------------------------------------------
+      // v21.3.0 (Issue-7: "EXPERT PICKS — 80+ AI SCORE ko Superintelligence
+      // se improve karo") CHOP CAP: ADX < 15 = koi trend strength hi
+      // nahi — range-bound name ka 2R target structurally unreachable.
+      // Aisa pick 80+ STRONG bar kabhi cross nahi kar sakta (cap 78 —
+      // ACTION ke neeche nahi, STRONG se bahar). Board ka v21.3.0 chop
+      // filter hi expert picks pe port — same rule, same honesty.
+      // ----------------------------------------------------------------
+      let _chopCapped = false;
+      const _adxNow = ltfInd?.adx ?? null;
+      if (_adxNow != null && _adxNow < 15 && finalScore > 78) {
+        finalScore = 78;
+        _chopCapped = true;
+        if (finalGrade === 'STRONG') finalGrade = 'ACTION';
+      }
       const blueprint = buildExpertBlueprint({
         side: scored.side, ltp: scored.ltp, atr, score: finalScore, market: mkt,
         ema20: scored.ema20 ?? (ltfInd ? ltfInd.ema20 : null),
@@ -870,6 +885,8 @@ async function _runScan(mkt, opts = {}) {
           quorum: qv.flags?.quorum || null,
           obOs: guarded?.obOs || null,
           chasing: guarded?.chasing || null,
+          // v21.3.0: chop-filter transparency (ADX<15 cap 78)
+          ...(_chopCapped ? { chopRange: true } : {}),
         },
         priceSource: mkt === 'CRYPTO' ? (priceMap.has(base) ? (priceSource || 'coindcx') : 'tv-approx') : mkt === 'FUTURES' ? (priceMap.has(base) ? (priceSource || 'coindcx-fut') : 'tv-approx') : (row?.ltp ? 'tv-nse' : null),
         candleSource: candles ? (mkt === 'INDIA' ? 'yahoo-15m' : candles.length >= 60 ? 'coindcx/yahoo-1h' : null) : null,
@@ -917,6 +934,22 @@ async function _runScan(mkt, opts = {}) {
     }
   } catch { /* win-prob is best-effort on picks — never kills the scan */ }
 
+  // -----------------------------------------------------------------
+  // v21.3.0 (Issue-7 + Issue-5): LAYA + JEV AI CONFIRMATION — the SAME
+  // dual-provider layer the Signal Board runs, applied to the top picks
+  // (score ≥75). Both providers AGREE → +2 score (CONFIRMED chip); koi
+  // bhi provider ULTA side chune → −8 + STRONG→ACTION (CONFLICT chip).
+  // Unconfigured → honest no-op. Cost-controlled: bucketed-LTP payload
+  // cache + 5-min memo + soft deadline.
+  // -----------------------------------------------------------------
+  let aiConfirmMeta = null;
+  try {
+    const { confirmBoardSignals, boardAiConfirmActive } = await import('./boardAiConfirm.js');
+    if (boardAiConfirmActive()) {
+      aiConfirmMeta = await confirmBoardSignals(picks, mkt, { scoreOf: (p) => Number(p?.score) });
+    }
+  } catch { /* confirm layer never kills the scan */ }
+
   return {
     market: mkt,
     scanned,
@@ -927,6 +960,7 @@ async function _runScan(mkt, opts = {}) {
     picks,
     partial,
     partialNote,
+    ...(aiConfirmMeta ? { aiConfirm: aiConfirmMeta } : {}),
     generatedAt: Date.now(),
   };
 }

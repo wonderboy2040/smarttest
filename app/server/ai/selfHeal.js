@@ -60,6 +60,58 @@ const DEFAULTS = {
   flushThrottleMs: 30_000,
 };
 
+// v21.3.0 (Issue-1: "baar baar server down") CONSTRAINED-PLATFORM PROFILE.
+// THE BUG: the defaults above are tuned for the user's 16GB Windows
+// laptop — on a Render free dyno (512MB cgroup) the platform OOM-killer
+// fires LONG before these limits ever trip a trim, so the dyno is
+// killed + restarted in a loop = exactly the repeated-down symptom.
+// THE FIX: detect a constrained platform (cgroup memory.max < 1.5GB,
+// or RENDER/DYNO/RAILWAY/KOYEB/FLY env markers) and (a) default the
+// memory limits DOWN to a 512MB-dyno-safe profile, (b) default
+// exitOnFatal to TRUE there — a supervised dyno restarts a clean
+// process, whereas stay-alive-after-corruption serves garbage state.
+// Explicit env (SELFHEAL_RSS_LIMIT_MB etc.) ALWAYS wins over the
+// platform profile — a user who knows better is never overridden.
+const CONSTRAINED_DEFAULTS = {
+  rssLimitMB: 420,
+  heapLimitMB: 330,
+};
+const _CGROUP_FILES = [
+  '/sys/fs/cgroup/memory.max',            // cgroup v2
+  '/sys/fs/cgroup/memory/memory.limit_in_bytes', // cgroup v1
+];
+/** Read the container's hard memory ceiling (bytes), null when
+ *  unlimited/unreadable (bare-metal + VMs read `max`/huge numbers). */
+function _cgroupMemLimitBytes(env = process.env) {
+  try {
+    if (String(env?.SMARTAI_NO_CGROUP_PROBE || '') === '1') return null;
+    for (const f of _CGROUP_FILES) {
+      try {
+        const raw = fs.readFileSync(f, 'utf8').trim();
+        if (!raw || raw === 'max') continue;
+        const n = Number(raw);
+        if (Number.isFinite(n) && n > 0 && n < 1e15) return n;
+      } catch { /* next file */ }
+    }
+  } catch { /* probe must never throw */ }
+  return null;
+}
+/** True when running on a small container/PaaS dyno where the laptop-
+ *  tuned defaults would OOM. Pure + exported for tests. */
+export function isConstrainedPlatform(env = process.env, memLimitBytes = null) {
+  try {
+    const markers = ['RENDER', 'DYNO', 'RAILWAY_SERVICE_ID', 'KOYEB', 'FLY_APP_NAME'];
+    if (markers.some((k) => env && String(env[k] || '').length > 0)) return true;
+    // SMARTAI_NO_CGROUP_PROBE=1 disables cgroup-based detection ENTIRELY
+    // (explicit param included — a dev box can force the laptop profile).
+    let bytes = memLimitBytes;
+    if (String(env?.SMARTAI_NO_CGROUP_PROBE || '') === '1') bytes = null;
+    if (bytes == null) bytes = _cgroupMemLimitBytes(env);
+    if (bytes != null && bytes > 0 && bytes < 1.5 * 1024 * 1024 * 1024) return true;
+  } catch { /* never throw */ }
+  return false;
+}
+
 const _state = {
   armed: false,
   emitter: null,
@@ -315,14 +367,23 @@ export function initSelfHeal(opts = {}) {
   if (typeof opts.getFlushers === 'function') _state.getFlushers = opts.getFlushers;
   if (typeof opts.getLogStats === 'function') _state.getLogStats = opts.getLogStats;
   if (typeof opts.log === 'function') _state.log = opts.log;
+  const constrained = isConstrainedPlatform(env);
+  _state.platformConstrained = constrained;
+  const effDefaults = constrained ? { ...DEFAULTS, ...CONSTRAINED_DEFAULTS } : DEFAULTS;
+  if (constrained) {
+    try {
+      _state.log(`[selfheal] CONSTRAINED PLATFORM detected (cgroup/PaaS) — memory limits ${CONSTRAINED_DEFAULTS.rssLimitMB}/${CONSTRAINED_DEFAULTS.heapLimitMB}MB + exit-on-fatal ON (supervised dyno: clean restart beats zombie state). Env overrides still win.`);
+    } catch { /* noop */ }
+  }
   _state.cfg = {
-    rssLimitMB: Number(env.SELFHEAL_RSS_LIMIT_MB) > 0 ? Number(env.SELFHEAL_RSS_LIMIT_MB) : DEFAULTS.rssLimitMB,
-    heapLimitMB: Number(env.SELFHEAL_HEAP_LIMIT_MB) > 0 ? Number(env.SELFHEAL_HEAP_LIMIT_MB) : DEFAULTS.heapLimitMB,
+    rssLimitMB: Number(env.SELFHEAL_RSS_LIMIT_MB) > 0 ? Number(env.SELFHEAL_RSS_LIMIT_MB) : effDefaults.rssLimitMB,
+    heapLimitMB: Number(env.SELFHEAL_HEAP_LIMIT_MB) > 0 ? Number(env.SELFHEAL_HEAP_LIMIT_MB) : effDefaults.heapLimitMB,
     lagWarnMs: Number(env.SELFHEAL_LAG_WARN_MS) > 0 ? Number(env.SELFHEAL_LAG_WARN_MS) : DEFAULTS.lagWarnMs,
     lagLogThrottleMs: DEFAULTS.lagLogThrottleMs,
     memLogThrottleMs: DEFAULTS.memLogThrottleMs,
   };
-  _state.exitOnFatal = String(env.SELFHEAL_EXIT_ON_FATAL || '').toLowerCase() === 'true';
+  const _fatalSet = String(env.SELFHEAL_EXIT_ON_FATAL || '').toLowerCase();
+  _state.exitOnFatal = _fatalSet === 'true' ? true : _fatalSet === 'false' ? false : constrained;
 
   // handlers — first-registered runs first; index.js's v18.1 handlers
   // are REPLACED by this module (the old block is deleted there).
@@ -359,6 +420,7 @@ export function selfHealthSnapshot() {
       ok: true,
       armed: _state.armed,
       exitOnFatal: !!_state.exitOnFatal,
+      platformConstrained: !!_state.platformConstrained,
       pid: process.pid,
       uptimeSec: Math.round(process.uptime()),
       memory: {
@@ -405,7 +467,7 @@ export function __resetSelfHealForTests() {
     memPressure: false, rssMB: 0, heapMB: 0, loopLagMean: 0, loopLagMax: 0,
     _lastMemLogAt: 0, _lastLagLogAt: 0, _lastFlushAt: 0,
     _hist: null, _watchTimer: null, _journalThisRun: false, _bootReported: null, _prevTail: null,
-    exitOnFatal: false,
+    exitOnFatal: false, platformConstrained: false,
   });
   _journalFileOverride = null;
 }

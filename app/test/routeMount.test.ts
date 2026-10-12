@@ -32,14 +32,14 @@ describe('Route-mounting regression guard (server/index.js)', () => {
       );
     });
 
-    it('calls registerIntradayRoutes(app, { ... })', () => {
-      expect(indexSource).toMatch(/registerIntradayRoutes\s*\(\s*app\s*,/);
+    it('calls registerIntradayRoutes(routesApp, { ... }) — v21.3.0 async-guard proxy', () => {
+      expect(indexSource).toMatch(/registerIntradayRoutes\s*\(\s*routesApp\s*,/);
     });
 
     it('passes all required deps to registerIntradayRoutes', () => {
       // Extract the registerIntradayRoutes call block
       const callMatch = indexSource.match(
-        /registerIntradayRoutes\s*\(\s*app\s*,\s*\{([^}]+)\}\s*\)/s
+        /registerIntradayRoutes\s*\(\s*routesApp\s*,\s*\{([^}]+)\}\s*\)/s
       );
       expect(callMatch).toBeTruthy();
       const depsBlock = callMatch![1];
@@ -69,8 +69,8 @@ describe('Route-mounting regression guard (server/index.js)', () => {
       );
     });
 
-    it('calls registerAITradingRoutes(app, { ... })', () => {
-      expect(indexSource).toMatch(/registerAITradingRoutes\s*\(\s*app\s*,/);
+    it('calls registerAITradingRoutes(routesApp, { ... }) — v21.3.0 async-guard proxy', () => {
+      expect(indexSource).toMatch(/registerAITradingRoutes\s*\(\s*routesApp\s*,/);
     });
   });
 

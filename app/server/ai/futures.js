@@ -351,8 +351,113 @@ function guessPrecision(pair) {
   const p = { BTC: 4, ETH: 3, BNB: 2, SOL: 1, XRP: 0, DOGE: 0, ADA: 0, AVAX: 1, LINK: 1, DOT: 1, TRX: 0, POL: 0 }[base];
   return p != null ? p : 3;
 }
-export function roundFuturesQty(pair, qty) {
-  return Math.floor(Number(qty) * 10 ** guessPrecision(pair)) / 10 ** guessPrecision(pair);
+export function roundFuturesQty(pair, qty, precision = null) {
+  // v21.3.0 (Issue-4): the fetched instrument meta's qtyPrecision is now
+  // HONOURED (pehle sirf the hardcoded guess table — unusual instruments
+  // (jinke base guess me nahi) galat precision pe round hote the aur
+  // exchange minQty/stepSize reject kar deta tha).
+  const p = Number.isFinite(precision) && precision >= 0 && precision <= 8 ? Math.floor(precision) : guessPrecision(pair);
+  return Math.floor(Number(qty) * 10 ** p) / 10 ** p;
+}
+
+// ============================================================
+// v21.3.0 (Issue-4) ONE-CLICK LIVE EXECUTE PRE-FLIGHT — READ-ONLY.
+// ------------------------------------------------------------
+// The old ⚡ EXECUTE LIVE button ONE CLICK = REAL ORDER — no preview,
+// no gate checklist, silent 1x-leverage/₹1000-margin defaults, aur har
+// rejection POST-Click toast me milti thi. Ye function wahi gauntlet
+// + sizing DRY-RUN karta hai: koi order nahi, koi journal entry nahi,
+// sirf the would-be ticket + pass/fail gate list (modal me dikhta hai).
+// ============================================================
+export async function futuresExecutePrecheck(opts) {
+  const { symbol, side, marginUSDT, leverage, getFreshSignal } = opts || {};
+  const out = { ok: true, symbol: String(symbol || '').toUpperCase(), side: side || null, gates: [], ticket: null, warnings: [] };
+  const gate = (name, pass, detail = null, blocking = true) => {
+    out.gates.push({ name, pass: !!pass, detail, blocking: blocking !== false });
+    if (!pass && blocking !== false) out.ok = false;
+  };
+  try {
+    const cfg = await import('./coindcxOrders.js').then(m => m.loadConfig());
+    const pair = futuresPairFor(symbol);
+    const base = baseOfFuturesPair(pair);
+    out.pair = pair;
+
+    // ---- gates (the same ladder executeFuturesSignal runs, READ-ONLY) ----
+    gate('Kill switch', !cfg.killSwitch, cfg.killSwitch ? 'ON — execution disabled' : 'off');
+    try {
+      const { isKilled, killLevel, killReason } = await import('../exec/reconciler.js');
+      if (typeof isKilled === 'function') {
+        const k = isKilled();
+        gate('Exec kill', !k, k ? `L${killLevel()} ACTIVE (${killReason() || 'no reason'})` : 'clear');
+      }
+    } catch { /* single-node local */ }
+    try {
+      const { goLiveGateBlocked } = await import('./strategyGuard.js');
+      const g = goLiveGateBlocked();
+      gate('GO-LIVE gate (paper track-record)', !g.blocked, g.blocked ? g.reason : (g.readiness?.stats ? `settled ${g.readiness.stats.settled}/${g.readiness.stats.minTrades} trades` : 'pass'));
+    } catch { /* guard unavailable */ }
+    try {
+      const { strategyGuardBlocked } = await import('./strategyGuard.js');
+      const g = strategyGuardBlocked('manual', 'FUTURES');
+      gate('Strategy health', !g.blocked, g.blocked ? g.reason : 'no paused strategy');
+    } catch { /* guard unavailable */ }
+    gate('LIVE arming', cfg.mode === 'live', cfg.mode === 'live' ? 'armed' : 'type LIVE in Risk settings to arm');
+    gate('CoinDCX connection', coindcxConnected(), coindcxConnected() ? 'connected' : 'connect an API key');
+
+    // ---- fresh signal read (no mutation) ----
+    const signal = typeof getFreshSignal === 'function' ? await getFreshSignal(pair, { mode: 'paper' }).catch(() => null) : null;
+    const sigAgeMs = signal?.generatedAt ? Date.now() - Number(signal.generatedAt) : null;
+    gate('Fresh signal', !!signal, signal ? `${signal.grade ?? '—'} · conf ${signal.confidence ?? '—'}% · ${sigAgeMs != null ? `${Math.round(sigAgeMs / 1000)}s old` : 'age n/a'}` : 'no fresh signal (deep/board feed down)');
+    if (signal) {
+      const sideMatch = !side || !signal.side || signal.side === side;
+      gate('Side match', sideMatch, sideMatch ? `consensus ${signal.side}` : `board flipped: ${signal.side} vs requested ${side}`);
+      if (signal.ucRejected) out.warnings.push('Ultrafast chart verification REJECTED this direction');
+      if (signal.aiConfirm?.verdict === 'CONFLICT') out.warnings.push('Jev/Laya AI CONFLICT on this signal');
+    }
+
+    // ---- sizing preview (the would-be ticket — no order) ----
+    const price = Number(signal?.ltp) || null;
+    if (price > 0) {
+      const usdInr = await fetchUsdInr();
+      const meta = await fetchFuturesInstrumentMeta(pair).catch(() => null);
+      const levCapInstrument = meta?.maxLeverage || 10;
+      const levCapConfig = Number(cfg.cryptoLeverage) >= 1 ? Math.floor(Number(cfg.cryptoLeverage)) : 1;
+      let lev = Math.max(1, Math.floor(Number(leverage) || 1));
+      lev = Math.min(lev, levCapConfig, levCapInstrument);
+      let margin = Number(marginUSDT) > 0 ? Number(marginUSDT) : Math.min(cfg.maxOrderINR, 1000) / usdInr;
+      margin = Math.round(margin * 1000) / 1000;
+      const plan = signal?.plan || null;
+      const slDistPct = plan?.stopLoss != null ? Math.abs(price - plan.stopLoss) / price * 100 : null;
+      const saneLev = slDistPct != null ? maxSaneLeverage(slDistPct, Math.min(levCapConfig, levCapInstrument)) : null;
+      const effLev = saneLev != null ? Math.min(lev, saneLev) : lev;
+      const rawQty = (margin * effLev) / price;
+      const qty = roundFuturesQty(pair, rawQty, meta?.qtyPrecision ?? null);
+      const notionalUSDT = r2(qty * price);
+      const marginUsed = r2(notionalUSDT / effLev);
+      const liquidation = effLev > 1 && plan?.stopLoss != null
+        ? pRound(signal.side !== 'SHORT' ? price * (1 - 0.95 / effLev) : price * (1 + 0.95 / effLev)) : null;
+      if (saneLev != null && lev > saneLev) out.warnings.push(`leverage auto-reduced ${lev}x → ${saneLev}x (liquidation would fire before the ${r2(slDistPct)}% SL)`);
+      if (meta?.minQty > 0 && qty < meta.minQty) out.warnings.push(`qty ${qty} below exchange minimum ${meta.minQty} — increase margin`);
+      out.ticket = {
+        pair, symbol: base, side: side || signal.side || null, price: pRound(price),
+        stopLoss: plan?.stopLoss != null ? pRound(plan.stopLoss) : null,
+        target1: plan?.target1 != null ? pRound(plan.target1) : null,
+        target2: plan?.target2 != null ? pRound(plan.target2) : null,
+        riskPct: plan?.riskPct ?? null, rewardRisk: plan?.rewardRisk ?? null,
+        leverage: effLev, leverageRequested: lev, maxSaneLeverage: saneLev,
+        marginUSDT: margin, marginUsedUSDT: marginUsed, marginINR: inrOfUsdt(marginUsed, usdInr),
+        qty, notionalUSDT, notionalINR: inrOfUsdt(notionalUSDT, usdInr),
+        liquidation, grade: signal.grade ?? null, confidence: signal.confidence ?? null,
+        aiScore: signal.superIntel?.aiScore ?? null, aiConfirm: signal.aiConfirm?.verdict ?? null,
+        // exchange-armed protection pair (what createFuturesTpsl sets):
+        nativeProtection: plan?.stopLoss != null && plan?.target2 != null ? { stopLoss: pRound(plan.stopLoss), takeProfit: pRound(plan.target2) } : null,
+        minQty: meta?.minQty ?? null, qtyPrecision: meta?.qtyPrecision ?? null,
+      };
+    }
+    return out;
+  } catch (e) {
+    return { ...out, ok: false, error: String(e?.message || e) };
+  }
 }
 
 // ---------------- PUBLIC: candlesticks (pcode=f) ----------------
@@ -1239,7 +1344,7 @@ export async function executeFuturesSignal(opts) {
   }
 
   const rawQty = (margin * lev) / price;
-  const qty = roundFuturesQty(pair, rawQty);
+  const qty = roundFuturesQty(pair, rawQty, meta?.qtyPrecision ?? null); // v21.3.0: instrument precision honoured
   if (!(qty > 0)) return { ok: false, error: `Quantity rounds to 0 for ${pair} — increase the margin` };
   // v9.5: the exchange minimum stays a HARD gate for LIVE (CoinDCX would
   // reject the real order), but PAPER is practice money — a small-margin

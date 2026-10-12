@@ -118,6 +118,30 @@ export const TopPicksPanel = memo(function TopPicksPanel({ picks, market, deskLa
                     {p.grade === 'STRONG'
                       ? <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[9px] font-black border border-emerald-500/30">★ STRONG</span>
                       : <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 text-[9px] font-black border border-cyan-500/30">⚡ ACTION</span>}
+                    {/* v21.3.0 (Issue-2/5): Jev/Laya dual-AI confirmation — TOP-5
+                        headline picks ab AI-verified dikhte hain (conflict picks
+                        server-side hi exclude ho jaate hain). */}
+                    {p.aiConfirm?.verdict === 'CONFIRMED' && (
+                      <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 text-[9px] font-black border border-cyan-500/40"
+                        title={`Jev (cloud) + Laya (local) dono ne ye side APPROVE kiya — server ne +3 score diya`}>🤖 AI ✓</span>
+                    )}
+                    {p.aiConfirm?.verdict === 'CONFLICT' && (
+                      <span className="px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 text-[9px] font-black border border-red-500/40"
+                        title={`Jev/Laya me se koi ulta side chuna — score −8 (CONFLICT)`}>🤖 AI ✗</span>
+                    )}
+                    {/* v21.3.0 (Issue-2): funding-rate chip — perp picks ka real
+                        carry cost (positive = longs pay, negative = shorts pay). */}
+                    {(() => {
+                      const f = p.superIntel?.perp?.fundingBps8h;
+                      if (f == null || !Number.isFinite(Number(f))) return null;
+                      const fv = Number(f);
+                      return (
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border font-mono ${fv > 3 ? 'bg-amber-500/15 text-amber-300 border-amber-500/40' : 'bg-slate-700/40 text-slate-300 border-slate-600/40'}`}
+                          title={`Funding rate ${fv.toFixed(1)} bps / 8h — ${fv > 0 ? 'longs pay shorts' : 'shorts pay longs'}${Math.abs(fv) > 10 ? ' · EXTREME (crowded)' : ''}`}>
+                          ∑ {fv >= 0 ? '+' : ''}{fv.toFixed(1)}bp
+                        </span>
+                      );
+                    })()}
                     {(() => {
                       const vc = p.voters ?? p.participating;
                       if (vc == null || !p.totalModels) return null;
