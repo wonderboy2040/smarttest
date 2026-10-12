@@ -27,6 +27,21 @@
 //   • BREAKER: after `breakerThreshold` consecutive failures Jev
 //     is marked down for `breakerCooldownMs` — no timeout storms
 //   • stats: calls, cacheHits, errors, latency p50/p95, usage
+//
+// v21.5.0 (LAYA FAST UPGRADE) — do naye client-side speed knobs:
+//   • `concurrency` (LAYA_CONCURRENCY, laya default 2): local model
+//     server (CPU, ek inference worker) par parallel bursts queue hoti
+//     hain — har queued request ka AbortSignal.timeout SEND-time se chalta
+//     tha, isliye board-confirm bursts (top-6 × providers) healthy server
+//     pe bhi mass-timeout → breaker trip (10 min Laya down) kar dete the.
+//     Ab provider instance ke andar FIFO semaphore hai — top-scored signal
+//     pehle server pakadta hai, aur har request ko queue ke BAAD apna pura
+//     timeout budget milta hai. Jev (cloud) default unlimited.
+//   • `retryOnTimeout` (LAYA_RETRY_ON_TIMEOUT, laya default OFF): timeout
+//     pe retry local server ke liye queue-amplification hai (wo abhi bhi
+//     pehli request process kar raha hai; retry line lambi karta hai).
+//     Timeout ab honest `timeout` note deta hai — auto-arm failover usi
+//     pe trigger hota hai (deciders _FAILOVER_NOTES).
 // ============================================================
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -96,6 +111,10 @@ export function providerConfig(name = 'jev', env = process.env) {
       apiKey: env.LAYA_API_KEY || '',
       timeoutMs: numOr(env.LAYA_TIMEOUT_MS, 1500),   // local — jaldi fail
       retries: numOr(env.LAYA_RETRIES, 1),
+      // v21.5.0 (laya fast): local bursts ko FIFO-mitigate karo + timeout
+      // retry off (queue amplification) — dono env se badle ja sakte hain.
+      concurrency: numOr(env.LAYA_CONCURRENCY, 2),
+      retryOnTimeout: String(env.LAYA_RETRY_ON_TIMEOUT ?? '') === '1',
     };
   }
   return {
@@ -108,6 +127,9 @@ export function providerConfig(name = 'jev', env = process.env) {
     apiKey: env.TYPESAFE_API_KEY || '',
     timeoutMs: numOr(env.JEV_TIMEOUT_MS, JEV_DEFAULTS.timeoutMs),
     retries: numOr(env.JEV_RETRIES, JEV_DEFAULTS.retries),
+    // v21.5.0: jev (cloud) unlimited + timeout-retry ON (purana behaviour)
+    concurrency: numOr(env.JEV_CONCURRENCY, 0),
+    retryOnTimeout: String(env.JEV_RETRY_ON_TIMEOUT ?? '1') !== '0',
   };
 }
 
@@ -117,6 +139,18 @@ export function jevConfig(env = process.env) {
 }
 
 function numOr(v, d) { const n = Number(v); return Number.isFinite(n) ? n : d; }
+
+/** v21.5.0: AbortSignal.timeout() failures pehchano — undici TimeoutError
+ * DOMException (name 'TimeoutError', msg "...aborted due to timeout") deta
+ * hai; kuch versions cause-chain me AbortError rakhte hain. Name + message
+ * dono se pakadte hain (false-positive sirf manual AbortError pe — jo abhi
+ * is codebase me koi call-site nahi banata). */
+function _isTimeoutErr(e) {
+  if (!e) return false;
+  const names = [e?.name, e?.cause?.name, e?.cause?.cause?.name];
+  if (names.some((n) => n === 'TimeoutError' || n === 'AbortError')) return true;
+  return /(?:operation was aborted|signal timed out|aborted due to timeout)/i.test(String(e?.message || ''));
+}
 
 const keyOf = (p) => crypto.createHash('sha256').update(JSON.stringify(p)).digest('hex').slice(0, 32);
 
@@ -170,6 +204,23 @@ export function createJev(opts = {}) {
     latencies: [], usage: { inputTokens: 0, outputTokens: 0 },
     breaker: { fails: 0, openedAt: null, trips: 0 },
   };
+  // v21.5.0 (laya fast): FIFO concurrency gate — sirf WIRE calls pe lagta
+  // hai (cache-hits turant bypass). Telemetry stats.queueWaits me dikhta hai.
+  let _queueWaits = 0;
+  const _acquire = (() => {
+    const max = Number(cfg.concurrency);
+    if (!Number.isFinite(max) || max <= 0) return null; // unlimited (cloud)
+    let active = 0;
+    const waiters = [];
+    return () => new Promise((grant) => {
+      const start = () => {
+        active++;
+        grant(() => { active--; const next = waiters.shift(); if (next) next(); });
+      };
+      if (active < max) start();
+      else { _queueWaits++; waiters.push(start); }
+    });
+  })();
   const pushLat = (ms) => {
     stats.latencies.push(ms);
     if (stats.latencies.length > 500) stats.latencies.shift();
@@ -198,6 +249,10 @@ export function createJev(opts = {}) {
   const breakerOk = () => { stats.breaker.fails = 0; stats.breaker.openedAt = null; };
 
   async function post(payload) {
+    // v21.5.0: local provider ke liye timeout retry-able NAHI hai (wo
+    // single-worker server ki line aur lambi karta hai). Cloud (jev) ka
+    // purana behaviour (timeout bhi retry) unchanged — cfg.retryOnTimeout.
+    const retryOnTimeout = cfg.retryOnTimeout !== false;
     for (let i = 0; i <= cfg.retries; i++) {
       try {
         const r = await doFetch(url, {
@@ -214,7 +269,10 @@ export function createJev(opts = {}) {
         // v21.2.0 (dual-provider): 5xx retry-exhaustion par status saath
         // lautta hai — decide() `http_5xx` note bana paata hai (auto-arm
         // failover usi pe trigger hota hai; generic network_error nahi).
-        if (i === cfg.retries) return { ok: false, error: String(e?.message || e), status: e?.status };
+        const timedOut = _isTimeoutErr(e);
+        const msg = timedOut ? 'timeout' : String(e?.message || e);
+        if (timedOut && !retryOnTimeout) return { ok: false, error: msg, status: e?.status };
+        if (i === cfg.retries) return { ok: false, error: msg, status: e?.status };
         await new Promise((res) => setTimeout(res, 300 * 2 ** i));
       }
     }
@@ -291,7 +349,13 @@ export function createJev(opts = {}) {
         return { action: 'wait', note: 'no_api_key', cached: false, latencyMs: 0 };
       }
       stats.calls++;
-      const r = await post(payload);
+      // v21.5.0: wire call semaphore ke PEECHHE — queued request ko apna
+      // PURA timeout budget milta hai (queue-wait se timeout kha peelna
+      // khatam). Cache-hit upar se hi bypass ho chuka hai.
+      const release = _acquire ? await _acquire() : null;
+      let r;
+      try { r = await post(payload); }
+      finally { if (release) { try { release(); } catch { /* never fatal */ } } }
       if (!r.ok) {
         stats.errors++;
         // v21.2.0 (dual-provider plan Step-1.4 — BREAKER FIX): HTTP 4xx
@@ -306,7 +370,7 @@ export function createJev(opts = {}) {
         }
         const note = r.fatal
           ? `http_${r.status}`
-          : (Number(r.status) >= 500 ? `http_${r.status}` : 'network_error');
+          : (Number(r.status) >= 500 ? `http_${r.status}` : (r.error === 'timeout' ? 'timeout' : 'network_error'));
         return {
           action: cfg.fallback === 'rule' ? snap.proposed : 'wait',
           note,
@@ -390,6 +454,8 @@ export function createJev(opts = {}) {
     model: cfg.model,
     fallback: cfg.fallback,
     hasKey: !!apiKey,
+    queueWaits: _queueWaits,                   // v21.5.0: semaphore telemetry
+    concurrency: Number(cfg.concurrency) || 0, // 0 = unlimited
   });
   decide.config = () => ({ ...cfg, name, url, apiKey: apiKey ? '***' : '' });
   decide.__cache = cache;   // test hook

@@ -82,6 +82,10 @@ function _oneHealth(p) {
     urlHost: s.url ?? '',
     threshold: s.threshold ?? null,
     name: s.name ?? null,
+    // v21.5.0 (laya fast): FIFO gate telemetry — OpsHealthStrip AI chip me
+    // dikhta hai (queueWaits badhta hai par breakerOpen false = healthy).
+    queueWaits: s.queueWaits ?? 0,
+    concurrency: s.concurrency ?? 0,
   };
 }
 

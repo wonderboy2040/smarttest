@@ -51,7 +51,12 @@
 //   LAYA_SERVE_CMD=         — full exe path override (optional)
 //   LAYA_MODELS=english     LAYA_DEFAULT_MODEL=english
 //   LAYA_DEVICE=cpu         LAYA_PRELOAD=1
+//     LAYA_DEVICE=auto → nvidia-smi probe: GPU mila to cuda, warna cpu
 //   LAYA_THREADS=           — auto = physical cores − 2 (min 1)
+//   LAYA_WARMUP=1           — v21.5.0: ready/adopted pe ek real inference
+//                             (cold-start penalty boot pe hi khatam — pehla
+//                             board-confirm fast). LAYA_WARMUP=0 = off.
+//   LAYA_WARMUP_TIMEOUT_MS=30000
 //   LAYA_READY_TIMEOUT_MS=900000 (first) / 180000 (later)
 //   LAYA_PROBE_MS=30000     LAYA_PROBE_TIMEOUT_MS=3000
 //   LAYA_BACKOFF_BASE_MS=5000  LAYA_BACKOFF_MAX_MS=60000
@@ -64,6 +69,21 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+// v21.5.0 (laya fast): warmup inference payload — minimal par contract-
+// valid (state + choice question). Response ignore hota hai; maqsad sirf
+// model-compile/lazy-init paths ko boot ke time chalana hai taaki pehla
+// REAL board-confirm fast rahe. (32+ char random key hint pass nahi hota.)
+const _WARMUP_PAYLOAD = {
+  state: 'Warmup: system boot self-check. Market closed, no action expected.',
+  questions: {
+    action: {
+      type: 'choice',
+      instructions: 'Boot warmup — always wait.',
+      criteria: { enter_long: 'Take long', enter_short: 'Take short', wait: 'Stand aside' },
+    },
+  },
+};
 
 function _int(val, def, min, max) {
   // supervisor _int() ki hi semantics — out-of-range = garbage, not
@@ -137,6 +157,8 @@ export function createLayaSidecar(opts = {}) {
     platformFn: opts.deps?.platformFn || (() => process.platform),
     nowFn: opts.deps?.nowFn || (() => Date.now()),
     osMod: opts.deps?.osMod || os,
+    // v21.5.0 (laya fast): warmup inference fetch (injectable for tests)
+    fetchImpl: opts.deps?.fetchImpl || ((...a) => fetch(...a)),
     // injectable timers — unit tests real intervals leak nahi karte
     setIntervalFn: opts.deps?.setIntervalFn || ((...a) => setInterval(...a)),
     clearIntervalFn: opts.deps?.clearIntervalFn || ((...a) => clearInterval(...a)),
@@ -185,6 +207,9 @@ export function createLayaSidecar(opts = {}) {
     backoffMaxMs: _int(val('LAYA_BACKOFF_MAX_MS'), 60000, 4000, 900000),
     maxRestartsHour: _int(val('LAYA_MAX_RESTARTS_HOUR'), 10, 2, 1000),
     budgetPauseMs: _int(val('LAYA_BUDGET_PAUSE_MS'), 600000, 10000, 86400000),
+    // v21.5.0 (laya fast): boot warmup — default ON, key/loopback required
+    warmup: String(val('LAYA_WARMUP') ?? '1') !== '0',
+    warmupTimeoutMs: _int(val('LAYA_WARMUP_TIMEOUT_MS'), 30000, 1000, 300000),
   };
 
   const st = {
@@ -209,6 +234,7 @@ export function createLayaSidecar(opts = {}) {
     lastProbeAt: 0,
     lastProbeResult: null,
     tickTimer: null,
+    lastWarmupAt: 0,   // v21.5.0: warmup rate-limit (10 min gap)
   };
 
   const now = () => deps.nowFn();
@@ -232,6 +258,7 @@ export function createLayaSidecar(opts = {}) {
       baseUrl: cfg.baseUrl,
       host: cfg.host,
       port: cfg.port,
+      device: cfg.device,       // v21.5.0: auto-detect ke baad final value
       readyMs: st.readyMs,
       restarts: st.restarts,
       failStreak: st.failStreak,
@@ -243,6 +270,71 @@ export function createLayaSidecar(opts = {}) {
     try {
       dotEnv = parseDotEnvKeys(deps.fsMod.readFileSync(path.join(appRoot, '.env'), 'utf8'));
     } catch { dotEnv = {}; }
+  }
+
+  // ---------- v21.5.0 (laya fast): WARMUP inference ----------
+  // /health OK hona model ke compile/lazy-init hone se alag baat hai —
+  // pehla REAL inference CPU pe 2-10s extra kha sakta hai. Ready/adopted
+  // hone par EK warmup request chalte hain taaki pehla board-confirm
+  // fast rahe. Fire-and-forget, rate-limited (10 min), kabhi fatal nahi,
+  // key logs me kabhi nahi (headers hi me jaati hai).
+  const WARMUP_MIN_GAP_MS = 10 * 60_000;
+  function _endpoint() {
+    const b = String(cfg.baseUrl || '').replace(/\/+$/, '');
+    return b.endsWith('/v1/systemone') ? b : `${b}/v1/systemone`;
+  }
+  function _warmup(reason) {
+    try {
+      if (!cfg.warmup || !cfg.apiKey || !cfg.loopback) return;
+      if (st.shuttingDown || !cfg.enabled) return;
+      if (now() - st.lastWarmupAt < WARMUP_MIN_GAP_MS) return;
+      st.lastWarmupAt = now();
+      const t0 = now();
+      let signal;
+      try { signal = AbortSignal.timeout(cfg.warmupTimeoutMs); } catch { signal = undefined; }
+      deps.fetchImpl(_endpoint(), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${cfg.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(_WARMUP_PAYLOAD),
+        signal,
+      }).then((res) => {
+        try { res?.resume?.(); } catch { /* noop */ }
+        const ms = now() - t0;
+        journal({ ev: 'laya-warmup', reason, ms, http: res?.status ?? null });
+        log(`[laya] warmup done (${ms}ms, http ${res?.status ?? '?'}) — cold-start penalty ab absorbed.`);
+      }).catch((e) => {
+        const ms = now() - t0;
+        journal({ ev: 'laya-warmup-fail', reason, ms, error: String(e?.name || e?.message || e).slice(0, 60) });
+        // silent-level: warmup optional hai, site/layer untouched
+      });
+    } catch { /* warmup never fatal */ }
+  }
+
+  // ---------- v21.5.0 (laya fast): LAYA_DEVICE=auto GPU probe ----------
+  // nvidia-smi (3s bound) — exit 0 to cuda, kuch bhi aur to cpu. Detect
+  // SIRF 'auto' pe hota hai; default 'cpu' pe zero extra spawn.
+  function _probeNvidia() {
+    return new Promise((resolve) => {
+      let settled = false;
+      const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+      try {
+        const child = deps.spawnFn('nvidia-smi', ['--query-gpu=name', '--format=csv,noheader'], {
+          stdio: ['ignore', 'ignore', 'ignore'],
+          windowsHide: true,
+        });
+        const t = deps.setTimeoutFn(() => { try { child.kill?.(); } catch { /* noop */ } done('cpu'); }, 3000);
+        if (t && typeof t.unref === 'function') { try { t.unref(); } catch { /* noop */ } }
+        child.on?.('error', () => { try { deps.clearTimeoutFn(t); } catch { /* noop */ } done('cpu'); });
+        child.on?.('exit', (code) => { try { deps.clearTimeoutFn(t); } catch { /* noop */ } done(code === 0 ? 'cuda' : 'cpu'); });
+      } catch { done('cpu'); }
+    });
+  }
+  async function _detectDevice() {
+    if (String(cfg.device).toLowerCase() !== 'auto') return;
+    const dev = await _probeNvidia();
+    cfg.device = dev;
+    journal({ ev: 'laya-device', device: dev, source: 'auto' });
+    log(`[laya] LAYA_DEVICE=auto → ${dev}${dev === 'cuda' ? ' (NVIDIA GPU mila — inference ~10-50× fast)' : ' (GPU nahi mila — cpu pe chalega)'}`);
   }
 
   // ---------- health probe (supervisor probeOnce pattern) ----------
@@ -440,6 +532,7 @@ export function createLayaSidecar(opts = {}) {
         st.failStreak = 0;
         journal({ ev: 'laya-ready', ms: Math.round(ms), pid: st.child.pid });
         log(`[laya] READY (${(ms / 1000).toFixed(1)}s me) — /health OK, ab har ${Math.round(cfg.probeMs / 1000)}s probe.`);
+        _warmup('ready'); // v21.5.0: cold-start penalty yahin absorb
         return;
       }
       // still booting — weights download ke liye lamba ready timeout
@@ -512,6 +605,7 @@ export function createLayaSidecar(opts = {}) {
       st.hasEverReady = true;
       journal({ ev: 'laya-adopted', reason: 'health-already-200', baseUrl: cfg.baseUrl });
       log('[laya] pehle se chal raha hai (/health OK) — ADOPT kiya (double spawn nahi). Watchdog band hone par ye wala process nahi maarega.');
+      _warmup('adopted'); // v21.5.0: adopted server ka bhi cold-start absorb
       return;
     }
     _spawn();
@@ -554,7 +648,9 @@ export function createLayaSidecar(opts = {}) {
     }
     log(`[laya] sidecar armed — base ${cfg.baseUrl} | probe ${Math.round(cfg.probeMs / 1000)}s | threads ${cfg.threads} | device ${cfg.device}`);
     // Site kabhi Laya ka intezaar nahi karti — init flow fire-and-forget.
-    return _initFlow().catch(() => { /* never fatal */ });
+    // v21.5.0: device auto-detect (sirf LAYA_DEVICE=auto pe) spawn se
+    // PEHLE — spawn env me final device value jaati hai.
+    return _detectDevice().then(() => _initFlow()).catch(() => { /* never fatal */ });
   }
 
   // ---------- stop: owned tree-kill, adopted untouched ----------
@@ -592,6 +688,7 @@ export function createLayaSidecar(opts = {}) {
       parseDotEnvKeys, parseBaseUrl,
       healthCheck, onHealthResult, _tick, _spawn, _initFlow,
       forceKill, _exePath, _exeMissing, _reloadDotEnv, _mask, _scheduleRestart,
+      _warmup, _endpoint, _probeNvidia, _detectDevice, // v21.5.0
     },
   };
 }

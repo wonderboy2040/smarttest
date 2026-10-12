@@ -114,7 +114,10 @@ export function jevDecider({ jev, strategy, eventGuardCheck = null }) {
 // provider pe bhi waisa hi fail hoga; usse failover sirf latency
 // badhata. no_answer/no_probability bhi nahi — wo malformed-response
 // hai provider-down nahi.
-const _FAILOVER_NOTES = new Set(['breaker_open', 'network_error', 'provider_unavailable']);
+// v21.5.0: 'timeout' add — local Laya ab timeout pe honest `timeout`
+// note deta hai (retryOnTimeout=off default); failover turant Jev pe
+// chalna chahiye (network_error ka wait nahi).
+const _FAILOVER_NOTES = new Set(['breaker_open', 'network_error', 'provider_unavailable', 'timeout']);
 const _isFailoverNote = (note) => !!note
   && (_FAILOVER_NOTES.has(note) || /^http_5\d\d$/.test(String(note)));
 

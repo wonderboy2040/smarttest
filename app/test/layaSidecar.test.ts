@@ -1,5 +1,6 @@
 // ============================================================
-// test/layaSidecar.test.ts — v21.4.0 LAYA SIDECAR (v21.4.1 me version-contract update)
+// test/layaSidecar.test.ts — v21.4.0 LAYA SIDECAR (v21.5.0 me laya-fast
+// warmup/device knobs + version-contract update)
 // ------------------------------------------------------------
 // Locks the full sidecar contract (plan §4 test table):
 //   1. AUTOSTART off  -> koi spawn nahi, status 'disabled'
@@ -116,6 +117,9 @@ function mkSidecar(env: any = {}, extraDeps: any = {}) {
       platformFn: () => platform,
       nowFn: () => tNow,
       osMod: { cpus: () => new Array(8).fill(0) },
+      // v21.5.0: default fake warmup fetch — tests real network ko kabhi
+      // nahi chhoote (adopt path ab warmup fire karta hai).
+      fetchImpl: async () => ({ status: 200, resume() {} }),
       // injectable timers — real intervals kabhi leak nahi karte
       setIntervalFn: () => 999,
       clearIntervalFn: () => {},
@@ -592,8 +596,8 @@ describe('layaSidecar — SOURCE contracts (plan §3)', () => {
     expect(SERVER_SRC).toContain('LOOPBACK_HOSTS');
   });
 
-  it('Watchdog bat: Laya block (health-check + start-laya.cmd) + v21.4.1', () => {
-    expect(BAT_SRC).toContain('v21.4.1');
+  it('Watchdog bat: Laya block (health-check + start-laya.cmd) + v21.5.0', () => {
+    expect(BAT_SRC).toContain('v21.5.0');
     expect(BAT_SRC).toContain('start-laya.cmd');
     expect(BAT_SRC).toContain('curl.exe -s -m 2 http://127.0.0.1:8000/health');
     expect(BAT_SRC).toContain('start "Laya AI" /min cmd /c "%~dp0start-laya.cmd"');

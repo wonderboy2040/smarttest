@@ -1,5 +1,15 @@
 # SmartAI Pro v21 — Three-Desk AI Trading Terminal
 
+> **v21.5.0 — LAYA FAST UPGRADE (local model speed + burst-storm fix)**
+> - **PROBLEM (line-by-line review me mila):** board-confirm bursts (top-6 signals × 2 providers) local Laya server (CPU, single inference worker) par ek saath queue hote the — har request ka `AbortSignal.timeout(1500)` SEND-time se start hota tha, isliye queue ke aakhri requests healthy server pe bhi timeout → 4 consecutive fail → **breaker 10 min ke liye OPEN** (poora Laya layer down). Plus timeout pe retry line AUR lambi karta tha (queue amplification).
+> - **FIX-1 FIFO CONCURRENCY GATE (`jevEngine.createJev`):** `LAYA_CONCURRENCY=2` (default) — sirf 2 wire calls ek saath, baaki FIFO queue me; **har request ko queue ke BAAD apna pura timeout budget milta hai**. Cache-hits bypass. `stats().queueWaits` telemetry. Jev (cloud) unlimited (purana behaviour).
+> - **FIX-2 TIMEOUT ≠ RETRY (local):** `LAYA_RETRY_ON_TIMEOUT` default OFF for Laya — timeout honest `timeout` note ke saath turant fail; auto-arm failover (`deciders._FAILOVER_NOTES` + 'timeout') turant Jev pe. Jev cloud ka purana retry-on-timeout unchanged.
+> - **FIX-3 BOOT WARMUP (`layaSidecar`):** ready/adopted hone par EK real inference (10-min rate-limit) — model compile/lazy-init ka cold-start penalty boot me hi absorbed; pehla board-confirm fast. `LAYA_WARMUP=0` off.
+> - **FIX-4 SWRV memo (`boardAiConfirm`):** 5-min memo expire hone par bhi purana verdict TURANT stamp (0-latency confirm) + background refresh next cycle ke liye — stale cap 2×TTL (10 min). `AI_CONFIRM_SWRV=0` kill-switch. Return meta me `stale` count.
+> - **GPU AUTO-DETECT:** `LAYA_DEVICE=auto` → `nvidia-smi` probe (3s bound) — GPU mila to `cuda` (~10-50× inference), warna `cpu`. Default `cpu` (zero change), detection spawn se PEHLE (final device env me jaata hai).
+> - **FIX-5 (pre-existing):** `start-laya.cmd` ka CRLF remote push me LF ho gaya tha (Windows .cmd CRLF-strict) — restored + test locked (pehle se tha, ye fix usse bachaata hai).
+> - **Tests:** +19 naye (`layaFast.test.ts` — FIFO gate, timeout-retry policy, SWRV truth-tables, warmup+GPU probe) — hermetic fake-fetch (abort-signal aware)
+
 > **v21.4.1 — TRADING-SIGNALS DEEP-RECHECK: 12+ confirmed bugs fix (4 parallel line-by-line audit agents + live probes)**
 > - **[A1] CHOP FILTER ka ADX<15 leg DEAD tha (v21.3.0 se):** `ctx.ind.adx` har desk pe OBJECT (`{adx, plusDI, minusDI}`) hota hai — purana read `parseFloat(String(object))` → NaN → null. `readAdxNum()` normalizer ab board + deep + expert picks teeno pe. LIVE verify: fixture-ADX 9.6 → chop fire (pehle kabhi nahi)
 > - **[A5] DEEP-PATH HARD VETO port:** counter-HTF veto sirf BOARD pe tha — deep path (LIVE exec ka signal source: `getFreshSignalForExec` → `getDeepSignal`) pe sirf conf ladder thi. Ek board-vetoed signal deep re-run pe STRONG 85 ban ke execute gauntlet pass kar sakta tha — exactly the "SAB SL hit" class. LIVE verify: BTC deep pe `veto: counter-htf + chopRange` + aiScore 17 + executable=false

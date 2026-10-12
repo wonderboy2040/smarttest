@@ -4,6 +4,42 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.5.0 — LAYA FAST UPGRADE (local AI speed — koi naya setup step NAHI)
+
+**Local Laya model ab burst me bhi fast + stable rehta hai. Extract → bat double-click — bas.**
+
+**1) Kya better hua (automatically live):**
+- **Board AI-confirm bursts ab timeout-storm nahi karte** — pehle top-6 signals × 2 providers
+  ek saat local server pe jaate the; queue ke aakhri requests timeout → **Laya breaker 10 min
+  ke liye band** ho jaata tha (healthy server pe bhi). Ab FIFO gate (default 2 concurrent) —
+  har request ko apna pura timeout budget milta hai.
+- **Timeout pe retry band (local)** — timeout honest `timeout` note ke saath turant Jev pe
+  failover (auto-arm). Retry line lambi karta tha, ab nahi.
+- **Boot warmup** — Laya ready/adopted hote hi EK real inference chalta hai (cold-start penalty
+  boot me hi khatam). Pehla board-confirm pehle se kaafi fast.
+- **SWRV confirm** — memo expire hone par bhi turant stale verdict stamp + background refresh
+  (board cycle kabhi Laya ka wait nahi karta; 10-min stale cap).
+
+**2) Optional (laptop pe NVIDIA GPU ho to — ~10-50× faster inference):**
+```env
+LAYA_DEVICE=auto
+```
+- `nvidia-smi` probe khud chalta hai — GPU mila to `cuda`, warna `cpu` (fallback safe).
+- Default `cpu` hi hai — kuch nahi badla to bhi sab upar wale fixes live hain.
+
+**3) Tuning (optional — defaults already sane):**
+- `LAYA_CONCURRENCY=2` — server proven parallel ho to 3-4 try karo
+- `LAYA_TIMEOUT_MS=1500` — CPU inference lambi ho to 2500-3000
+- `LAYA_WARMUP=0` — warmup band karna ho
+- `AI_CONFIRM_SWRV=0` — hamesha-fresh confirm (thoda slow, max accuracy)
+
+**4) Kya verify karna (2 min):**
+- [ ] Watchdog window me `[laya] warmup done (...ms)` line (pehli ready ke baad)
+- [ ] OpsHealthStrip → AI chip → Laya `queueWaits` badhta hai par `breakerOpen: false` rehta hai
+- [ ] Board cycle latency — AI-confirm stamps ab instant/memo-hit (stale badge nahi)
+
+---
+
 ## 🎯 v21.4.1 — TRADING-SIGNALS DEEP-RECHECK (accuracy + accountability fixes)
 
 **Full-site line-by-line audit se NIKLE 12+ real bugs fix — koi naya setup step NAHI hai.**

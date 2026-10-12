@@ -454,6 +454,11 @@ export interface AISignal {
     laya: 'AGREE' | 'DISAGREE' | 'NEUTRAL' | null;
     verdict: 'CONFIRMED' | 'CONFLICT' | 'NEUTRAL';
     at?: number;
+    /** v21.5.0 (laya fast): SWRV serve — verdict 2×TTL ke andar ka purana
+     *  stamp hai (instant serve + background refresh). Confirm layer sirf
+     *  score ± karta hai isliye 5-min-stale acceptable; UI isko internal
+     *  telemetry maan sakta hai (abhi koi visual badge nahi). */
+    stale?: boolean;
   } | null;
   /** v10.15 GAP 2 EVENT GUARD: the next scheduled event for this
    *  symbol/desk (⚠ Earnings in 2h / ⚠ FOMC 30m) — same truth the

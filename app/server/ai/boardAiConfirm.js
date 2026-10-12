@@ -28,6 +28,12 @@
 // (symbol, side) memo, + single-flight, + soft 4.5s deadline (unresolved
 // verdicts agle cycle me stamp hote hain — council "warming" pattern).
 //
+// v21.5.0 (LAYA FAST) — SWRV (stale-while-revalidate): memo expire hone
+// par bhi board cycle ko block NAHI karte — 2×TTL (10 min) tak ka purana
+// verdict turant stamp hota hai (0-latency) aur fresh verdict background
+// me aata hai (agle cycle ke liye). Confirm layer sirf score ± karta hai
+// isliye 5-min-stale verdict acceptable hai; AI_CONFIRM_SWRV=0 se off.
+//
 // SAFETY: AI kabhi side/sizing/SL nahi badalta — sirf score/grade
 // pe confirm ya demote karta hai. Hard risk (kill switch, risk caps)
 // isse UPAR hi hai. Env: AI_BOARD_CONFIRM=off disables everything.
@@ -51,9 +57,12 @@ const MIN_SCORE = (() => {
   const n = Number.parseFloat(String(process.env.AI_BOARD_CONFIRM_MIN_SCORE ?? ''), 10);
   return Number.isFinite(n) ? Math.max(50, Math.min(95, n)) : 75;
 })();
-const MEMO_TTL_MS = 5 * 60_000;
+let MEMO_TTL_MS = 5 * 60_000;                 // v21.5.0: test-tunable
+// SWRV serve cap = 2×TTL (test-TTL shrink ke saath scale hota hai)
+const staleMaxMs = () => Math.max(2 * MEMO_TTL_MS, MEMO_TTL_MS + 1_000);
+const SWRV = String(process.env.AI_CONFIRM_SWRV ?? '1') !== '0';
 const DEADLINE_MS = 4_500;
-const _memo = new Map();      // `${mkt}:${sym}:${side}` → { at, confirm }
+const _memo = new Map();      // `${mkt}:${sym}:${side}` → { at, promise, verdict }
 const _inflight = new Map();  // key → running promise
 
 // -------- provider registry (lazy singleton, 10-min re-read) --------
@@ -157,13 +166,10 @@ async function _confirmOneProvider(provider, sig, mkt) {
   return 'NEUTRAL'; // wait / threshold / error / breaker — honest abstain
 }
 
-/** Confirm one signal with all configured providers (memo + inflight). */
-function _confirmSignal(sig, mkt) {
-  const key = `${String(mkt).toUpperCase()}:${sig.symbol}:${sig.side}`;
-  const hit = _memo.get(key);
-  if (hit && Date.now() - hit.at < MEMO_TTL_MS) return hit.promise;
-  const running = _inflight.get(key);
-  if (running) return running;
+/** Confirm one signal with all configured providers (memo + inflight).
+ * v21.5.0: SWRV — fresh memo → instant; expired par verdict 2×TTL andar
+ * hai to stale copy turant + background refresh (next cycle fresh). */
+function _wireConfirm(sig, mkt, key) {
   const p = _getProviders();
   const names = ['jev', 'laya'].filter((n) => p[n]);
   const promise = (async () => {
@@ -184,15 +190,35 @@ function _confirmSignal(sig, mkt) {
     else if (agrees.length === names.length && names.length > 0) verdict = 'CONFIRMED';
     return { jev: parts.jev ?? null, laya: parts.laya ?? null, verdict, at: Date.now() };
   })();
-  _memo.set(key, { at: Date.now(), promise });
+  const entry = { at: Date.now(), promise, verdict: null };
+  promise.then((v) => { entry.verdict = v; }).catch(() => { /* verdict stays null */ });
+  _memo.set(key, entry);
   _inflight.set(key, promise);
   promise.finally(() => _inflight.delete(key)).catch(() => {});
-  // memo bounded
+  // memo bounded — Map insertion-order se oldest 40 drop (long session
+  // memory growth ban; SWRV stale entries bhi isi cap me rehte hain)
   if (_memo.size > 200) {
     const it = _memo.keys();
     for (let i = 0; i < 40; i++) { const k = it.next().value; if (k === undefined) break; _memo.delete(k); }
   }
   return promise;
+}
+
+function _confirmSignal(sig, mkt) {
+  const key = `${String(mkt).toUpperCase()}:${sig.symbol}:${sig.side}`;
+  const hit = _memo.get(key);
+  if (hit && Date.now() - hit.at < MEMO_TTL_MS) return hit.promise;
+  const running = _inflight.get(key);
+  if (running) return running;
+  // v21.5.0 SWRV: thaka hua verdict abhi bhi 2×TTL ke andar hai — board
+  // cycle ko TURANT serve karo, fresh verdict background me. (Ye path sirf
+  // confirm-layer ke liye hai — Bot Lab entries apna purana blocking flow
+  // use karti hain, wahan latency budget alag hai.)
+  if (hit && hit.verdict && SWRV && Date.now() - hit.at < staleMaxMs()) {
+    try { _wireConfirm(sig, mkt, key).catch(() => {}); } catch { /* never fatal */ }
+    return Promise.resolve({ ...hit.verdict, stale: true });
+  }
+  return _wireConfirm(sig, mkt, key);
 }
 
 /**
@@ -233,7 +259,7 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
   const jobs = eligible.map(async (s) => {
     try {
       const c = await _confirmSignal(s, mkt);
-      s.aiConfirm = { jev: c.jev, laya: c.laya, verdict: c.verdict, at: c.at };
+      s.aiConfirm = { jev: c.jev, laya: c.laya, verdict: c.verdict, at: c.at, stale: !!c.stale };
     } catch { /* never breaks the board */ }
   });
   await Promise.race([
@@ -241,10 +267,11 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
     new Promise((res) => { const t = setTimeout(res, DEADLINE_MS); if (t.unref) t.unref(); }),
   ]);
 
-  let confirmed = 0, conflicted = 0;
+  let confirmed = 0, conflicted = 0, staleServed = 0;
   for (const s of eligible) {
     const v = s?.aiConfirm?.verdict;
     if (!v) continue;
+    if (s?.aiConfirm?.stale) staleServed++;
     if (v === 'CONFIRMED') {
       confirmed++;
       // +3 on the displayed aiScore (rank recompute happens after us)
@@ -279,7 +306,12 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
       } catch { /* noop */ }
     }
   }
-  return { stamped: eligible.filter(s => s?.aiConfirm?.verdict).length, confirmed, conflicted, providers: names };
+  return {
+    stamped: eligible.filter(s => s?.aiConfirm?.verdict).length,
+    confirmed, conflicted,
+    stale: staleServed,
+    providers: names,
+  };
 }
 
 /** Test hooks. */
@@ -288,6 +320,15 @@ export function __resetBoardAiConfirmForTests() {
   _inflight.clear();
   _providers = null;
   _providersAt = 0;
+  MEMO_TTL_MS = 5 * 60_000;
+}
+/** v21.5.0: SWRV tests — TTL shrink + memo peek + reset. */
+export function __setMemoTtlForTests(ms) {
+  const n = Number(ms);
+  if (Number.isFinite(n) && n >= 0) MEMO_TTL_MS = n;
+}
+export function __memoPeekForTests() {
+  return _memo;
 }
 export function __setProvidersForTests(p) {
   _providers = p || { jev: null, laya: null };
