@@ -45,7 +45,7 @@ import { smcVote } from './lib/smc.js';
 // board path threads it (signals.js __structure); now the scan does too.
 import { structurePro } from './models.js';
 import { maxSaneLeverage } from './ensemble.js';
-import { pRound as pR, MAX_STOP_FRACTION } from './lib/priceRound.js';
+import { pRound as pR, pRoundLadder, MAX_STOP_FRACTION } from './lib/priceRound.js';
 import { buildRegime, fetchYahooIntradayCandles } from './signals.js';
 // v12.0 PRO TRADER UPGRADE — every pick now carries the calibrated
 // WIN PROBABILITY (P(win) vs the R:R breakeven + EV in R) and, on the
@@ -553,10 +553,17 @@ export function buildExpertBlueprint({ side, ltp, atr, score, market, ema20 = nu
     : { mode: 'PULLBACK', note: `EMA20 (${pR(ema20)}) se ${emaDist.toFixed(1)}×ATR door hai — pullback zone me limit laga do (${pR(zoneLo)}–${pR(zoneHi)})` };
 
   // --- staged exit plan (prop-desk partials) ---
+  // v21.6.1 DISTINCT-LEVELS GUARD: entry/SL/T1..T3 pRound ke 2-decimal tier
+  // pe collapse ho sakte the (XRP $1.36 class) — ab poori ladder EK shared
+  // precision pe strictly ordered round hoti hai.
+  const ladder = pRoundLadder({ side: long ? 'LONG' : 'SHORT', entry, stopLoss, targets: [t1, t2, t3] });
+  const entryR = ladder.entry;
+  const slR = ladder.stopLoss;
+  const t1R = ladder.targets[0], t2R = ladder.targets[1], t3R = ladder.targets[2];
   const exitPlan = [
-    { at: pR(t1), bookPct: 40, action: `T1 ${pR(t1)} — 40% book karo + SL ko entry (${pR(entry)}) pe breakeven kar do` },
-    { at: pR(t2), bookPct: 40, action: `T2 ${pR(t2)} — 40% book karo + bacha 20% trail pe daal do (peak − 1×risk)` },
-    { at: pR(t3), bookPct: 20, action: `T3 ${pR(t3)} — runner 20% trail karo ya poora exit` },
+    { at: t1R, bookPct: 40, action: `T1 ${t1R} — 40% book karo + SL ko entry (${entryR}) pe breakeven kar do` },
+    { at: t2R, bookPct: 40, action: `T2 ${t2R} — 40% book karo + bacha 20% trail pe daal do (peak − 1×risk)` },
+    { at: t3R, bookPct: 20, action: `T3 ${t3R} — runner 20% trail karo ya poora exit` },
   ];
 
   // --- hold horizon from volatility ---
@@ -566,10 +573,10 @@ export function buildExpertBlueprint({ side, ltp, atr, score, market, ema20 = nu
 
   return {
     side: long ? 'LONG' : 'SHORT',
-    entry: pR(entry),
+    entry: entryR,
     entryZone: [pR(zoneLo), pR(zoneHi)],
-    stopLoss: pR(stopLoss),
-    targets: { t1: pR(t1), t2: pR(t2), t3: pR(t3) },
+    stopLoss: slR,
+    targets: { t1: t1R, t2: t2R, t3: t3R },
     rewardRisk: 2,
     slDistPct,
     leverage,
@@ -578,7 +585,7 @@ export function buildExpertBlueprint({ side, ltp, atr, score, market, ema20 = nu
     exitPlan,
     timing,
     horizon,
-    invalidation: `SL ${pR(stopLoss)} break ho jaye YA BTC regime flip — pick cancel. Koi averaging mat karo.`,
+    invalidation: `SL ${slR} break ho jaye YA BTC regime flip — pick cancel. Koi averaging mat karo.`,
   };
 }
 

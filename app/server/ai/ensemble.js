@@ -11,7 +11,7 @@
 //                 ACTION / WATCH / NEUTRAL below that
 // ============================================================
 
-import { pRound, MAX_STOP_FRACTION } from './lib/priceRound.js';
+import { pRound, pRoundLadder, MAX_STOP_FRACTION } from './lib/priceRound.js';
 
 // v21.3.0 (Issue-3): sub-noise stop floor — the swing-structure stop may
 // tighten the ATR baseline stop at most to this fraction of ONE ATR. A
@@ -533,12 +533,24 @@ export function buildTradePlan(consensus, ctx, market, opts = {}) {
   // OP's SL landed ON the entry = instant stop-out). pRound keeps 4-8
   // significant decimals on low-price legs so SL/T1/T2 stay DISTINCT
   // and direction-consistent. Prices ≥ 1 round exactly as before.
+  //
+  // v21.6.1 DISTINCT-LEVELS GUARD: 2-decimal rounding ka ≥1 wala cousin —
+  // XRP $1.36 jaise instrument pe risk < 0.005 aaya (tight structure stop
+  // + floor) to `entry 1.36 · T1 1.36` ban gaya (SHORT target entry PE —
+  // kabhi pay nahi karega; live diagnostic ne pakda tha). pRoundLadder
+  // poori ladder ko EK shared precision pe round karta hai jahan har
+  // level distinct + strictly side-ordered rehta hai (LONG: SL < entry
+  // < T1 < T2; SHORT mirror) — card kabhi galat-side level nahi dikhata.
+  const ladder = pRoundLadder({ side: long ? 'LONG' : 'SHORT', entry: ltp, stopLoss, targets: [target1, target2] });
+  const entryR = ladder.entry, stopR = ladder.stopLoss, t1R = ladder.targets[0], t2R = ladder.targets[1];
+  // risk on the ROUNDED legs (display-consistent — the card shows these)
+  const riskR = Math.abs(entryR - stopR);
   return {
-    entry: pRound(ltp),
-    stopLoss: pRound(stopLoss),
-    target1: pRound(target1),
-    target2: pRound(target2),
-    risk: pRound(risk),
+    entry: entryR,
+    stopLoss: stopR,
+    target1: t1R,
+    target2: t2R,
+    risk: riskR > 0 ? pRound(riskR) : pRound(risk),
     riskPct: r2((risk / ltp) * 100),
     rewardRisk: r2(rr),
     // v6.12: honest flag — the reward side is mechanically 2R by

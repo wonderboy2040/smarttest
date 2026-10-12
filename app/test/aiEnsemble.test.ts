@@ -105,6 +105,35 @@ describe('buildTradePlan — ATR-based risk engineering', () => {
     expect(buildTradePlan({ side: 'FLAT', dir: 0 }, longCtx, 'INDIA')).toBeNull();
     expect(buildTradePlan({ side: 'LONG', dir: 1 }, { ltp: 0, ind: {} }, 'INDIA')).toBeNull();
   });
+
+  // v21.6.1 DISTINCT-LEVELS GUARD — the live diagnostic caught XRP $1.36
+  // printing `entry 1.36 · T1 1.36` (SHORT T1 ON the entry) because the
+  // 2-decimal tier collapsed a sub-cent risk. pRoundLadder keeps the whole
+  // ladder distinct + strictly ordered (bumping to shared 4dp when needed).
+  it('v21.6.1: plan levels never collapse onto the entry after rounding', () => {
+    // XRP-class: price ≥1, tight risk ~0.0035 (sub-cent — the collapse tier)
+    const ctx = { ltp: 1.3649, ind: { atr: 0.0022 } };
+    const short = buildTradePlan({ side: 'SHORT', dir: -1 }, ctx, 'FUTURES')!;
+    expect(short.entry).toBe(1.3649);                              // ladder shared 4dp
+    expect(short.stopLoss).toBeGreaterThan(short.entry);          // SHORT SL above
+    expect(short.target1).toBeLessThan(short.entry);               // SHORT T1 below — NOT equal
+    expect(short.target2).toBeLessThan(short.target1);
+    expect(short.risk).toBeGreaterThan(0);
+    const long2 = buildTradePlan({ side: 'LONG', dir: 1 }, ctx, 'FUTURES')!;
+    expect(long2.entry).toBe(1.3649);
+    expect(long2.stopLoss).toBeLessThan(long2.entry);              // LONG SL below
+    expect(long2.target1).toBeGreaterThan(long2.entry);            // LONG T1 above — NOT equal
+    expect(long2.target2).toBeGreaterThan(long2.target1);
+    // the ladder precision is shared across legs
+    expect(String(long2.stopLoss).split('.')[1]?.length).toBe(4);
+  });
+
+  it('v21.6.1: normal-risk plans keep their classic 2-decimal levels', () => {
+    const plan = buildTradePlan({ side: 'LONG', dir: 1 }, { ltp: 2.50, ind: { atr: 0.05 } }, 'CRYPTO')!;
+    expect(plan.entry).toBe(2.5);
+    expect(plan.stopLoss).toBeCloseTo(2.42, 2);
+    expect(plan.target1).toBeCloseTo(2.58, 2);
+  });
 });
 
 describe('evaluateExecutionGate — THE order gauntlet', () => {
