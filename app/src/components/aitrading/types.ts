@@ -5,7 +5,7 @@
 
 export type Side = 'LONG' | 'SHORT' | 'FLAT';
 export type Grade = 'STRONG' | 'ACTION' | 'WATCH' | 'NEUTRAL';
-export type MarketKind = 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES'; // v10.4: global equity futures SIM desk
+export type MarketKind = 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES' | 'METALS'; // v10.4: global equity futures SIM desk · v21.8.0: METALS = GOLD XAU + SILVER XAG perps desk (board label — signals apne andar 'FUTURES' domain carry karte hain)
 
 export interface ModelVote {
   id: string;

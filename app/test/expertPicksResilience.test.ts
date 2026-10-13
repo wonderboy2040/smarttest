@@ -42,6 +42,8 @@ vi.mock('../server/ai/futures.js', () => ({
   futuresPairFor: (b) => `B-${b}_USDT`,
   fetchFuturesPrices: async () => { throw new Error('offline (test)'); },
   fetchFuturesCandles: async () => null,
+  // v21.8.0: expertPicks imports the metals carve-out set
+  METALS_BASES: ['XAU', 'XAG'],
 }));
 vi.mock('../server/cryptoStream.js', () => ({
   fetchCoinDcxTickers: async () => { throw new Error('WAF-blocked (test)'); },

@@ -77,6 +77,101 @@ export function baseOfFuturesPair(pair) {
   return m ? m[1].toUpperCase() : String(pair || '').toUpperCase();
 }
 
+// ---------------- v21.8.0: METALS DESK (GOLD XAU + SILVER XAG) ----------------
+// CoinDCX futures book par B-XAU_USDT / B-XAG_USDT commodity perps listed
+// hain (v11.3 note) — the RT book + pcode=f candlestick endpoint dono serve
+// karte hain. YE module unke DEDICATED fallbacks deta hai:
+//   • TV crypto scanner par BINANCE:XAUUSDT/XAGUSDT MISSING hai (verified
+//     live — scanner returns {} for metals) → indicators candles se hi
+//     bante hain (computeIndicatorsFromCandles), isliye candle chain ko
+//     rock-solid hona chahiye.
+//   • Binance SPOT par XAU/XAG listed NAHI (sirf PAXG/XAUT tokens) → the
+//     generic fetchBinanceKlines fallback metals ke liye bekaar hai. FAPI
+//     (Binance FUTURES) par XAUUSDT/XAGUSDT perps REAL hain (verified
+//     live: fapi klines + 24h ticker dono kaam karte hain) → fapi is the
+//     right fallback venue, USDT domain 1:1 (no rescale).
+export const METALS_BASES = ['XAU', 'XAG'];
+const METALS_SET = new Set(METALS_BASES);
+export function isMetalsBase(base) {
+  return METALS_SET.has(String(base || '').toUpperCase());
+}
+const METALS_FAPI_KLINES = 'https://fapi.binance.com/fapi/v1/klines';
+const METALS_FAPI_TICKER = 'https://fapi.binance.com/fapi/v1/ticker/24hr';
+
+/** PURE: Binance fapi kline rows → the house candle shape (same as
+ * fetchFuturesCandles rows: {time,open,high,low,close,volume}, ascending).
+ * Kline row: [openTime, open, high, low, close, volume, closeTime, …]. */
+export function fapiKlinesToCandles(rows) {
+  if (!Array.isArray(rows)) return null;
+  const candles = rows.map(k => {
+    const t = Number(Array.isArray(k) ? k[0] : k?.t);
+    const o = num(Array.isArray(k) ? k[1] : k?.o);
+    const h = num(Array.isArray(k) ? k[2] : k?.h);
+    const l = num(Array.isArray(k) ? k[3] : k?.l);
+    const c = num(Array.isArray(k) ? k[4] : k?.c);
+    const v = num(Array.isArray(k) ? k[5] : k?.v) || 0;
+    return { time: t < 1e12 ? t * 1000 : t, open: o, high: h, low: l, close: c, volume: v };
+  }).filter(c => c.close > 0 && c.open > 0)
+    .sort((a, b) => a.time - b.time);
+  return candles.length >= 30 ? candles : null;
+}
+
+// v12.6-style TTL cache (fapi klines: 3 min for 15m, 5 min otherwise —
+// same cadence as the futures candle cache; the metals board re-reads
+// every cycle, 299/300 bars identical).
+const _metalsKlineCache = new Map();
+export async function fetchMetalsFapiCandles(base, resolution = '60', limit = 300) {
+  const sym = String(base || '').toUpperCase();
+  if (!isMetalsBase(sym)) return null;
+  const cacheKey = `met:${sym}:${resolution}`;
+  const ttl = resolution === '15' ? 180_000 : 300_000;
+  const hit = _metalsKlineCache.get(cacheKey);
+  if (hit && Date.now() - hit.at <= ttl) return hit.candles.slice();
+  const interval = resolution === '1D' ? '1d' : String(resolution);
+  const url = `${METALS_FAPI_KLINES}?symbol=${sym}USDT&interval=${interval}&limit=${Math.max(60, Math.min(1000, limit))}`;
+  try {
+    const r = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) });
+    if (!ok(r)) return null;
+    const j = await r.json().catch(() => null);
+    const candles = fapiKlinesToCandles(Array.isArray(j) ? j : null);
+    if (!candles) return null;
+    if (_metalsKlineCache.size >= 8) _metalsKlineCache.clear(); // 2 syms × few TFs — trivial bound
+    _metalsKlineCache.set(cacheKey, { at: Date.now(), candles });
+    return candles.slice();
+  } catch { return null; } // honest — caller's chain falls through
+}
+
+/** Metals price fallback: CoinDCX RT down ho to Binance fapi XAUUSDT/
+ * XAGUSDT 24h tickers (rows in the fetchFuturesPrices shape, USDT
+ * domain 1:1 — no conversion). 30s negative-cache (fapi outage par
+ * har board cycle re-hit nahi). */
+let _metalsPrices = { at: 0, rows: null, downUntil: 0 };
+export async function fetchMetalsPrices() {
+  if (Date.now() < _metalsPrices.downUntil) return null;
+  if (_metalsPrices.rows && Date.now() - _metalsPrices.at < 20_000) return _metalsPrices.rows;
+  try {
+    const rows = await Promise.all(METALS_BASES.map(async (base) => {
+      const r = await fetch(`${METALS_FAPI_TICKER}?symbol=${base}USDT`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) });
+      if (!ok(r)) return null;
+      const t = await r.json().catch(() => null);
+      if (!t || !(Number(t.lastPrice) > 0)) return null;
+      return {
+        pair: futuresPairFor(base), base,
+        last: num(t.lastPrice), mark: num(t.lastPrice),
+        changePct: num(t.priceChangePercent), high: num(t.highPrice), low: num(t.lowPrice),
+        volume: num(t.quoteVolume) || 0, ts: Date.now(), source: 'binance-fut-usdt',
+      };
+    }));
+    const okRows = rows.filter(Boolean);
+    if (okRows.length === 0) throw new Error('no metals rows');
+    _metalsPrices = { at: Date.now(), rows: okRows, downUntil: 0 };
+    return okRows;
+  } catch {
+    _metalsPrices.downUntil = Date.now() + 30_000;
+    return null;
+  }
+}
+
 // ---------------- USDINR (shared conversion, cached) ----------------
 // v20.2: the last-known rate is recorded into ai/lib/usdinr (disk-backed)
 // — a cold boot + Yahoo FX outage now re-hydrates yesterday's rate instead

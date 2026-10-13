@@ -35,7 +35,7 @@ import {
   INDIA_UNIVERSE, CRYPTO_UNIVERSE, fetchTVIndiaBatch, fetchTVCryptoBatch,
   fetchCoinDcxCandles, isNseOpen,
 } from './data.js';
-import { futuresPairFor, fetchFuturesPrices, fetchFuturesCandles } from './futures.js';
+import { futuresPairFor, fetchFuturesPrices, fetchFuturesCandles, METALS_BASES } from './futures.js';
 import { computeIndicatorsFromCandles } from './lib/indicators.js';
 import { smcVote } from './lib/smc.js';
 // v20.9.3 FIX (M): the 8th factor (Structure/Fib/VP, weight 0.09) was DEAD
@@ -257,14 +257,21 @@ export async function discoverSpotUniverse(size = DEFAULT_UNIVERSE_SIZE) {
   });
 }
 
-/** Top liquid CoinDCX GLOBAL FUTURES (B-<base>_USDT) bases by 24h volume. */
+/** Top liquid CoinDCX GLOBAL FUTURES (B-<base>_USDT) bases by 24h volume.
+ * v21.8.0: METALS carve-out — XAU/XAG ab apna DEDICATED METALS desk
+ * (CoinDcxTab) use karte hain; futures discovery unhe crypto top-40 me
+ * leak hone se rokta hai (duplicate surfaces + double signals se bachna
+ * — v21.7.0 ka "simple, no distraction" directive). Binance fallback
+ * path pe ye pehle se hi BINANCE_BLOCKLIST se blocked the; ab CoinDCX
+ * RT primary path bhi consistent hai. */
+const METALS_DISCOVERY_SET = new Set(METALS_BASES);
 export async function discoverFuturesUniverse(size = DEFAULT_UNIVERSE_SIZE) {
   return _cachedUniverse('fut-usdt', 10 * 60_000, async () => {
     let bases = [];
     try {
       const rows = await fetchFuturesPrices();
       bases = (Array.isArray(rows) ? rows : [])
-        .filter(x => x && x.base && x.volume > 0 && x.last > 0)
+        .filter(x => x && x.base && x.volume > 0 && x.last > 0 && !METALS_DISCOVERY_SET.has(x.base))
         .sort((a, b) => b.volume - a.volume)
         .slice(0, size)
         .map(x => x.base);

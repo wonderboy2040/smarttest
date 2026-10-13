@@ -70,7 +70,10 @@ function istMinutes(now) {
 
 export function sessionPhase(market, now = Date.now()) {
   const mkt = String(market || 'INDIA').toUpperCase();
-  if (mkt === 'CRYPTO' || mkt === 'FUTURES') {
+  // v21.8.0: 24/7 venues — GLOBALFUTURES (USDC equity perps trade 24/7;
+  // pehle NSE phases milte the = latent bug) + METALS (B-XAU/B-XAG_USDT
+  // commodity perps). Weekend note honestly warns thin liquidity.
+  if (mkt === 'CRYPTO' || mkt === 'FUTURES' || mkt === 'GLOBALFUTURES' || mkt === 'METALS') {
     // 24/7 venues: always tradeable, but weekend liquidity honestly noted
     const d = now instanceof Date ? now : new Date(now);
     const day = d.getUTCDay(); // 0 Sun .. 6 Sat

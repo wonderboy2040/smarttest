@@ -83,14 +83,16 @@ interface PositionTick {
   ts?: number;
 }
 
-export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES'> }) {
+export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES' | 'METALS'> }) {
   // v6.9: market-scoped loading — the India desk only pays for the India
   // board; the CoinDCX desk loads spot + futures. Default = all (legacy).
+  // v21.8.0: + METALS — the GOLD (XAU/USDT) + SILVER (XAG/USDT) desk.
   const markets = scope?.markets ?? ['INDIA', 'CRYPTO', 'FUTURES'];
   const [india, setIndia] = useState<SignalBoard | null>(null);
   const [crypto, setCrypto] = useState<SignalBoard | null>(null);
   const [futures, setFutures] = useState<SignalBoard | null>(null);
   const [globalFut, setGlobalFut] = useState<SignalBoard | null>(null); // v10.4 GLOBAL equity futures SIM desk
+  const [metals, setMetals] = useState<SignalBoard | null>(null); // v21.8.0 GOLD XAU + SILVER XAG perps desk (CoinDcxTab)
   const [state, setState] = useState<TradingState | null>(null);
   const [positions, setPositions] = useState<JournalPosition[]>([]);
   const [entries, setEntries] = useState<JournalEntry[]>([]);
@@ -162,6 +164,7 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
     if (markets.includes('CRYPTO')) jobs.push(boardJob('CRYPTO', setCrypto as (b: unknown) => void));
     if (markets.includes('FUTURES')) jobs.push(boardJob('FUTURES', setFutures as (b: unknown) => void));
     if (markets.includes('GLOBALFUTURES')) jobs.push(boardJob('GLOBALFUTURES', setGlobalFut as (b: unknown) => void));
+    if (markets.includes('METALS')) jobs.push(boardJob('METALS', setMetals as (b: unknown) => void));
     await Promise.allSettled(jobs);
     setBoardError(!anyOk); // v7.0.2: every requested board failed
     setLoading(false);
@@ -398,7 +401,7 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
   // "deep analysis galat/purana data dikha rahi thi" report was exactly
   // this: a cached answer older than the board card it sat next to.
   // The 15s modal auto-recheck calls with fresh=false and rides the cache.
-  const fetchDeep = useCallback(async (symbol: string, market: 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES', opts?: { fresh?: boolean }): Promise<DeepSignalResult> => {
+  const fetchDeep = useCallback(async (symbol: string, market: MarketKind, opts?: { fresh?: boolean }): Promise<DeepSignalResult> => {
     try {
       const freshQ = (opts?.fresh !== false) ? '&fresh=1' : '';
       const r = await apiFetch(`${getProxyBase()}/api/ai/deep/${encodeURIComponent(symbol)}?market=${market}${freshQ}&t=${Date.now()}`, {
@@ -603,7 +606,7 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
   }, [loadState]);
 
   return {
-    india, crypto, futures, globalFut, state, positions, entries, loading, busy, boardError,
+    india, crypto, futures, globalFut, metals, state, positions, entries, loading, busy, boardError,
     /** v21.4.1 [D3]: per-market board errors — ek desk fail ho aur doosra
      *  chal raha ho to CoinDcxTab sirf FAIL desk ka honest unreachable
      *  panel dikhata hai (silent hole nahi). Key = market name. */

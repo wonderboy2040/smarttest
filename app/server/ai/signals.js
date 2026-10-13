@@ -21,7 +21,7 @@ import {
 // cadence (T1 base∪hot every cycle · T2 rotating slices) + hot
 // promotion. Flag AI_INDIA_FULL_UNIVERSE=off reverts to the static base.
 import { tieredScanUniverse, absorbScanRows, fullIndiaUniverseEnabled as _fullIndiaUniverseEnabled, boardUniverseOverrides } from './indiaUniverse.js';
-import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandles } from './futures.js';
+import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandles, METALS_BASES, isMetalsBase, fetchMetalsFapiCandles, fetchMetalsPrices } from './futures.js';
 // v20.7.12 [M-2]: USDINR last-known-good fallback (disk-backed) — flat-84
 // hardcode (signals.js:2240) TV-only fallback contexts ko ~6% misprice
 // kar raha tha jab real USDINR ~89 ho (v20.2 ne baaki sab sites fix kiye the,
@@ -472,7 +472,10 @@ async function dailyTrend(candles) {
 }
 export async function buildRegime(market) {
   const mkt = String(market || 'INDIA').toUpperCase();
-  if (mkt === 'CRYPTO' || mkt === 'FUTURES') {
+  // v21.8.0: + METALS — metals desk bhi BTC-anchored crypto risk-regime
+  // share karta hai (same as FUTURES desk; the 13 seats candle-driven
+  // hote hain, regime sirf context modifier hai).
+  if (mkt === 'CRYPTO' || mkt === 'FUTURES' || mkt === 'METALS') {
     const q = await fetchYahooQuotes(['BTC']).catch(() => ({}));
     const c = _regimeTrendCache.crypto;
     let btcTrend = _trendFresh(c) ? c.val : null;
@@ -580,11 +583,18 @@ function tapeFromCandles(candles, li, tvRow) {
 async function fetchCrypto15mTape(base, ltp, tvRow, mkt) {
   try {
     let candles = null;
-    if (mkt === 'FUTURES' || mkt === 'GLOBALFUTURES') {
+    // v21.8.0: + METALS — B-XAU_USDT/B-XAG_USDT bhi futures 15m candles
+    // hi use karte hain; Binance SPOT fallback (fetchBinanceKlines) metals
+    // ke liye bekaar hai (XAU/XAG spot pe listed nahi) → fapi klines leg.
+    if (mkt === 'FUTURES' || mkt === 'GLOBALFUTURES' || mkt === 'METALS') {
       candles = await fetchFuturesCandles(futuresPairFor(base), '15', 240).catch(() => null);
       if (!Array.isArray(candles) || candles.length < 60) {
         // Binance/Bybit USDT 15m klines are ALREADY the desk's domain.
-        candles = await fetchBinanceKlines(base, '15m').catch(() => null);
+        if (isMetalsBase(base)) {
+          candles = await fetchMetalsFapiCandles(base, '15', 240).catch(() => null);
+        } else {
+          candles = await fetchBinanceKlines(base, '15m').catch(() => null);
+        }
       }
     } else {
       candles = await fetchCoinDcxCandles(base, '15m').catch(() => null);
@@ -1146,7 +1156,10 @@ function _warmBoardInBackground(mkt, deps) {
 
 export async function getSignals(market, deps, opts = {}) {
   const raw = String(market || 'INDIA').toUpperCase();
-  const mkt = raw === 'CRYPTO' ? 'CRYPTO' : raw === 'FUTURES' ? 'FUTURES' : raw === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : 'INDIA';
+  // v21.8.0: METALS — the dedicated GOLD (XAU/USDT) + SILVER (XAG/USDT)
+  // desk inside the CoinDCX tab (B-XAU_USDT / B-XAG_USDT commodity
+  // perps, futures pipeline pe fixed 2-symbol universe).
+  const mkt = raw === 'CRYPTO' ? 'CRYPTO' : raw === 'FUTURES' ? 'FUTURES' : raw === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : raw === 'METALS' ? 'METALS' : 'INDIA';
   const cacheKey = `board:${mkt}`;
   // v9: full-universe scans are heavier — desks used to hold their board
   // for 90s. v10.10 (direct-RT pass): every desk is 60s now — the visible
@@ -1390,27 +1403,46 @@ async function _computeBoard(mkt, deps, opts = {}) {
       superMeta.universeSize = INDIA_UNIVERSE.length + 2;
       superMeta.universeMode = 'tv-nse-batch';
     }
-  } else if (mkt === 'FUTURES') {
+  } else if (mkt === 'FUTURES' || mkt === 'METALS') {
     // v9 SUPERINTELLIGENCE: the FULL DYNAMIC futures universe — every
     // liquid CoinDCX B-USDT perpetual by 24h turnover (live discovery,
     // delistings/listings flow in automatically; Binance futures is the
     // fallback universe+price chain). The old static ~12-coin list is
     // now only the last-resort seed.
+    // v21.8.0 METALS: SAME pipeline, FIXED universe — GOLD (XAU) + SILVER
+    // (XAG) commodity perps (B-XAU_USDT / B-XAG_USDT). TV scanner par
+    // metals MISSING hain → indicators candles se bante hain; candle
+    // chain = CoinDCX pcode=f → Binance fapi (verified live). Signals
+    // FUTURES domain pe hi jaate hain (USDT perps — execute/gauntlet,
+    // deep, SSE FUT_ ticks, card currency sab FUTURES-identical).
+    const isMetals = mkt === 'METALS';
     const [uni, futRows] = await Promise.all([
-      discoverFuturesUniverse(SUPER_UNIVERSE_SIZE).catch(() => null),
+      isMetals ? Promise.resolve([...METALS_BASES]) : discoverFuturesUniverse(SUPER_UNIVERSE_SIZE).catch(() => null),
       // v10.10: ultra-fresh RT (≤2s) — shares the single-flight round-trip
       // with the cxRtStream 2s poller, so the board rides the same fetch.
       fetchFuturesPrices({ maxAgeMs: 2000 }).catch(() => null),
     ]);
-    const universe = Array.isArray(uni) && uni.length > 0 ? uni : [...FUTURES_UNIVERSE];
-    if (v2ModelsEnabled()) _v2Warms.push(warmInstFlow(universe.slice(0, 10))); // v2 InstFlow: poll the most-liquid books
-    if (meshModelsEnabled()) _meshWarms.push(warmMeshModels('FUTURES', universe.slice(0, 12)).catch(() => {})); // v11.6 mesh seats: T3 slice
+    const universe = isMetals ? [...METALS_BASES] : (Array.isArray(uni) && uni.length > 0 ? uni : [...FUTURES_UNIVERSE]);
+    if (v2ModelsEnabled() && !isMetals) _v2Warms.push(warmInstFlow(universe.slice(0, 10))); // v2 InstFlow: poll the most-liquid books
+    if (meshModelsEnabled() && !isMetals) _meshWarms.push(warmMeshModels('FUTURES', universe.slice(0, 12)).catch(() => {})); // v11.6 mesh seats: T3 slice (metals: equity/news agents — honest abstain, no dead warm)
     superMeta.universeSize = universe.length;
-    superMeta.universeMode = Array.isArray(uni) && uni.length > 0 ? 'dynamic' : 'static-fallback';
+    superMeta.universeMode = isMetals ? 'metals-fixed (GOLD XAU · SILVER XAG perps)' : (Array.isArray(uni) && uni.length > 0 ? 'dynamic' : 'static-fallback');
     const futMap = new Map((Array.isArray(futRows) ? futRows : []).map(x => [x.base, x]));
-    // Missing RT prices → Binance futures (USDT domain — same domain as
-    // the desk, no conversion needed).
-    if (futMap.size === 0 || universe.some(b => !futMap.has(b))) {
+    // Missing RT prices → fallback chain. Crypto: Binance futures (USDT
+    // domain — same domain as the desk, no conversion needed). Metals:
+    // dedicated fapi XAUUSDT/XAGUSDT tickers (binancePriceMap's discovery
+    // base BINANCE_BLOCKLIST se metals ko hata deta hai — dedicated
+    // fetchMetalsPrices is the right leg, same USDT 1:1 domain).
+    if (isMetals) {
+      if (universe.some(b => !futMap.get(b)?.last)) {
+        const metRows = await fetchMetalsPrices().catch(() => null);
+        for (const r of (Array.isArray(metRows) ? metRows : [])) if (!futMap.get(r.base)?.last) futMap.set(r.base, r);
+        if (metRows?.length) superMeta.priceSource = futMap.size > metRows.length ? 'coindcx-fut + binance-fut-metals' : 'binance-fut-usdt (metals fapi)';
+        else if (futMap.size > 0) superMeta.priceSource = 'coindcx-fut-usdt (metals partial)';
+      } else {
+        superMeta.priceSource = 'coindcx-fut-usdt (metals)';
+      }
+    } else if (futMap.size === 0 || universe.some(b => !futMap.has(b))) {
       const { map } = await binancePriceMap(universe, true).catch(() => ({ map: new Map() }));
       for (const [b, usd] of map) if (!futMap.has(b)) futMap.set(b, { base: b, last: usd, volume: 0 });
       if (map.size > 0) superMeta.priceSource = futMap.size > map.size ? 'coindcx-fut + binance-fut' : 'binance-fut-usdt';
@@ -1422,12 +1454,20 @@ async function _computeBoard(mkt, deps, opts = {}) {
     // Candle chain: CoinDCX 1h primary → Yahoo 1h fallback RESCALED
     // onto the desk's USDT anchor (Yahoo OHLC is USD — the linear
     // rescale keeps every ATR/EMA in the domain the plan prices use).
+    // v21.8.0 metals: TV scanner par XAU/XAG missing (verified) + Yahoo
+    // intraday map me metals nahi → chain = CoinDCX pcode=f → Binance
+    // fapi klines (USDT 1:1, no rescale, verified live).
     const tv = await fetchTVCryptoChunked(universe);
     const candleMap = await loadCandlesBounded(universe, (b) => (async () => {
       const ltp = futMap.get(b)?.last;
       if (!(ltp > 0)) return null;
       const c = await fetchFuturesCandles(futuresPairFor(b), '60').catch(() => null);
       if (Array.isArray(c) && c.length >= 30) return c;
+      if (isMetalsBase(b)) {
+        const m = await fetchMetalsFapiCandles(b, '60').catch(() => null);
+        if (Array.isArray(m) && m.length >= 30) return m;
+        return null; // metals: Yahoo intraday map me XAU/XAG nahi — fapi hi last leg
+      }
       const y = await fetchYahooIntradayCandles(b, 'FUTURES').catch(() => null);
       // USDT ≈ USD: expected scale ≈ ltp / tv.usdPrice (≈ 1)
       const usd = tv?.[b]?.usdPrice;
@@ -1561,7 +1601,11 @@ async function _computeBoard(mkt, deps, opts = {}) {
         ? 'No crypto data reachable right now (every leg of the chain is down: CoinDCX INR prices + Binance/Bybit + TV scanner + Yahoo candles)'
         : mkt === 'FUTURES'
           ? 'No futures data reachable right now (TV + CoinDCX futures RT unavailable)'
-          : 'No India market data reachable right now (TV scanner unavailable)',
+          : mkt === 'METALS'
+            ? 'No metals data reachable right now (CoinDCX futures RT + Binance fapi both unavailable for XAU/XAG)'
+            : mkt === 'GLOBALFUTURES'
+              ? 'No global equity data reachable right now (Yahoo + global feed unavailable)'
+              : 'No India market data reachable right now (TV scanner unavailable)',
       marketOpen: mkt === 'INDIA' ? isNseOpen() : true,
       topFive: [],
       signals: [], models: modelStatus(null, depsSafe), regime, generatedAt: Date.now(),
@@ -2463,6 +2507,16 @@ async function _computeBoard(mkt, deps, opts = {}) {
   // v6.12: session phase — the intraday desk must KNOW when it is
   // safe to fire (opening noise / square-off window / market closed).
   const ses = sessionPhaseOf(mkt, Date.now());
+  // v21.8.0 METALS DOMAIN STAMP: XAU/XAG B-XAU_USDT/B-XAG_USDT NORMAL
+  // USDT perps hain — signals + topFive FUTURES domain pe hi jaate hain
+  // taaki har downstream consumer (SignalCard currency USDT + execute
+  // gauntlet + deep FUTURES branch + SSE FUT_XAU ticks + TopPicks
+  // priceFmt) bina kisi naye branch ke kaam kare. BOARD ka apna label
+  // 'METALS' hi rehta hai (provenance + client state separation).
+  if (mkt === 'METALS') {
+    for (const s of signals) s.market = 'FUTURES';
+    for (const p of topFive) if (p) p.market = 'FUTURES';
+  }
   const payload = {
     ok: true, market: mkt,
     marketOpen: mkt === 'INDIA' ? isNseOpen() : true,
@@ -2599,7 +2653,10 @@ function buildFuturesCtxSync(base, tvRow, futRow, candles, regime) {
 // ---------------- deep single-symbol signal ----------------
 export async function getDeepSignal(symbol, market, deps, opts = {}) {
   const raw = String(market || 'INDIA').toUpperCase();
-  const mkt = raw === 'CRYPTO' ? 'CRYPTO' : raw === 'FUTURES' ? 'FUTURES' : raw === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : 'INDIA';
+  // v21.8.0: METALS deep = FUTURES branch (same B-XAU_USDT plumbing —
+  // candles + fapi fallback; board cards bhi market 'FUTURES' carry
+  // karte hain, so ye mapping naturally consistent hai).
+  const mkt = raw === 'CRYPTO' ? 'CRYPTO' : raw === 'FUTURES' || raw === 'METALS' ? 'FUTURES' : raw === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : 'INDIA';
   const sym = String(symbol || '').toUpperCase().replace(/[^A-Z0-9-]/g, '');
   if (!sym) return { ok: false, reason: 'symbol required' };
   // v20.7.5 FRESH-RUN SUPPORT: the user's "deep ensemble analysis galat
@@ -2626,13 +2683,22 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
   const regime = await buildRegime(mkt === 'INDIA' ? 'INDIA' : mkt === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : 'CRYPTO');
   let ctx = null;
   if (mkt === 'FUTURES') {
-    const [tv, futRows, candles] = await Promise.all([
+    const [tv, futRows, candles0] = await Promise.all([
       fetchTVCryptoBatch([sym]).catch(() => ({})),
       fetchFuturesPrices().catch(() => []),
       fetchFuturesCandles(futuresPairFor(sym), '60').catch(() => null),
     ]);
+    // v21.8.0 METALS DEEP: XAU/XAG par TV scanner khali aata hai (verified)
+    // + CoinDCX candles dark hone par bina fallback ke deep 500 ho jata.
+    // Binance fapi klines (XAUUSDT/XAGUSDT, USDT 1:1) = verified live leg.
+    let candles = candles0;
+    if ((!Array.isArray(candles) || candles.length < 30) && isMetalsBase(sym)) {
+      candles = await fetchMetalsFapiCandles(sym, '60').catch(() => null);
+    }
     const row = (Array.isArray(futRows) ? futRows : []).find(x => x.base === sym);
-    ctx = buildFuturesCtxSync(sym, tv[sym], row, candles, regime);
+    // metals price fallback (CoinDCX RT down → fapi ticker)
+    const row2 = row?.last > 0 ? row : (isMetalsBase(sym) ? (await fetchMetalsPrices().catch(() => null) || []).find(x => x.base === sym) : null);
+    ctx = buildFuturesCtxSync(sym, tv[sym], row2, candles, regime);
     // v12.7 (recheck R1-#2): attach the raw TV row on the FUTURES deep
     // ctx too — the 15m tape fetch below reads ctx.__tv for its
     // cross-domain fallback anchor (board parity: the board path always

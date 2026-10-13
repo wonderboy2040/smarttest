@@ -22,7 +22,7 @@
 //     committee seats voted on, on the table.
 // ============================================================
 import { memo, useCallback, useEffect, useState } from 'react';
-import type { AISignal } from './types';
+import type { AISignal, MarketKind } from './types';
 import type { DeepSignalResult } from './useAITrading';
 
 const DEEP_RECHECK_SEC = 15;
@@ -154,9 +154,9 @@ export function deepPinVerdict(pinned: AISignal, live: AISignal): DeepPinVerdict
 export function useDeepAutoRecheck(
   deep: DeepModalState | null,
   setDeep: React.Dispatch<React.SetStateAction<DeepModalState | null>>,
-  fetchDeep: (symbol: string, market: 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES', opts?: { fresh?: boolean }) => Promise<DeepSignalResult>,
+  fetchDeep: (symbol: string, market: MarketKind, opts?: { fresh?: boolean }) => Promise<DeepSignalResult>,
   reqRef: React.MutableRefObject<number>,
-  market: 'INDIA' | 'CRYPTO' | 'FUTURES' | 'GLOBALFUTURES',
+  market: MarketKind,
 ) {
   const [log, setLog] = useState<DeepLogEntry[]>([]);
   const [nextRecheckAt, setNextRecheckAt] = useState<number | null>(null);

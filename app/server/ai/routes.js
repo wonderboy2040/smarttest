@@ -339,7 +339,8 @@ export function registerAITradingRoutes(app, deps) {
 
   const normMarket = (raw) => {
     const m = String(raw || 'INDIA').toUpperCase();
-    return m === 'CRYPTO' ? 'CRYPTO' : m === 'FUTURES' ? 'FUTURES' : m === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : 'INDIA';
+    // v21.8.0: METALS — GOLD (XAU/USDT) + SILVER (XAG/USDT) dedicated desk
+    return m === 'CRYPTO' ? 'CRYPTO' : m === 'FUTURES' ? 'FUTURES' : m === 'GLOBALFUTURES' ? 'GLOBALFUTURES' : m === 'METALS' ? 'METALS' : 'INDIA';
   };
 
   // ---------------- v18.7: AI ENGINE SENTINEL (status + recheck) ----------------
