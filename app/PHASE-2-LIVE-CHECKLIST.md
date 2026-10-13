@@ -32,20 +32,18 @@
 - [ ] **v21.1.2 WS idle-vs-down**: `armed:false` socket = IDLE (grey, normal — koi subscriber
   nahi), DOWN nahi. Red sirf `healthy:false && armed!==false`. OS strip WS chip
   tooltip me ab `cooldownReason` / `failStreak` / `cooldownRemainMs` seedha dikhta hai
-- [ ] **CoinDCX "WS Down" kabhi dikhe to PROBE chalao (v21.1.2 naya)**:
-  ```bash
-  cd app && node scripts/cx-ws-probe.mjs        # futures socket
-  node scripts/cx-ws-probe.mjs --spot            # spot socket bhi
-  ```
-  Ye 45s me stage-wise (HTTP → handshake → ns-ACK → join → ticks) VERDICT deta hai:
-  | Verdict | Matlab | Action |
+- [ ] **CoinDCX "WS Down" kabhi dikhe to (v21.11 update — probe script retired, in-build diagnosis)**:
+  OS strip WS chip pe hover karo → tooltip me `cooldownReason` / `failStreak` /
+  `cooldownRemainMs` seedha dikhega. Deep-dive: `GET /api/feed-status`.
+  Reason ka action-matrix (wahi jo probe deta tha):
+  | Reason/Verdict | Matlab | Action |
   |---|---|---|
-  | HEALTHY | Host se WS theek | UI false-positive tha — v21.1.2 idle-fix hi solution |
-  | BLOCKED (403/451) | Host IP/region WAF-reject | Server region badlo (Render: Singapore / Oracle Mumbai) |
+  | grey "N idle" | Koi subscriber nahi | NORMAL — down nahi, kuch mat karo |
+  | `handshake-streak` (403/451) | Host IP/region WAF-reject | Server region badlo (Render: Singapore / Oracle Mumbai) |
   | DNS-FAIL / TIMEOUT | Egress blocked | `wss://stream.coindcx.com:443` allow karo |
-  | NO-NS-ACK | Protocol/upstream degraded | CoinDCX status + docs check |
-  | SILENT-CHANNEL | Joined par zero ticks | Channel docs verify; GLOB off-hours quiet ho sakta |
-  (Sandbox se LIVE verify ho chuka: HEALTHY — 114 ticks/30s, first tick join ke 0.3s baad)
+  | `silent-contract` / NO-NS-ACK | Protocol/upstream degraded | CoinDCX status + docs check |
+  | `glob-quiet` / SILENT-CHANNEL | Joined par zero ticks | Channel docs verify; GLOB off-hours quiet ho sakta |
+  (Historical: v21.1.2 sandbox se LIVE verify HEALTHY tha — 114 ticks/30s)
 - [ ] Binance futures WS: `feeds.ws.binanceFutures.healthy` (agar accelerator on hai)
 - [ ] India Groww 3s poller: market hours me `feeds.sources['groww-nse-realtime'].live: true`
 - [ ] Finnhub US (agar key hai): `feeds.sources['finnhub-stream'].live: true`

@@ -222,8 +222,7 @@ LAYA_API_KEY=<wahi 32+ char key jo laya-serve ko di>
 - Arm change **bina server restart** kaam karta hai (state file me persist)
 
 **4) Recommended rollout (PAPER pehle, hamesha):**
-- `AI_SHADOW=laya` + arm=`gated` chalao → dono providers ke decisions log hote hain (trade pe zero asar) → `npm run calibrate` me per-ARM table dekho → jo arm `gated` se behtar ho tabhi uspe switch karo
-- `node scripts/botlab-backtest.mjs --arm all --sweep laya` — per-provider threshold sweep
+- `AI_SHADOW=laya` + arm=`gated` chalao → dono providers ke decisions log hote hain (trade pe zero asar) → `npm run calibrate` me per-ARM table dekho → jo arm `gated` se behtar ho tabhi uspe switch karo *(v21.11: `botlab-backtest.mjs` script retire ho chuka — per-provider analysis ledger settle-events + calibrate table se)*
 
 **5) Troubleshooting:**
 - Arm dropdown me Laya disabled + "409 provider_unavailable" → `LAYA_ENABLED`/`LAYA_API_KEY`/`laya-serve` teeno check
@@ -617,11 +616,13 @@ liye Watchdog bat kaafi hai.
 **IMPORTANT — 2 naya/updated kaam:**
 1. **CoinDCX tab "WS DOWN" dikhe to** pehle OS strip pe hover karo — tooltip me
    `cooldownReason`/`failStreak`/`cooldownRemainMs` dikhega. Grey "N idle" = koi
-   subscriber nahi (NORMAL, down nahi). Ab bhi doubt ho to probe chalao:
-   `cd app && node scripts/cx-ws-probe.mjs` (spot: `--spot`) — VERDICT line
-   exact wajah + action batayegi. (Sandbox se LIVE verify: HEALTHY, 114 ticks/30s)
-2. **Render deploy**: dist ab git me tracked NAHI — Build Command
-   `npm ci && npm run build` zaroori (v21.1.1 se hi, ab remote se bhi clean)
+   subscriber nahi (NORMAL, down nahi). WS deep-dive ke liye `/api/feed-status`
+   use karo. *(v21.11: `cx-ws-probe.mjs` script retire ho chuka — OS-strip tooltip
+   + feed-status wahi diagnosis dete hain)*
+2. **Render deploy**: dist git me tracked HAI (deliberately — watchdog bina
+   5-min rebuild ke serve kare, `ensureFrontend` sirf version-stamp mismatch
+   pe rebuild karta hai). Render pe bhi Build Command `npm ci && npm run build`
+   recommended hai — pushed dist se newer source ho to stamp guard khud pakad lega
 
 **Kya naya hai:** WS idle-vs-down UI fix (armed:false = grey idle, red sirf
 armed+unhealthy), `/api/health` me WS cooldown reason/streak/remaining, process

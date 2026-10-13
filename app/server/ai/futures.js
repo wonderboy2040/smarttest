@@ -676,7 +676,19 @@ export async function futuresExecutePrecheck(opts) {
       const sideMatch = !side || !signal.side || signal.side === side;
       gate('Side match', sideMatch, sideMatch ? `consensus ${signal.side}` : `board flipped: ${signal.side} vs requested ${side}`);
       if (signal.ucRejected) out.warnings.push('Ultrafast chart verification REJECTED this direction');
-      if (signal.aiConfirm?.verdict === 'CONFLICT') out.warnings.push('Jev/Laya AI CONFLICT on this signal');
+      // v21.11: CONFLICT warning me kaun ULTA side pe hai + uski conviction
+      // — pehle sirf "Jev/Laya AI CONFLICT" dikhta tha, direction ka pata
+      // nahi chalta tha (user ka exact complaint)
+      if (signal.aiConfirm?.verdict === 'CONFLICT') {
+        const flips = ['jev', 'laya']
+          .filter((n) => signal.aiConfirm?.detail?.[n]?.v === 'DISAGREE')
+          .map((n) => {
+            const d = signal.aiConfirm.detail[n];
+            const p = d.picked === 'enter_short' ? d.pShort : d.picked === 'enter_long' ? d.pLong : null;
+            return `${n === 'laya' ? 'Laya' : 'Jev'} ${d.picked === 'enter_short' ? 'SHORT' : 'LONG'}${p != null ? ` ${Math.round(p * 100)}%` : ''}`;
+          });
+        out.warnings.push(`Jev/Laya AI CONFLICT on this signal${flips.length ? ` — ${flips.join(' + ')} ke side me (ULTA)` : ''}`);
+      }
     }
 
     // ---- sizing preview (the would-be ticket — no order) ----

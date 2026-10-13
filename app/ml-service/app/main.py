@@ -711,5 +711,10 @@ else:
 
 
 if __name__ == "__main__":
+    import os
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # v21.11.0 PORT-COLLISION FIX: 8000 → 8100 — port 8000 LAYA ka home port
+    # hai (laya-serve sidecar). ml-service ko apna port chahiye. ML_PORT env
+    # se override hota hai; Dockerfile aur Node clients (ensemble.js,
+    # mlHealth.js, index.js) isi default ke saath synced hain.
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("ML_PORT", "8100")))

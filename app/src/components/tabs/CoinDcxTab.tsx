@@ -658,8 +658,8 @@ export default memo(function CoinDcxTab() {
           <SectionLabel num="01" title="Superintelligence Signal Board" sub={`${desk === 'FUTURES'
             ? 'CoinDCX GLOBAL FUTURES — poora dynamic perp universe scan (RT USDT prices)'
             : desk === 'METALS'
-              ? '🥇 GOLD (XAU/USDT) + SILVER (XAG/USDT) — CoinDCX commodity perps (B-XAU_USDT / B-XAG_USDT), same 13-model committee + 15m tape timing seat — candle chain: CoinDCX 1h → Binance fapi fallback, live RT USDT prices'
-              : '🌍 GLOBAL EQUITY FUTURES SIM — AAPL/MSFT/GOOGL/AMZN/NVDA/TSLA/META (real Yahoo quotes + 1h candles) + SPACEX (deterministic synthetic, labeled SIM) → same 10-model committee → signals REAL data par, execution PAPER/NOTIFY only'} → 10-model consensus + 7-factor expert engine → AI SCORE (80+ = STRONG, 85+ = ELITE) + calibrated WIN PROBABILITY (P(win) vs R:R breakeven + EV in R) + full trade blueprint`} />
+              ? `🥇 GOLD (XAU/USDT) + SILVER (XAG/USDT) — CoinDCX commodity perps (B-XAU_USDT / B-XAG_USDT), same ${models.length || 16}-model committee + tape timing seat — candle chain: CoinDCX 1h → Binance fapi fallback, live RT USDT prices`
+              : `🌍 GLOBAL EQUITY FUTURES SIM — AAPL/MSFT/GOOGL/AMZN/NVDA/TSLA/META (real Yahoo quotes + 1h candles) + SPACEX (deterministic synthetic, labeled SIM) → same ${models.length || 16}-model committee → signals REAL data par, execution PAPER/NOTIFY only`} → ${models.length || 16}-model consensus + 7-factor expert engine → AI SCORE (80+ = STRONG, 85+ = ELITE) + calibrated WIN PROBABILITY (P(win) vs R:R breakeven + EV in R) + full trade blueprint`} />
           <BoardSummary board={board} />
         </div>
         <div className="mt-2.5 flex items-center justify-between flex-wrap gap-2">

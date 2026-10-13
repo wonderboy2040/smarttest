@@ -411,6 +411,24 @@ export interface CouncilCalibrationView {
   note?: string;
 }
 
+/** v21.11.0 — per-provider AI decision detail (boardAiConfirm wire).
+ *  `picked` = the side the provider ACTUALLY chose (enter_long/enter_short
+ *  — null when the provider genuinely waited / errored); pLong/pShort/pWait
+ *  = its probability split (0..1); `reason` = honest short bucket
+ *  (wait / below-thr / slow / breaker / down / timeout / net-err …). */
+export type AiProviderDecision = {
+  v: 'AGREE' | 'DISAGREE' | 'NEUTRAL';
+  picked: 'enter_long' | 'enter_short' | null;
+  pLong: number | null;
+  pShort: number | null;
+  pWait: number | null;
+  confidence: number | null;
+  note: string | null;
+  latencyMs: number | null;
+  cached: boolean | null;
+  reason: string;
+};
+
 export interface AISignal {
   symbol: string;
   market: MarketKind;
@@ -448,7 +466,13 @@ export interface AISignal {
    *  (Jev cloud + Laya local) verdict on this signal: both AGREE →
    *  CONFIRMED (+3 aiScore); koi provider ulta side → CONFLICT (−8 +
    *  STRONG→ACTION). NEUTRAL = abstain/wait. Present only when at least
-   *  one provider is configured (AI_BOARD_CONFIRM). */
+   *  one provider is configured (AI_BOARD_CONFIRM).
+   *  v21.11.0: `detail` me har provider ka RAW decision milta hai —
+   *  picked side (LONG/SHORT), probabilities (pLong/pShort/pWait),
+   *  confidence, aur honest reason (wait / below-thr / slow / breaker /
+   *  down). Pehle sirf ✓/✗/○ travel karta tha — Laya ka directional
+   *  read kabhi UI tak nahi pahunchta tha (user ka "Laya ○ ka matlab
+   *  kya hai LONG/SHORT pe" complaint). */
   aiConfirm?: {
     jev: 'AGREE' | 'DISAGREE' | 'NEUTRAL' | null;
     laya: 'AGREE' | 'DISAGREE' | 'NEUTRAL' | null;
@@ -459,6 +483,11 @@ export interface AISignal {
      *  score ± karta hai isliye 5-min-stale acceptable; UI isko internal
      *  telemetry maan sakta hai (abhi koi visual badge nahi). */
     stale?: boolean;
+    /** v21.11.0: per-provider decision detail (direction transparency). */
+    detail?: {
+      jev?: AiProviderDecision | null;
+      laya?: AiProviderDecision | null;
+    } | null;
   } | null;
   /** v10.15 GAP 2 EVENT GUARD: the next scheduled event for this
    *  symbol/desk (⚠ Earnings in 2h / ⚠ FOMC 30m) — same truth the

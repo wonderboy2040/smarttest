@@ -59,7 +59,9 @@ const { aggregateVotes } = await import('../server/ai/ensemble.js');
 beforeEach(() => {
   __setLedgerForTests(null);
   __resetMeshModelsForTests();
-  delete process.env.AI_ENABLE_MESH_MODELS;
+  // v21.11: production default ab ON hai — 'flag OFF' legacy behaviour ke
+  // liye explicit 'false' (delete karne se naya default true aa jata)
+  process.env.AI_ENABLE_MESH_MODELS = 'false';
   meshQueryMock.mockReset();
   meshQueryMock.mockImplementation(async ({ capabilities }: { capabilities: string[] }) => {
     const cap = capabilities[0];
@@ -363,7 +365,8 @@ describe('v11.6 Phase 2 — shadow-mode proving (weight earned, never assumed)',
   });
 
   it('flag OFF → applyMeshModelGating is a no-op (A/B safety)', () => {
-    delete process.env.AI_ENABLE_MESH_MODELS;
+    // v21.11: explicit 'false' — production default ab ON hai
+    process.env.AI_ENABLE_MESH_MODELS = 'false';
     const votes = [VOTE('cryptoonchain')];
     expect(applyMeshModelGating(votes)).toBe(votes);
   });

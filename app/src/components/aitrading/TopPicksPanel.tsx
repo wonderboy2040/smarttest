@@ -10,6 +10,7 @@
 // ============================================================
 import { memo } from 'react';
 import { LiveSourceBadge } from './LiveSourceBadge';
+import { aiDirSummary } from './aiConfirmText';
 import type { AISignal, TopPick } from './types';
 
 const MEDALS = ['🥇', '🥈', '🥉', '4', '5'];
@@ -123,11 +124,11 @@ export const TopPicksPanel = memo(function TopPicksPanel({ picks, market, deskLa
                         server-side hi exclude ho jaate hain). */}
                     {p.aiConfirm?.verdict === 'CONFIRMED' && (
                       <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 text-[9px] font-black border border-cyan-500/40"
-                        title={`Jev (cloud) + Laya (local) dono ne ye side APPROVE kiya — server ne +3 score diya`}>🤖 AI ✓</span>
+                        title={`Jev (cloud) + Laya (local) dono ne ye side APPROVE kiya — server ne +3 score diya${aiDirSummary(p.aiConfirm)}`}>🤖 AI ✓</span>
                     )}
                     {p.aiConfirm?.verdict === 'CONFLICT' && (
                       <span className="px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 text-[9px] font-black border border-red-500/40"
-                        title={`Jev/Laya me se koi ulta side chuna — score −8 (CONFLICT)`}>🤖 AI ✗</span>
+                        title={`Jev/Laya me se koi ulta side chuna — score −8 (CONFLICT)${aiDirSummary(p.aiConfirm)}`}>🤖 AI ✗</span>
                     )}
                     {/* v21.3.0 (Issue-2): funding-rate chip — perp picks ka real
                         carry cost (positive = longs pay, negative = shorts pay). */}
@@ -219,7 +220,7 @@ export const TopPicksPanel = memo(function TopPicksPanel({ picks, market, deskLa
                   <button
                     onClick={() => onDeep?.(p)}
                     className="quantum-btn-ghost px-2.5 py-1.5 rounded-lg text-[10px] font-black"
-                    title="10-model deep analysis modal kholo">
+                    title="Full-committee deep analysis modal kholo">
                     🔬
                   </button>
                 </div>

@@ -164,16 +164,101 @@ const CONFIRM_PROMPT = {
   },
 };
 
+// ------------------------------------------------------------
+// v21.11.0 — LAYA DECISION TRANSPARENCY
+// ------------------------------------------------------------
+// User report: "Superintelligence Board pe 🤖 AI ○ (Laya ○) — samaj
+// nahi aa raha Laya kya bol raha hai LONG/SHORT pe". Root cause: ye
+// layer provider ke FULL verdict (action/probs/confidence/note) ko
+// sirf 'AGREE'|'DISAGREE'|'NEUTRAL' 3-string me collapse karta tha —
+// direction kabhi wire tak pahunchti hi nahi thi. Ab har provider ka
+// DECISION object (picked side + probs + note + latency) aiConfirm.detail
+// me travel karta hai:
+//   • AGREE    + picked LONG  → "Laya ✓ LONG"
+//   • DISAGREE + picked SHORT → "Laya ✗ SHORT 68%" (ulta side + conviction)
+//   • NEUTRAL  + picked SHORT → "Laya ○ SHORT-lean 29%" (below-threshold lean)
+//   • NEUTRAL  + note         → "Laya ○ slow / wait / breaker / down" (honest)
+// Legacy string fields (aiConfirm.jev / aiConfirm.laya) UNCHANGED —
+// saare existing consumers (precheck warning, TopPicks, ExpertPicks,
+// LiveExecuteModal, tests) byte-identical behavior.
+// ------------------------------------------------------------
+
+/** Human-readable short reason for a NEUTRAL verdict (the ○ bucket). */
+function _neutralReason(note) {
+  const n = String(note || '');
+  if (!n) return 'wait';
+  if (n === 'deadline') return 'slow';                       // soft deadline race lost
+  if (n === 'breaker_open') return 'breaker';
+  if (n === 'no_api_key') return 'no-key';
+  if (n === 'no_answer' || n === 'no_probability') return 'no-ans';
+  if (n === 'timeout') return 'timeout';
+  if (n === 'network_error') return 'net-err';
+  if (n.startsWith('http_')) return 'down';
+  if (n.startsWith('below_threshold')) return 'below-thr';
+  if (n === 'error') return 'err';
+  return n.length <= 10 ? n : 'wait';
+}
+
+/** Normalize a provider verdict into the wire decision object. */
+function _toDecision(x, proposed) {
+  const opposite = proposed === 'enter_long' ? 'enter_short' : 'enter_long';
+  // legacy/plain-string shape (old memo, timeout race, raw string) —
+  // direction unknown, honest 'wait' reason
+  if (x == null || typeof x === 'string') {
+    return { v: x === 'AGREE' || x === 'DISAGREE' ? x : 'NEUTRAL', picked: null, pLong: null, pShort: null, pWait: null, confidence: null, note: null, latencyMs: null, cached: null, reason: x === 'AGREE' || x === 'DISAGREE' ? 'wait' : _neutralReason(null) };
+  }
+  const probs = (x.probs && typeof x.probs === 'object') ? x.probs : null;
+  const pOf = (k) => (probs && Number.isFinite(Number(probs[k])) ? Number(probs[k]) : null);
+  const note = x.note != null ? String(x.note) : null;
+  const base = {
+    pLong: pOf('enter_long'), pShort: pOf('enter_short'), pWait: pOf('wait'),
+    confidence: Number.isFinite(Number(x.confidence)) ? Number(x.confidence) : null,
+    note,
+    latencyMs: Number.isFinite(Number(x.latencyMs)) ? Number(x.latencyMs) : null,
+    cached: x.cached === true ? true : x.cached === false ? false : null,
+  };
+  if (x.v === 'AGREE' || x.v === 'DISAGREE' || x.v === 'NEUTRAL') {
+    // already-classified decision object (memo round-trip / race re-normalize)
+    // — flattened fields (pLong/pShort/pWait) jevEngine probs se saath me
+    // merge: race-path pe _confirmOneProvider ka output dobara yahan aata
+    // hai, usme probs nahi hoti (flattened hoti hai) — ?? chain dono cover
+    // karti hai. v21.11.0 fix: phele yahan flattened values DROP ho rahi
+    // thi (pLong null) aur UI me direction ke saath % nahi dikhta tha.
+    return {
+      v: x.v,
+      picked: x.picked ?? null,
+      pLong: x.pLong ?? pOf('enter_long'),
+      pShort: x.pShort ?? pOf('enter_short'),
+      pWait: x.pWait ?? pOf('wait'),
+      confidence: base.confidence,
+      note: x.note ?? note,
+      latencyMs: base.latencyMs,
+      cached: base.cached,
+      reason: x.reason || (x.v === 'NEUTRAL' ? _neutralReason(x.note ?? note) : 'wait'),
+    };
+  }
+  // raw jevEngine verdict → classify (v21.3.0 mapping, direction preserved)
+  if (x.action === proposed) {
+    return { ...base, v: 'AGREE', picked: x.action, reason: 'wait' };
+  }
+  if (note === 'disagreed_side') {
+    // provider ne ULTA side chuna — side-flip banned isliye action 'wait'
+    // tha, par RAW choice + probs ab wire pe jaate hain
+    return { ...base, v: 'DISAGREE', picked: x.picked && x.picked !== 'wait' ? x.picked : opposite, reason: 'ulta' };
+  }
+  const picked = (x.picked === 'enter_long' || x.picked === 'enter_short') ? x.picked : null;
+  return { ...base, v: 'NEUTRAL', picked, reason: _neutralReason(note) };
+}
+
 /** One provider's confirm verdict for one signal. Pure mapping off
- *  jevEngine.decide()'s honest output. */
+ *  jevEngine.decide()'s honest output — v21.11: decision OBJECT return
+ *  (direction + probs + note preserved), string nahi. */
 async function _confirmOneProvider(provider, sig, mkt) {
   const proposed = sig?.side === 'SHORT' ? 'enter_short' : sig?.side === 'LONG' ? 'enter_long' : null;
-  if (!proposed) return 'NEUTRAL';
+  if (!proposed) return { v: 'NEUTRAL', picked: null, pLong: null, pShort: null, pWait: null, confidence: null, note: 'no_side', latencyMs: null, cached: null, reason: 'wait' };
   const snap = { proposed, contextLines: _ctxFor(sig, mkt), features: {} };
   const v = await provider(snap, CONFIRM_PROMPT);
-  if (v?.action === proposed) return 'AGREE';
-  if (String(v?.note || '') === 'disagreed_side') return 'DISAGREE';
-  return 'NEUTRAL'; // wait / threshold / error / breaker — honest abstain
+  return _toDecision(v, proposed);
 }
 
 /** Confirm one signal with all configured providers (memo + inflight).
@@ -187,14 +272,17 @@ function _wireConfirm(sig, mkt, key) {
     await Promise.allSettled(names.map(async (n) => {
       try {
         // per-provider deadline (decide has its own timeout; belt+braces)
-        parts[n] = await Promise.race([
+        // v21.11: race-ab resolution bhi decision object hai (reason
+        // 'slow') — UI "Laya ○ slow" dikhata hai, direction unknown honest
+        const raced = await Promise.race([
           _confirmOneProvider(p[n], sig, mkt),
-          new Promise((res) => { const t = setTimeout(() => res('NEUTRAL'), 5000); if (t.unref) t.unref(); }),
+          new Promise((res) => { const t = setTimeout(() => res({ v: 'NEUTRAL', note: 'deadline' }), 5000); if (t.unref) t.unref(); }),
         ]);
-      } catch { parts[n] = 'NEUTRAL'; }
+        parts[n] = _toDecision(raced, sig?.side === 'SHORT' ? 'enter_short' : 'enter_long');
+      } catch { parts[n] = { v: 'NEUTRAL', picked: null, pLong: null, pShort: null, pWait: null, confidence: null, note: 'error', latencyMs: null, cached: null, reason: 'err' }; }
     }));
-    const agrees = names.filter((n) => parts[n] === 'AGREE');
-    const disagrees = names.filter((n) => parts[n] === 'DISAGREE');
+    const agrees = names.filter((n) => parts[n]?.v === 'AGREE');
+    const disagrees = names.filter((n) => parts[n]?.v === 'DISAGREE');
     let verdict = 'NEUTRAL';
     if (disagrees.length > 0) verdict = 'CONFLICT';
     else if (agrees.length === names.length && names.length > 0) verdict = 'CONFIRMED';
@@ -269,7 +357,17 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
   const jobs = eligible.map(async (s) => {
     try {
       const c = await _confirmSignal(s, mkt);
-      s.aiConfirm = { jev: c.jev, laya: c.laya, verdict: c.verdict, at: c.at, stale: !!c.stale };
+      // v21.11: legacy strings (jev/laya) UNCHANGED + full decision
+      // objects detail me — UI ab Laya ka picked side + conviction
+      // dikha sakta hai (kabhi ka direction-less '○' fix)
+      s.aiConfirm = {
+        jev: c.jev?.v ?? null,
+        laya: c.laya?.v ?? null,
+        verdict: c.verdict,
+        at: c.at,
+        stale: !!c.stale,
+        detail: { jev: c.jev, laya: c.laya },
+      };
     } catch { /* never breaks the board */ }
   });
   await Promise.race([
@@ -307,6 +405,19 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
         s.grade = 'ACTION';
         s.executable = false; // v21.4.1: demote ke baad kabhi executable nahi
         s.summary = `${s.summary || ''} · AI-CONFLICT (Jev/Laya ulta)`;
+        // v21.11: summary me kaunsa provider kaunsi side pe ulta tha —
+        // user ko board text me hi direction dikhe
+        try {
+          const flipBits = ['jev', 'laya']
+          .filter((n) => s.aiConfirm?.detail?.[n]?.v === 'DISAGREE')
+          .map((n) => {
+            const d = s.aiConfirm.detail[n];
+            const p = d.picked === 'enter_short' ? d.pShort : d.picked === 'enter_long' ? d.pLong : null;
+            return `${n === 'laya' ? 'Laya' : 'Jev'} ${d.picked === 'enter_short' ? 'SHORT' : 'LONG'}${p != null ? ` ${Math.round(p * 100)}%` : ''}`;
+          })
+          .join(' + ');
+        if (flipBits) s.summary = `${s.summary || ''} [${flipBits}]`;
+      } catch { /* cosmetic — never fatal */ }
       }
       // v20.9.3 parity: winProb should read the SAME capped score the card shows
       try {
@@ -331,6 +442,10 @@ export function __resetBoardAiConfirmForTests() {
   _providers = null;
   _providersAt = 0;
   MEMO_TTL_MS = 5 * 60_000;
+}
+/** v21.11: decision-normalizer direct test access (badge mapping lock). */
+export function __toDecisionForTests(x, proposed) {
+  return _toDecision(x, proposed);
 }
 /** v21.5.0: SWRV tests — TTL shrink + memo peek + reset. */
 export function __setMemoTtlForTests(ms) {

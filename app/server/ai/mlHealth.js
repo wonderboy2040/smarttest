@@ -16,7 +16,8 @@ let _cached = null;      // { reachable, latencyMs, detail, checkedAt }
 let _inFlight = null;    // coalesce concurrent probes
 
 const _base = () =>
-  String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+  // v21.11.0 PORT-COLLISION FIX: 8000 → 8100 (8000 = LAYA ka home port).
+  String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8100').replace(/\/+$/, '');
 
 async function _probe() {
   const t0 = Date.now();

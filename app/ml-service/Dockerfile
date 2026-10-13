@@ -20,9 +20,11 @@ RUN mkdir -p /app/store/models && \
 # user and add a HEALTHCHECK for the FastAPI service.
 USER nobody
 
-EXPOSE 8000
+EXPOSE 8100
 
+# v21.11.0 PORT-COLLISION FIX: 8000 → 8100 (8000 = LAYA's home port —
+# the Node meta-ensemble client was probing Laya instead of this service).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+  CMD curl -fsS http://127.0.0.1:8100/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100"]

@@ -221,12 +221,14 @@ describe('v7.0.2 manual close — live price required', () => {
 // 4 — ledger prune keeps the chain verifiable
 // ============================================================
 describe('v7.0.2 ledger prune re-stamp', () => {
-  it('verifyLedger stays ok after pruning past 400 entries', () => {
+  it('verifyLedger stays ok after pruning past the cap (v21.11: 400 → 1200 window)', () => {
     __setLedgerForTests({ entries: [] });
     const sig = { symbol: 'BTC', side: 'LONG', market: 'CRYPTO', votes: [] };
-    for (let i = 0; i < 402; i++) recordExecution(sig, { mode: 'paper', source: 'agent' });
+    // v21.11: ledger learning window 400 → 1200 (adaptive/trust/gateTuner
+    // 3× data) — prune test naye cap pe: 1202 record karo, 1200 rahna chahiye
+    for (let i = 0; i < 1202; i++) recordExecution(sig, { mode: 'paper', source: 'agent' });
     const v = verifyLedger();
-    expect(v.entries).toBe(400); // pruned to the cap
+    expect(v.entries).toBe(1200); // pruned to the cap
     expect(v.ok).toBe(true);    // head re-stamped — chain still verifies
     expect(v.brokenAt).toBeNull();
     __setLedgerForTests({ entries: [] });

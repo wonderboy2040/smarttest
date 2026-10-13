@@ -1,11 +1,13 @@
 # ============================================================
-# SmartAI Pro — CI (v21.1.0, Phase-1.5)
+# SmartAI Pro — CI (v21.1.0, Phase-1.5 · v21.11 comment-fix)
 # ------------------------------------------------------------
 # Har push / PR pe wahi full gate chalta hai jo local me chalta
 # hai (`npm run check` = typecheck → lint → version-contract →
-# tests → build → route-contract). dist/ ab git me tracked nahi
-# hai (Phase-1.2), isliye build ka verification yahin hota hai —
-# stale-bundle kabhi deploy nahi hoga.
+# tests → build → route-contract). dist/ git me DELIBERATELY
+# tracked hai (watchdog bina rebuild ke serve kare — ensureFrontend
+# sirf .build-version stamp mismatch pe npm-install+rebuild karta
+# hai); CI ka build step independent verification deta hai ki
+# pushed dist fresh source se hi bana hai.
 # ============================================================
 name: CI
 

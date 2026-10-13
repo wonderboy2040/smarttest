@@ -87,7 +87,17 @@ import {
 } from './meshModels.js';
 
 export function v2ModelsEnabled() {
-  return ['true', '1', 'on', 'yes'].includes(String(process.env.AI_ENABLE_V2_MODELS || '').trim().toLowerCase());
+  // v21.11.0 (Superintelligence accuracy upgrade): DEFAULT ON — pehle
+  // ye flag default-OFF tha (Phase-4 A/B gate), isliye purane .env wale
+  // boxes hamesha plain 13-seat board pe atke rahe jabki .env.example
+  // shuru se `true` ship karta tha. Ab shipped intent hi code default
+  // hai: 3 naye diversification seats (SentimentPulse / InstFlow /
+  // FundaCheck) live — deliberately LOW weights, adaptive.js settled
+  // outcomes se multiplier kamata hai. Explicit `false` ab bhi jeetega
+  // (env override always wins).
+  const raw = String(process.env.AI_ENABLE_V2_MODELS ?? '').trim().toLowerCase();
+  if (raw) return ['true', '1', 'on', 'yes'].includes(raw);
+  return true;
 }
 
 export const V2_MODEL_IDS = ['sentiment', 'instflow', 'fundamentals'];
@@ -758,7 +768,16 @@ function intradayTape(ctx) {
 // (never STRONG). Gated by AI_ENABLE_MTF_CONFLUENCE — flag OFF
 // keeps the exact 11-model v9.3 board (plain IntradayTape 1.3).
 export function mtfConfluenceEnabled() {
-  return ['true', '1', 'on', 'yes'].includes(String(process.env.AI_ENABLE_MTF_CONFLUENCE || '').trim().toLowerCase());
+  // v21.11.0 (Superintelligence accuracy upgrade): DEFAULT ON — the
+  // tape seat upgrade (w 1.3 → 1.6 MTF confluence) is the repo's own
+  // documented accuracy lever (models.js intradayTape comment: tape
+  // seat parked hone par crypto/futures committee 29% win-rate disease).
+  // Crypto/futures desks gracefully degrade to the plain 15m read (same
+  // seat, honest label) — India gets the full 5m/15m/1h confluence.
+  // Explicit `false` env override always wins.
+  const raw = String(process.env.AI_ENABLE_MTF_CONFLUENCE ?? '').trim().toLowerCase();
+  if (raw) return ['true', '1', 'on', 'yes'].includes(raw);
+  return true;
 }
 
 function intradayTapeMTF(ctx) {

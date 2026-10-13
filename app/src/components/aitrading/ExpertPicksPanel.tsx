@@ -12,6 +12,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch, getProxyBase } from '../../utils/api';
 import { LiveSourceBadge } from './LiveSourceBadge';
+import { aiDirSummary } from './aiConfirmText';
 // v12.0: the calibrated win-probability + perp positioning blocks
 import type { WinProbView, PerpIntelWire } from './types';
 
@@ -53,7 +54,7 @@ export interface ExpertPick {
   /** v21.3.0 (Issue-7): Jev/Laya AI confirmation verdict (both AGREE →
    *  CONFIRMED; koi ulta → CONFLICT). Present only when a provider
    *  is configured server-side. */
-  aiConfirm?: { jev: string | null; laya: string | null; verdict: string; at?: number } | null;
+  aiConfirm?: { jev: string | null; laya: string | null; verdict: string; at?: number; detail?: { jev?: { v: string; picked?: string | null; pLong?: number | null; pShort?: number | null; pWait?: number | null; confidence?: number | null; latencyMs?: number | null; reason?: string } | null; laya?: { v: string; picked?: string | null; pLong?: number | null; pShort?: number | null; pWait?: number | null; confidence?: number | null; latencyMs?: number | null; reason?: string } | null } | null } | null;
   /** v21.3.0: chop-filter stamp (ADX<15 — score capped below the 80 bar). */
   qualityFlags?: { chopRange?: boolean; [k: string]: unknown } | null;
 }
@@ -141,11 +142,11 @@ const ExpertPickCard = memo(function ExpertPickCard({ pick, market, onDeep, live
                   expert picks ab superintelligence layer se AI-verified. */}
               {pick.aiConfirm?.verdict === 'CONFIRMED' && (
                 <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-cyan-500/15 text-cyan-300 border border-cyan-500/40"
-                  title="Jev (cloud) + Laya (local) dono ne ye side APPROVE kiya">🤖 AI ✓</span>
+                  title={`Jev (cloud) + Laya (local) dono ne ye side APPROVE kiya${aiDirSummary(pick.aiConfirm)}`}>🤖 AI ✓</span>
               )}
               {pick.aiConfirm?.verdict === 'CONFLICT' && (
                 <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-red-500/15 text-red-300 border border-red-500/40"
-                  title="Jev/Laya me se koi provider ULTA side chuna — score −8, STRONG→ACTION demote">🤖 AI ✗</span>
+                  title={`Jev/Laya me se koi provider ULTA side chuna — score −8, STRONG→ACTION demote${aiDirSummary(pick.aiConfirm)}`}>🤖 AI ✗</span>
               )}
               {pick.qualityFlags?.chopRange && (
                 <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/30"

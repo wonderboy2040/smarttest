@@ -26,15 +26,25 @@
 //   verifyLedger()                 → walk the chain, recompute hashes
 //
 // Storage: ai-signal-ledger.json (store + durablePut, like the
-// journal). Pruned to the last 400 entries (hash chain survives
+// journal). Pruned to the last 1200 entries (hash chain survives
 // pruning: the head's prevHash simply references the new oldest).
+// v21.11.0 (Superintelligence accuracy upgrade): 400 → 1200. Adaptive
+// weights (MIN_SAMPLE 8), trust.js calibration aur gateTuner sab isi
+// ledger se seekhte hain — 400 entries ka rolling window ek active
+// futures desk pe ~2 hafte me purge ho jata tha, isliye learned
+// multipliers baar-baar reset hote the. 1200 = tracked-signals.json
+// ke 1200-row window ke saath aligned, file ab bhi <1MB.
 // ============================================================
 import crypto from 'node:crypto';
 import { loadJSON, saveJSON } from '../lib/store.js';
 import { durablePut } from '../mcp/durable.js';
 
 const LEDGER_FILE = 'ai-signal-ledger.json';
-const MAX_ENTRIES = 400;
+// v21.11.0: 400 → 1200 — 3× learning window (see header). Env-tunable.
+const MAX_ENTRIES = (() => {
+  const n = Number.parseInt(String(process.env.AI_LEDGER_MAX_ENTRIES ?? ''), 10);
+  return Number.isFinite(n) && n >= 100 ? Math.min(5000, n) : 1200;
+})();
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 const sha256 = (s) => crypto.createHash('sha256').update(String(s), 'utf8').digest('hex');

@@ -413,7 +413,14 @@ export function metaEnsembleEnabled() {
   return ['true', '1', 'on', 'yes'].includes(String(process.env.AI_ENABLE_META_ENSEMBLE || '').trim().toLowerCase());
 }
 
-const META_SERVICE_URL = () => String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+// v21.11.0 PORT-COLLISION FIX: default 8000 → 8100. Port 8000 LAYA ka
+// home hai (laya-serve sidecar + start-laya.cmd doni isi pe bind hote
+// hain). Purana default ML-service ko bhi 8000 pe point karta tha —
+// META flag ON karne par app har 5 min LAYA ko garbage /meta-ensemble
+// POST karti (Laya 404 → breaker → repeat). ml-service ab 8100 pe
+// hai (main.py + Dockerfile synced). ML_SERVICE_URL env se override
+// possible hi tha, par default hi galat port pe point karta tha.
+const META_SERVICE_URL = () => String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8100').replace(/\/+$/, '');
 const META_BREAKER_MS = 5 * 60_000;
 const META_TIMEOUT_MS = 400;
 let _metaBreakerAt = 0;

@@ -1,5 +1,41 @@
 # Changelog
 
+## v21.11.0 — LAYA DECISION TRANSPARENCY + SUPERINTELLIGENCE ACCURACY SUITE + REPO CLEANUP (2026-10-14)
+
+**User report: "CoinDCX tab ke 70-80+ signals pe 🤖 AI ○ (Laya ○) dikhta hai — samaj nahi aa raha Laya LONG/SHORT me kya bol raha hai" + "13 models ki Signal Accuracy bahut low hai — deep analysis karke Superintelligence se upgrade karo" + "full site recheck + unwanted temp/broken/junk files permanently cleanup karo"**
+
+### FIX 1 — LAYA KA DECISION AB DIKHTA HAI (direction transparency)
+- **ROOT CAUSE**: `boardAiConfirm.js` provider ke FULL verdict (action/probs/confidence/note) ko sirf `'AGREE'|'DISAGREE'|'NEUTRAL'` 3-string me collapse karta tha — **direction kabhi wire tak pahunchti hi nahi thi**. UI me hollow `○` ka matlab (wait? threshold-neeche? timeout? down?) koi nahi jaan sakta tha.
+- **jevEngine.js**: `below_threshold` / `disagreed_side` returns me naya `picked` field (provider ka RAW choice) — additive, trading contract (no-flip) untouched.
+- **boardAiConfirm.js v21.11 decision objects**: `_confirmOneProvider` ab `{v, picked, pLong, pShort, pWait, confidence, note, latencyMs, cached, reason}` return karta hai; `aiConfirm.detail.{jev,laya}` wire pe full decision travel karta hai. Legacy string fields (`aiConfirm.jev/laya`) UNCHANGED — saare existing consumers byte-identical.
+- **SignalCard AiConfirmBadge**: bits ab direction + conviction dikhaate hain — `Laya ✓ LONG` / `Laya ✗ SHORT 68%` (ULTA side + conviction) / `Laya ○ SHORT-lean 29%` (below-threshold lean) / `Laya ○ slow|wait|breaker|down|timeout` (honest reason). Tooltip me per-provider full story (probs split + conf + latency + note).
+- **CONFLICT me kaun ulta**: board summary `[Laya SHORT 68%]` suffix + futures precheck warning "— Laya SHORT 68% ke side me (ULTA)" + LiveExecuteModal pre-flight screen par per-provider decision lines (final trade se pehle Laya ka directional read).
+- TopPicks/ExpertPicks tooltips me bhi direction summary; naya shared helper `src/components/aitrading/aiConfirmText.ts`.
+
+### FIX 2 — ACCURACY SUITE DEFAULT ON (13 → 16 voting + 4 mesh shadow)
+- **ROOT CAUSE**: codebase ke apne designed accuracy-upgrade seats env-gated default-OFF the — user ka box purane .env pe 13-seat plain board chal raha tha jabki .env.example shuru se `true` ship karta tha (V2/MESH/MTF).
+- **AI_ENABLE_V2_MODELS + AI_ENABLE_MTF_CONFLUENCE + AI_ENABLE_MESH_MODELS ab CODE DEFAULT ON** (explicit `false` env override hamesha jeet-ta hai):
+  - tape seat w1.3 → **tape-MTF confluence w1.6** (crypto/futures graceful 15m-degrade ke saath — the documented 29%-win-rate counterweight)
+  - +3 diversification seats: SentimentPulse (w0.7) / InstFlow (w0.8) / FundaCheck (w0.5) — low weights, adaptive.js settled outcomes se multiplier kamata hai
+  - +4 mesh shadow seats (weight 0 — consensus par ZERO effect, ledger evidence se accountability promote karega)
+- **TEST-STABILITY PIN**: `src/test/setup.ts` me legacy suites ke liye flags explicit `false` — saare 202 existing files byte-identical; naya default `test/v2111SuperIntelUpgrade.test.ts` me env-sanitized subprocess se locked.
+- **Ledger learning window 400 → 1200** (`AI_LEDGER_MAX_ENTRIES` env-tunable) — adaptive weights/trust calibration/gateTuner ab 3× data window pe seekhte hain (tracked-signals.json ke 1200-row window ke saath aligned).
+- Model-count labels dynamic: CoinDcxTab "13-model committee" → `${models.length}-model`, AgentPanel V2 chip 16/13, ModelRegistry me saare known seats ke icons + shadow-seat honest disclosure.
+
+### FIX 3 — ML-SERVICE PORT COLLISION (8000 → 8100)
+- **BUG**: `ML_SERVICE_URL` default `127.0.0.1:8000` tha — **wahi port jahan LAYA baithta hai**. `AI_ENABLE_META_ENSEMBLE=true` (purane .env.example me shipped) + ml-service down = har 5 min Laya ko garbage `/meta-ensemble` POST (Laya 404 → breaker → repeat).
+- ml-service ab **8100** pe: `ensemble.js` + `mlHealth.js` + `index.js` Node clients, `ml-service/app/main.py` (ML_PORT env), Dockerfile (EXPOSE + healthcheck + CMD) — sab synced. `.env.example` me META ab default `false` + port note (ml-service deploy karne par hi ON karo).
+
+### FIX 4 — REPO CLEANUP (permanent)
+- **git rm**: 7 dead root `scripts/v20xx-*.mjs` smoke/probe scripts (5 generations, koi reference nahi), `telegram-bot/cloud.mjs` (zero-importer dead module — CHANGES.md ne retired bola tha, file bhoola tha reh gaya).
+- **Stale dist bundles**: v21.9.0 ki orphaned 5-file generation (~679KB = 38% of dist) jo upstream commit ne add ki thi — rebuild ke saath git se bhi clean.
+- **Dead doc references fixed**: `botlab-backtest.mjs` / `botlab-smoke` / `cx-ws-probe.mjs` retire-notes (README, RUN-FIRST, PHASE-2 checklist) + dist-tracking stale claims (ci.yml comment + RUN-FIRST "dist tracked NAHI" — actually tracked hai, deliberately).
+- **Test-leak permanent fix**: 34 suites app/ root me `.test-data-*` dirs chhod jaati thi (15 dirs / 260KB junk user ke box pe) — naya `src/test/globalTeardown.ts` har run ke baad leak-cleanup karta hai; 2h+ purane `smartai-test-data-*` tmp dirs bhi.
+- Local: 15 leaked `.test-data-*` dirs removed.
+
+### REGRESSION LOCKS (test/v2111SuperIntelUpgrade.test.tsx — 11 naye)
+- `_toDecision` mapping ×7 (AGREE direction, DISAGREE ulta+p%, NEUTRAL lean, timeout/deadline reasons, legacy string shapes), wire-shape (legacy strings + detail objects), CONFLICT flipBits summary, NEUTRAL score-untouched contract, subprocess default-ON registry (20 seats, tape-mtf w1.6), explicit-false legacy (13, tape w1.3), mesh shadow weight-0, ML port source-contracts ×5 files, ledger window, aiConfirmText helpers, SignalCard badge render "Laya ✗ SHORT 68%" + tooltip probs.
+
 ## v21.10.0 — LAYA BIND-WAR FIX (watchdog crash-loop) (2026-10-14)
 
 **User report: "Start-SmartAI-Watchdog.bat run karne par logs me Laya ka crash-loop dikh raha hai"** — log me `[Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000)` → `exit(3)` → `restart #1 5s → #2 10s → #3 20s → #4 40s` infinite, saath me misleading `[laya] READY (8.1s)` lines aur `[selfheal] EVENT-LOOP FREEZE detected — worst lag 5.9s`.

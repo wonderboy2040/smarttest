@@ -28,18 +28,78 @@ import { liveInvalidationCheck } from './liveInvalidation';
 import type { AISignal, Side, SuperIntel, SignalVerification, UltrafastVerification } from './types';
 
 /** v21.3.0 (Issue-5): Jev/Laya dual-AI confirmation chip — the board
- *  signal's verdict from BOTH AI providers (cloud + local). */
+ *  signal's verdict from BOTH AI providers (cloud + local).
+ *  v21.11.0 (Laya decision transparency): har provider ka bit ab apna
+ *  DIRECTION dikhaata hai — "Laya ✓ LONG" / "Laya ✗ SHORT 68%" /
+ *  "Laya ○ SHORT-lean 29%" / "Laya ○ slow" — pehle hollow ○ hi dikhta
+ *  tha aur direction ka pata hi nahi chalta tha (user ka exact
+ *  complaint). Legacy payloads (bina detail ke) purane ✓/✗/○ me
+ *  render hote hain. */
 function AiConfirmBadge({ v }: { v: NonNullable<AISignal['aiConfirm']> }) {
   const confirmed = v.verdict === 'CONFIRMED';
   const conflict = v.verdict === 'CONFLICT';
+  const sideOf = (p?: string | null) => (p === 'enter_short' ? 'SHORT' : p === 'enter_long' ? 'LONG' : null);
+  const pct = (x?: number | null) => (x != null && Number.isFinite(x) ? `${Math.round(x * 100)}%` : null);
+  // one provider's bit: symbol + direction + conviction (jab available)
+  const bit = (key: 'jev' | 'laya', label: string): string | null => {
+    const vs = v[key];
+    if (!vs) return null;
+    const d = v.detail?.[key];
+    if (!d) {
+      // legacy wire (koi detail nahi) — direction unknown, symbol only
+      return `${label} ${vs === 'AGREE' ? '✓' : vs === 'DISAGREE' ? '✗' : '○'}`;
+    }
+    const side = sideOf(d.picked);
+    const pOfPicked = d.picked === 'enter_short' ? d.pShort : d.picked === 'enter_long' ? d.pLong : null;
+    if (d.v === 'AGREE') {
+      return `${label} ✓${side ? ` ${side}` : ''}${pct(pOfPicked) ? ` ${pct(pOfPicked)}` : ''}`;
+    }
+    if (d.v === 'DISAGREE') {
+      // provider ULTA side pe hai — uski picked side + conviction
+      return `${label} ✗${side ? ` ${side}` : ''}${pct(pOfPicked) ? ` ${pct(pOfPicked)}` : ''}`;
+    }
+    // NEUTRAL — lean (below-threshold pick) ya honest reason
+    if (side) {
+      return `${label} ○ ${side}-lean${pct(pOfPicked) ? ` ${pct(pOfPicked)}` : ''}`;
+    }
+    return `${label} ○ ${d.reason || 'wait'}`;
+  };
   const bits = [
-    v.jev ? `Jev ${v.jev === 'AGREE' ? '✓' : v.jev === 'DISAGREE' ? '✗' : '○'}` : null,
-    v.laya ? `Laya ${v.laya === 'AGREE' ? '✓' : v.laya === 'DISAGREE' ? '✗' : '○'}` : null,
+    bit('jev', 'Jev'),
+    bit('laya', 'Laya'),
   ].filter(Boolean).join(' · ');
+  // tooltip: per-provider ka full story — kya chuna, kitna conviction,
+  // kyu (note/reason) + board effect
+  const tipBits = (['jev', 'laya'] as const).map((key) => {
+    const label = key === 'laya' ? 'Laya (local)' : 'Jev (cloud)';
+    const vs = v[key];
+    if (!vs) return null;
+    const d = v.detail?.[key];
+    if (!d) {
+      return `${label}: ${vs === 'AGREE' ? ' isi side pe AGREE' : vs === 'DISAGREE' ? ' ULTA side (DISAGREE)' : ' abstain/wait'}`;
+    }
+    const side = sideOf(d.picked);
+    const p = d.picked === 'enter_short' ? d.pShort : d.picked === 'enter_long' ? d.pLong : null;
+    const probs = [d.pLong != null ? `LONG ${pct(d.pLong)}` : null, d.pShort != null ? `SHORT ${pct(d.pShort)}` : null, d.pWait != null ? `wait ${pct(d.pWait)}` : null].filter(Boolean).join(' / ');
+    const head = d.v === 'AGREE'
+      ? `${label}: ${side ?? 'same side'} APPROVE kiya${pct(p) ? ` (p ${pct(p)})` : ''}`
+      : d.v === 'DISAGREE'
+        ? `${label}: ULTA — ${side ?? 'opposite side'} chuna${pct(p) ? ` (p ${pct(p)})` : ''}`
+        : side
+          ? `${label}: ${side} ki taraf LEAN${pct(p) ? ` (p ${pct(p)})` : ''} par threshold ke neeche — entry nahi kaha`
+          : `${label}: entry nahi li (reason: ${d.reason || 'wait'})`;
+    const tail = [
+      probs ? `probs ${probs}` : null,
+      d.confidence != null ? `conf ${d.confidence}` : null,
+      d.latencyMs != null ? `${d.latencyMs}ms` : null,
+      d.note ? `note ${d.note}` : null,
+    ].filter(Boolean).join(' · ');
+    return tail ? `${head} — ${tail}` : head;
+  }).filter(Boolean).join('\n');
   return (
     <span
       className={`px-1.5 py-0.5 rounded text-[9px] font-black border font-mono ${confirmed ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40' : conflict ? 'bg-red-500/15 text-red-300 border-red-500/40' : 'bg-slate-700/40 text-slate-300 border-slate-600/40'}`}
-      title={`Jev (cloud) + Laya (local) dual-AI confirmation: ${bits || 'no verdict'} — ${confirmed ? 'dono ne ye side APPROVE kiya (+3 score)' : conflict ? 'koi provider ULTA side chuna (−8 score, STRONG→ACTION demote)' : 'abstain/wait — score untouched'}. AI kabhi side/size/SL nahi badalta — sirf confirm ya demote karta hai.`}
+      title={`Jev (cloud) + Laya (local) dual-AI decision — ${bits || 'no verdict'}\n\n${tipBits}\n\nBoard effect: ${confirmed ? 'dono ne ye side APPROVE kiya (+3 score)' : conflict ? 'koi provider ULTA side chuna (−8 score, STRONG→ACTION demote)' : 'abstain/wait — score untouched'}. AI kabhi side/size/SL nahi badalta — sirf confirm ya demote karta hai.`}
     >
       {confirmed ? `🤖 AI ✓ (${bits})` : conflict ? `🤖 AI ✗ (${bits})` : `🤖 AI ○ (${bits})`}
     </span>

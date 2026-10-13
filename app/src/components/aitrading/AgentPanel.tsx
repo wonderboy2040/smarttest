@@ -774,8 +774,8 @@ export const AgentPanel = memo(function AgentPanel({ notify }: { notify: (ok: bo
             )}
             {acc.v2ModelsEnabled != null && (
               <span className={`px-2 py-0.5 rounded-md text-[9px] font-mono border ${acc.v2ModelsEnabled ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-black/30 border-slate-600/40 text-slate-500'}`}
-                title={acc.v2ModelsEnabled ? 'V2 models (Sentiment, InstFlow, Fundamentals) enabled (14 voters)' : 'V2 models disabled — set AI_ENABLE_V2_MODELS=true in Render'}>
-                V2 models {acc.v2ModelsEnabled ? 'ON (14 models)' : 'OFF (11 models)'}
+                title={acc.v2ModelsEnabled ? 'V2 models (Sentiment, InstFlow, Fundamentals) enabled — 16 voting seats + mesh shadow' : 'V2 models disabled — set AI_ENABLE_V2_MODELS=true (v21.11 se default ON hai)'}>
+                V2 models {acc.v2ModelsEnabled ? 'ON (16-model committee)' : 'OFF (13-model committee)'}
               </span>
             )}
           </div>

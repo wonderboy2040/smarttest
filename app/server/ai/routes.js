@@ -2603,5 +2603,5 @@ export function registerAITradingRoutes(app, deps) {
     if (warmer.unref) warmer.unref();
   }
 
-  console.log('[ai] Superintelligence Ensemble v6.13 — ORDER TICKET + SIMPLE VIEW (options trade guide: session/expiry/limit/exit · 4-step signal order guide · simple/pro desk view · v6.12 pro-trader brain: quorum caps · MTF · session phases · extension veto · swing-structure SL · trust/perf/correlation/sector desks) · 11 models + AI Council (v9.3: IntradayTape 15m seat) + V2 upgrade: SentimentPulse/InstFlow/FundaCheck behind AI_ENABLE_V2_MODELS (14 models when on) · topFive ranking · Dhan + CoinDCX + GLOBAL FUTURES gauntlets · SUPERINTELLIGENCE AUTO-AGENT');
+  console.log('[ai] Superintelligence Ensemble v6.13 — ORDER TICKET + SIMPLE VIEW (options trade guide: session/expiry/limit/exit · 4-step signal order guide · simple/pro desk view · v6.12 pro-trader brain: quorum caps · MTF · session phases · extension veto · swing-structure SL · trust/perf/correlation/sector desks) · v21.11 ACCURACY SUITE DEFAULT ON: 13 core seats + tape-MTF confluence (w1.6) + V2 seats SentimentPulse/InstFlow/FundaCheck + 4 mesh shadow seats (weight 0, ledger-seeded promotion) — explicit false env se legacy 13-seat board wapas milta hai · topFive ranking · Dhan + CoinDCX + GLOBAL FUTURES gauntlets · SUPERINTELLIGENCE AUTO-AGENT');
 }

@@ -79,9 +79,16 @@ export const MESH_MODEL_SEATS = [
   { id: 'cryptoonchain', name: 'CryptoOnChainPro', weight: 0.6, caps: ['crypto.onchain', 'crypto.tick'], markets: ['CRYPTO', 'FUTURES'] },
 ];
 
-/** Rollout flag — same A/B discipline as AI_ENABLE_V2_MODELS (default OFF). */
+/** Rollout flag — same A/B discipline as AI_ENABLE_V2_MODELS.
+ *  v21.11.0 (Superintelligence accuracy upgrade): DEFAULT ON. Seats SHADOW
+ *  mode me hote hain (applyMeshModelGating → weight 0) — consensus math
+ *  par zero effect, sirf ledger evidence collect hota hai jab tak
+ *  meshModelAccountability settled outcomes se seat promote kare. Ye the
+ *  designed zero-risk upgrade path hai. Explicit `false` wins. */
 export function meshModelsEnabled() {
-  return ['true', '1', 'on', 'yes'].includes(String(process.env.AI_ENABLE_MESH_MODELS || '').trim().toLowerCase());
+  const raw = String(process.env.AI_ENABLE_MESH_MODELS ?? '').trim().toLowerCase();
+  if (raw) return ['true', '1', 'on', 'yes'].includes(raw);
+  return true;
 }
 
 // ---------------- Phase 3: tiered, budget-aware warm ----------------

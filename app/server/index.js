@@ -2308,7 +2308,9 @@ app.post('/api/ml/backtest', (req, res) => {
 // service isn't deployed — the caller falls back to the in-process
 // weighted ensemble (never a fake "meta" answer).
 // ------------------------------------------------------------
-const ML_SERVICE_BASE = () => String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+// v21.11.0 PORT-COLLISION FIX: 8000 → 8100 (port 8000 LAYA ka home hai —
+// meta-learner default Laya ko probe kar raha tha). ensemble.js ke saath synced.
+const ML_SERVICE_BASE = () => String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8100').replace(/\/+$/, '');
 app.post('/api/ml/meta-ensemble', async (req, res) => {
   if (mlGuard(req, res)) return;
   const { votes, regime } = req.body || {};

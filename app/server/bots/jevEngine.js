@@ -425,11 +425,19 @@ export function createJev(opts = {}) {
     if (a.choice !== 'wait') {
       // gate on probabilities[chosen], NOT confidence (plan §1)
       if (p < cfg.threshold) {
-        return { action: 'wait', note: `below_threshold(${p.toFixed(2)})`, probs: a.probabilities, confidence: a.confidence, cached, latencyMs: Date.now() - t0 };
+        // v21.11 (Laya decision transparency): `picked` = the model's RAW
+        // choice — board confirm layer isse UI tak pahunchata hai ("Laya
+        // ○ SHORT-lean 29%" — kabhi ka '○' sirf abstain nahi tha, side
+        // pata hi nahi chalti thi). action 'wait' hi rehta hai — trading
+        // contract (no-flip) untouched.
+        return { action: 'wait', picked: a.choice, note: `below_threshold(${p.toFixed(2)})`, probs: a.probabilities, confidence: a.confidence, cached, latencyMs: Date.now() - t0 };
       }
       // side flip is BANNED: Jev disagreeing with the proposed side = WAIT
       if (a.choice !== snap.proposed) {
-        return { action: 'wait', note: 'disagreed_side', probs: a.probabilities, confidence: a.confidence, cached, latencyMs: Date.now() - t0 };
+        // v21.11: `picked` = the ULTA side the model actually chose —
+        // confirm layer isse DISAGREE + direction ke saath surface karta
+        // hai. Trading decision phir bhi WAIT hi hai (no-flip contract).
+        return { action: 'wait', picked: a.choice, note: 'disagreed_side', probs: a.probabilities, confidence: a.confidence, cached, latencyMs: Date.now() - t0 };
       }
     }
     return {
