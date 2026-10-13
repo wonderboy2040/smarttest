@@ -79,6 +79,16 @@ function _getProviders() {
   return _providers;
 }
 
+/** v21.9.0 (laya auto-link): 10-min memo TURANT flush — jab layaAutoLink
+ *  ek naya validated Laya provider link kare (ya user RECONNECT dabaye),
+ *  Signal Board ka AI-confirm layer agsi board cycle se naye provider
+ *  ke saath chalta hai (10 min wait nahi). Safe: sirf memo reset, koi
+ *  in-flight decision disturb nahi hota. */
+export function boardAiConfirmRefresh() {
+  _providers = null;
+  _providersAt = 0;
+}
+
 /** Is the layer enabled + at least one provider configured? */
 export function boardAiConfirmActive() {
   if (MODE === 'off') return false;

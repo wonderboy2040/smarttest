@@ -209,10 +209,13 @@ const DecisionRow = memo(function DecisionRow({ e }: { e: BotEvent }) {
 });
 
 export default function BotsTab() {
-  const { status, events, connected, error, stopBot, setArm, runSmoke } = useBots();
+  const { status, events, connected, error, stopBot, setArm, runSmoke, relinkLaya } = useBots();
   const [smoke, setSmoke] = useState<unknown>(null);
   const [smokeBusy, setSmokeBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // v21.9.0 (laya auto-link): manual RECONNECT button state.
+  const [relinkBusy, setRelinkBusy] = useState(false);
+  const [relinkNote, setRelinkNote] = useState<string | null>(null);
 
   // v20.8.2 FIX (L): actionError used to stick forever (until the next
   // action) — auto-clear after 6s so a transient failure doesn't read
@@ -252,6 +255,20 @@ export default function BotsTab() {
     try { setSmoke(await runSmoke()); } finally { setSmokeBusy(false); }
   }, [runSmoke]);
 
+  // v21.9.0 (laya auto-link): RECONNECT — server health-probe + key-ladder
+  // + hot-swap cycle chalata hai. Success par SSE status frame ~5s me naya
+  // laya provider dikhata hai; failure par honest note.
+  const doRelink = useCallback(async () => {
+    setRelinkBusy(true);
+    setRelinkNote(null);
+    try {
+      const r = await relinkLaya();
+      const ph = (r as { autolink?: { phase?: string; lastError?: string; baseUrl?: string } } | null)?.autolink;
+      if (r?.ok) setRelinkNote(`✓ Laya linked (${ph?.baseUrl || '127.0.0.1:8000'}) — AI arms ab available`);
+      else setRelinkNote(`✗ ${ph?.lastError || r?.error || 'link fail — laya-serve chalu hai?'}`);
+    } finally { setRelinkBusy(false); }
+  }, [relinkLaya]);
+
   const decisionEvents = useMemo(() => [...events].reverse().slice(0, 60), [events]);
   // v21.2.0 (dual-provider): per-provider panels ka data — status.ai se,
   // jev panel purane status.jev pe fallback (compat).
@@ -261,6 +278,14 @@ export default function BotsTab() {
     jev: !!jevStats,
     laya: !!layaStats,
   };
+  // v21.9.0: auto-link phase chip — "Laya not configured" ke SAATH reason.
+  const autoLink = status?.layaAutoLink || null;
+  const AUTO_LABEL: Record<string, string> = {
+    linked: 'AUTO-LINKED', 'env-linked': '.ENV LINKED', down: 'LAYA-SERVE DOWN',
+    key_mismatch: 'KEY MISMATCH', off: 'AUTO-LINK OFF', probing: 'PROBING…',
+  };
+  const autoTone = autoLink?.phase === 'linked' || autoLink?.phase === 'env-linked' ? 'text-emerald-300'
+    : autoLink?.phase === 'probing' ? 'text-slate-500' : 'text-amber-300';
 
   return (
     <section className="p-3 sm:p-4 space-y-4 max-w-7xl mx-auto">
@@ -342,12 +367,22 @@ export default function BotsTab() {
           )}
         </div>
 
-        {/* Laya panel (local, $0) — v21.2.0 NEW */}
+        {/* Laya panel (local, $0) — v21.2.0 NEW · v21.9.0 auto-link */}
         <div className="quantum-panel rounded-2xl p-4">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-xs font-black uppercase tracking-wider text-emerald-300">Laya · local open-weight</h3>
-            <span className="text-[10px] font-mono text-slate-600">Local · $0</span>
-            {layaStats && <span className={`text-[10px] font-mono ml-2 ${layaStats.breakerOpen ? 'text-rose-400' : 'text-slate-500'}`}>{layaStats.breakerOpen ? 'BREAKER OPEN' : 'healthy'}</span>}
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-slate-600">Local · $0</span>
+              {layaStats && <span className={`text-[10px] font-mono ${layaStats.breakerOpen ? 'text-rose-400' : 'text-slate-500'}`}>{layaStats.breakerOpen ? 'BREAKER OPEN' : 'healthy'}</span>}
+              {autoLink && (
+                <span
+                  className={`px-1.5 py-0.5 rounded-md text-[9px] font-mono font-bold border border-slate-700/60 bg-slate-900/60 ${autoTone}`}
+                  title={`auto-link: ${autoLink.phase}${autoLink.lastError ? ` — ${autoLink.lastError}` : ''}${autoLink.keyMasked ? ` · key ${autoLink.keyMasked}` : ''}`}
+                >
+                  {AUTO_LABEL[autoLink.phase] || autoLink.phase}
+                </span>
+              )}
+            </div>
           </div>
           {layaStats ? (
             <div className="grid grid-cols-3 gap-2">
@@ -359,8 +394,27 @@ export default function BotsTab() {
               <Stat label="Rejects (4xx)" value={String(layaStats.rejects ?? 0)} className={(layaStats.rejects ?? 0) > 0 ? 'text-amber-300' : ''} sub="no breaker trip" />
             </div>
           ) : (
-            <div className="text-[11px] text-slate-500">
-              Laya not configured — <code className="text-emerald-400">LAYA_ENABLED=1</code> + <code className="text-emerald-400">LAYA_API_KEY</code> in .env + local <code className="text-emerald-400">laya-serve</code> chalu (README § Laya install).
+            <div className="space-y-2">
+              <div className="text-[11px] text-slate-500">
+                Laya not configured — <code className="text-emerald-400">LAYA_ENABLED=1</code> + <code className="text-emerald-400">LAYA_API_KEY</code> in .env + local <code className="text-emerald-400">laya-serve</code> chalu (README § Laya install).
+              </div>
+              {/* v21.9.0: laya-serve zinda hai par key/config missing →
+                  auto-link use dhundh leta hai. Neeche live reason + manual
+                  RECONNECT (background auto-retry har ~30s me chalta hai). */}
+              {autoLink && (
+                <div className="text-[10px] font-mono text-slate-600 leading-relaxed">
+                  auto-link: {autoLink.phase}{autoLink.baseUrl ? ` @ ${autoLink.baseUrl}` : ''}
+                  {autoLink.lastError ? ` — ${autoLink.lastError}` : ''}
+                </div>
+              )}
+              <button
+                onClick={doRelink}
+                disabled={relinkBusy}
+                className="px-3 py-1.5 rounded-xl text-[11px] font-black bg-emerald-500/10 text-emerald-300 border border-emerald-500/25 hover:bg-emerald-500/20 disabled:opacity-50"
+              >
+                {relinkBusy ? 'LINKING…' : '⟳ RECONNECT LAYA'}
+              </button>
+              {relinkNote && <div className={`text-[10px] font-mono ${relinkNote.startsWith('✓') ? 'text-emerald-300' : 'text-rose-300'}`}>{relinkNote}</div>}
             </div>
           )}
           {/* v21.2.0: AI mode line — primary/shadow/onDown ek jagah dikhta hai */}

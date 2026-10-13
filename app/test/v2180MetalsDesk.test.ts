@@ -84,7 +84,17 @@ const fetchMock = vi.fn(async (url) => {
   if (u.includes('public.coindcx.com/market_data/v3/current_prices/futures/rt')) return json(RT_FUTURES_PAYLOAD);
   if (u.includes('public.coindcx.com/market_data/candlesticks')) throw new Error('blocked (metals sim)');
   if (u.includes('fapi.binance.com/fapi/v1/klines')) {
+    // v21.9.0 [THE REGRESSION LOCK]: real Binance fapi Sirf VALID intervals
+    // accept karta hai (1m,3m,5m,15m,30m,1h,2h,4h,6h,8h,12h,1d,3d,1w,1M).
+    // Purana mock interval param IGNORE karta tha — isliye v21.8.0 ka
+    // `interval=60` bug (HTTP 400 Invalid interval) kabhi pakda nahi gaya.
+    // Ab mock real API jaisa reject karta hai.
     const sym = /symbol=([A-Z0-9]+)/.exec(u)?.[1] || '';
+    const interval = /interval=([a-zA-Z0-9]+)/.exec(u)?.[1] || '';
+    const VALID = new Set(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w', '1M']);
+    if (!VALID.has(interval)) {
+      return new Response(JSON.stringify({ code: -1120, msg: 'Invalid interval.' }), { status: 400, headers: { 'content-type': 'application/json' } });
+    }
     const anchor = sym === 'XAUUSDT' ? XAU : sym === 'XAGUSDT' ? XAG : sym === 'BTCUSDT' ? BTC : 100;
     return json(fapiKlines(anchor));
   }
@@ -105,7 +115,8 @@ vi.stubGlobal('fetch', fetchMock);
 
 const {
   METALS_BASES, isMetalsBase, fapiKlinesToCandles, fetchMetalsFapiCandles, fetchMetalsPrices,
-  futuresPairFor, __clearFuturesCandleCacheForTest,
+  futuresPairFor, __clearFuturesCandleCacheForTest, toFapiInterval, toYahooInterval,
+  fetchMetalsYahooCandles, __metalsYahooForTest, __clearMetalsCachesForTest,
 } = await import('../server/ai/futures.js');
 const { getSignals, getDeepSignal, __clearSignalCaches } = await import('../server/ai/signals.js');
 const { discoverFuturesUniverse } = await import('../server/ai/expertPicks.js');
@@ -114,6 +125,7 @@ const { sessionPhase } = await import('../server/ai/probrain.js');
 beforeEach(() => {
   __clearSignalCaches();
   __clearFuturesCandleCacheForTest();
+  __clearMetalsCachesForTest();
   fetchMock.mockClear();
 });
 
@@ -331,4 +343,139 @@ describe('v21.8.0 [F] source wiring contracts', () => {
     const s = read('../src/components/aitrading/types.ts');
     expect(s).toMatch(/'GLOBALFUTURES' \| 'METALS'/);
   });
+});
+
+// ============================================================
+// G. v21.9.0 THE XAU/XAG RESCUE — interval fix + multi-source chain
+// ============================================================
+describe('v21.9.0 [G] metals rescue — interval mapping + Yahoo COMEX + gold-api chain', () => {
+  it('toFapiInterval: TV resolutions → Binance intervals (THE bug — interval=60 tha, 1h chahiye)', () => {
+    expect(toFapiInterval('60')).toBe('1h');
+    expect(toFapiInterval('15')).toBe('15m');
+    expect(toFapiInterval('5')).toBe('5m');
+    expect(toFapiInterval('30')).toBe('30m');
+    expect(toFapiInterval('240')).toBe('4h');
+    expect(toFapiInterval('1D')).toBe('1d');
+    expect(toFapiInterval('D')).toBe('1d');
+    expect(toFapiInterval('1W')).toBe('1w');
+    expect(toFapiInterval('1M')).toBe('1M');
+    // already-Binance-style passthrough
+    expect(toFapiInterval('1h')).toBe('1h');
+    expect(toFapiInterval('15m')).toBe('15m');
+    // garbage → null (caller '1h' default pe gira dega)
+    expect(toFapiInterval('45')).toBeNull();
+    expect(toFapiInterval('abc')).toBeNull();
+    expect(toFapiInterval('')).toBeNull();
+    expect(toFapiInterval(null)).toBeNull();
+  });
+
+  it('toYahooInterval: fapi interval → Yahoo chart interval', () => {
+    expect(toYahooInterval('60')).toBe('1h');
+    expect(toYahooInterval('15')).toBe('15m');
+    expect(toYahooInterval('1D')).toBe('1d');
+    expect(toYahooInterval('240')).toBe('1h'); // Yahoo 4h nahi deta — 1h
+  });
+
+  it('fetchMetalsFapiCandles: ab VALID interval bhejta hai (interval=1h URL me) — THE v21.8.0 regression lock', async () => {
+    const c = await fetchMetalsFapiCandles('XAU', '60');
+    expect(Array.isArray(c)).toBe(true);
+    expect(c.length).toBeGreaterThanOrEqual(30);
+    // THE assertion: request URL me interval=1h tha, 60 NAHI
+    const klineCall = fetchMock.mock.calls.map((x) => String(x[0])).find((u) => u.includes('fapi.binance.com/fapi/v1/klines'));
+    expect(klineCall).toBeTruthy();
+    expect(klineCall).toMatch(/interval=1h/);
+    expect(klineCall).not.toMatch(/interval=60\b/);
+    // 15m bhi
+    __clearMetalsCachesForTest();
+    const c15 = await fetchMetalsFapiCandles('XAG', '15', 240);
+    expect(Array.isArray(c15)).toBe(true);
+    const kline15 = fetchMock.mock.calls.map((x) => String(x[0])).filter((u) => u.includes('fapi.binance.com/fapi/v1/klines')).pop();
+    expect(kline15).toMatch(/interval=15m/);
+  });
+
+  it('fetchMetalsYahooCandles: GC=F/SI=F chart shape → house candles (USD domain)', async () => {
+    const anchor = 4180; // COMEX gold USD
+    const ts = Array.from({ length: 300 }, (_, i) => 1_700_000_000 + i * 3600);
+    const closes = ts.map((_, i) => anchor * (1 + Math.sin(i / 17) * 0.012 + (i / 300) * 0.04 - 0.02));
+    // Yahoo mock (encodeURIComponent('GC=F') === 'GC%3DF')
+    __metalsYahooForTest(async (url) => {
+      const u = String(url);
+      if (!u.includes('query1.finance.yahoo.com')) throw new Error('wrong host');
+      if (!u.includes('GC%3DF') && !u.includes('GC=F')) throw new Error(`wrong symbol: ${u}`);
+      if (!u.includes('interval=1h')) throw new Error('yahoo interval wrong');
+      return json({
+        chart: { result: [{ meta: { symbol: 'GC=F' }, timestamp: ts, indicators: { quote: [{ open: closes.map((v) => v * 0.998), high: closes.map((v) => v * 1.004), low: closes.map((v) => v * 0.996), close: closes, volume: closes.map(() => 900) }] } }] },
+      });
+    });
+    const candles = await fetchMetalsYahooCandles('XAU', '60');
+    expect(Array.isArray(candles)).toBe(true);
+    expect(candles.length).toBe(300);
+    expect(candles[0].time).toBeGreaterThan(1e12);
+    expect(candles.some((x) => x.close > 3000)).toBe(true); // gold-scale USD
+    // non-metals → null
+    expect(await fetchMetalsYahooCandles('BTC', '60')).toBeNull();
+    __metalsYahooForTest(null);
+  });
+
+  it('fetchMetalsPrices: fapi down → gold-api.com spot fallback (source honest)', async () => {
+    // fapi ticker down, gold-api zinda
+    const saved = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('fapi.binance.com/fapi/v1/ticker/24hr')) throw new Error('fapi geo-blocked (sim)');
+      if (u.includes('api.gold-api.com/price/XAU')) return json({ currency: 'USD', name: 'Gold', price: XAU, symbol: 'XAU', updatedAt: '2026-10-13T18:07:14Z' });
+      if (u.includes('api.gold-api.com/price/XAG')) return json({ currency: 'USD', name: 'Silver', price: XAG, symbol: 'XAG', updatedAt: '2026-10-13T18:07:14Z' });
+      return saved(url);
+    });
+    try {
+      const rows = await fetchMetalsPrices();
+      expect(Array.isArray(rows)).toBe(true);
+      expect(rows.length).toBe(2);
+      const xau = rows.find((r) => r.base === 'XAU');
+      expect(xau.last).toBeCloseTo(XAU, 0);
+      expect(xau.source).toBe('gold-api-spot');
+      expect(xau.pair).toBe('B-XAU_USDT');
+    } finally {
+      fetchMock.mockImplementation(saved);
+    }
+  });
+
+  it('METALS board survives a FULL Binance geo-block: gold-api prices + Yahoo COMEX candles carry the desk', async () => {
+    // THE user-scenario test: CoinDCX candles dark + Binance poora
+    // geo-blocked → Yahoo COMEX + gold-api hi board chalate hain.
+    const saved = fetchMock.getMockImplementation();
+    fetchMock.mockImplementation(async (url) => {
+      const u = String(url);
+      if (u.includes('fapi.binance.com')) throw new Error('binance geo-blocked (sim)');
+      if (u.includes('public.coindcx.com/market_data/candlesticks')) throw new Error('WAF blocked (sim)');
+      if (u.includes('public.coindcx.com/market_data/v3/current_prices/futures/rt')) return saved(url); // RT zinda (prices)
+      if (u.includes('api.gold-api.com/price/XAU')) return json({ price: XAU, symbol: 'XAU' });
+      if (u.includes('api.gold-api.com/price/XAG')) return json({ price: XAG, symbol: 'XAG' });
+      if (u.includes('query1.finance.yahoo.com/v8/finance/chart/GC')) {
+        const ts = Array.from({ length: 300 }, (_, i) => 1_700_000_000 + i * 3600);
+        const closes = ts.map((_, i) => 4150 * (1 + Math.sin(i / 17) * 0.012 + (i / 300) * 0.04 - 0.02));
+        return json({ chart: { result: [{ timestamp: ts, indicators: { quote: [{ open: closes.map((v) => v * 0.998), high: closes.map((v) => v * 1.004), low: closes.map((v) => v * 0.996), close: closes, volume: closes.map(() => 800) }] } }] } });
+      }
+      if (u.includes('query1.finance.yahoo.com/v8/finance/chart/SI')) {
+        const ts = Array.from({ length: 300 }, (_, i) => 1_700_000_000 + i * 3600);
+        const closes = ts.map((_, i) => 59.5 * (1 + Math.sin(i / 19) * 0.015 + (i / 300) * 0.03 - 0.015));
+        return json({ chart: { result: [{ timestamp: ts, indicators: { quote: [{ open: closes.map((v) => v * 0.998), high: closes.map((v) => v * 1.004), low: closes.map((v) => v * 0.996), close: closes, volume: closes.map(() => 700) }] } }] } });
+      }
+      return saved(url);
+    });
+    try {
+      const board = await getSignals('METALS', {}, { noCache: true });
+      expect(board.ok).toBe(true);
+      expect(board.signals.map((s) => s.symbol).sort()).toEqual(['XAG', 'XAU']);
+      for (const s of board.signals) {
+        expect(s.market).toBe('FUTURES');
+        expect(s.plan.entry).toBeGreaterThan(0);
+      }
+      const xau = board.signals.find((s) => s.symbol === 'XAU');
+      expect(xau.ltp).toBeGreaterThan(1000); // gold-scale
+      expect(xau.ltp).toBeLessThan(10_000);
+    } finally {
+      fetchMock.mockImplementation(saved);
+    }
+  }, 60_000);
 });

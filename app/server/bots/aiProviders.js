@@ -21,6 +21,7 @@
 // ============================================================
 import path from 'node:path';
 import { createJev, providerConfig, jevPing } from './jevEngine.js';
+import { readLayaAutoLink } from './layaAutoLink.js';
 
 /**
  * Build the provider registry from env.
@@ -37,10 +38,25 @@ export function buildProviders(env = process.env, { stateDir } = {}) {
   // Laya opt-in hai: LAYA_ENABLED=1 + LAYA_API_KEY dono chahiye. Yaad rakho —
   // Laya local hai; laptop band = provider down = breaker open = auto-arm
   // failover / single-arm WAIT (kabhi "AI ke bina trade" nahi).
-  if (String(env.LAYA_ENABLED) === '1') {
+  //
+  // v21.9.0 AUTOLINK RESCUE: "laya-serve background me chal raha hai par
+  // no_laya_instance" incident. .env.example LAYA_API_KEY= KHALI ship karta
+  // hai — provider kabhi nahi banta tha. Ab:
+  //   • LAYA_ENABLED=0 → explicit off (kuch nahi)
+  //   • LAYA_ENABLED=1 + env key → purana flow (source 'env')
+  //   • env key khali/unset PAR stateDir/laya_autolink.json me FRESH
+  //     auto-detected key hai (layaAutoLink.js ne ek REAL successful
+  //     /v1/systemone handshake ke baad hi likhi hai) → provider banta
+  //     hai (source 'autolink'). Ek stray file kabhi flip nahi kar sakti
+  //     — sirf validated handshake key persist hoti hai.
+  const layaEnabledRaw = String(env.LAYA_ENABLED ?? '').trim();
+  if (layaEnabledRaw !== '0') {
     const lcfg = providerConfig('laya', env);
-    if (lcfg.apiKey) {
-      out.laya = createJev({ ...lcfg, cachePath: path.join(dir, 'laya_cache.jsonl') });
+    let key = lcfg.apiKey || '';
+    const auto = key ? null : readLayaAutoLink(dir);
+    if (!key && auto?.key) key = auto.key;
+    if (key && (layaEnabledRaw === '1' || auto?.key)) {
+      out.laya = createJev({ ...lcfg, apiKey: key, cachePath: path.join(dir, 'laya_cache.jsonl') });
     }
   }
   return out;

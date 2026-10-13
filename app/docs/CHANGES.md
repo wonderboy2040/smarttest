@@ -1,5 +1,26 @@
 # Changelog
 
+## v21.9.0 — XAU/XAG METALS RESCUE + LAYA AUTO-LINK (2026-10-14)
+
+**User report: "CoinDCX tab me Gold & silver (XAU & XAG) me koi trade signals nahi dikh rahe — No metals data reachable (CoinDCX futures RT + Binance fapi both unavailable for XAU/XAG)" + "Bot Lab aur Superintelligence Signal Board me Laya ka koi feature useable nahi — laya background me running phir bhi no_laya_instance"**
+
+Dono root-caused, advance-level fixed, live-verified aur regression-locked. Suite 3792/3792 (202 files, +44 naye assertions).
+
+### THE XAU/XAG FIX — metals desk har leg se marta tha
+- **ROOT CAUSE (live-verified)**: `fetchMetalsFapiCandles` TradingView-style resolutions (`'60'`, `'15'`) Binance fapi ko **raw** bhejta tha — `interval=60` → HTTP 400 `{"code":-1120,"msg":"Invalid interval."}` (Binance sirf `1h`/`15m` format accept karta hai). Fapi klines leg 100% fail — TV scanner metals serve nahi karta, to indicators ke liye candles hi akela source the → `buildFuturesCtxSync` dono symbols ke liye null → "No metals data reachable" har cycle. Hermetic mock URL substring se match karta tha, interval param ignore — isliye bug kabhi pakda nahi gaya.
+- **FIX 1 — `toFapiInterval()` mapper** (`futures.js`): TV resolution → Binance interval ('60'→'1h', '15'→'15m', '1D'→'1d', '1W'→'1w'…); already-Binance-style passthrough; unknown → '1h' safe default. `fetchMetalsFapiCandles` ab translated interval bhejta hai. **Live proof: XAU 300 bars + ACTION SHORT signal (entry 4166.24, SL 4181.76, T1 4150.72).**
+- **FIX 2 — Yahoo COMEX third leg** (`fetchMetalsYahooCandles`): XAU→GC=F, XAG→SI=F chart candles — **India-accessible** (Binance fapi kuch Indian ISPs pe geo-blocked). COMEX-USD candles desk ke live anchor pe rescale hote hain (`fetchMetalsCandleChain` — fapi → Yahoo, ±50% domain guard). Board + deep + 15m tape teeno paths ab chain se guarte hain.
+- **FIX 3 — price chain 3-leg** (`fetchMetalsPrices`): Binance fapi 24h tickers → **gold-api.com free spot** (no key) → Yahoo GC=F/SI=F quotes (`SILVER: 'SI=F'` YF_MAP me add). Har row apna `source` carry karta hai (honesty intact).
+- **REGRESSION LOCK**: metals test mock ab REAL Binance jaisa invalid intervals reject karta hai — ye bug class kabhi wapas nahi aa sakti. Naya "full Binance geo-block" test: CoinDCX candles dark + Binance poora down → board phir bhi XAU/XAG cards serve karta hai (Yahoo + gold-api se).
+
+### THE LAYA FIX — "laya running hai par site ko dikhta nahi"
+- **ROOT CAUSE**: provider availability PURE-CONFIG check tha — `LAYA_ENABLED === '1'` + `LAYA_API_KEY` non-empty **server boot pe** process.env se. `.env.example` `LAYA_API_KEY=` **khali** ship karta hai → provider kabhi nahi bana → `arm_fallback · no_laya_instance` har tick + Signal Board AI-confirm silent no-op. Bot Lab registry frozen singleton — .env edit ke baad bhi restart chahiye tha.
+- **FIX 1 — `layaAutoLink.js` (naya)**: background self-heal service (~30s cadence, `LAYA_AUTOLINK=0` se off). `{LAYA_BASE_URL}/health` probe (loopback-only) → key-ladder ([env-extra, persisted, documented default `smartai-laya-local`, no-auth]) se REAL `/v1/systemone` handshake → validated key `data/bots/laya_autolink.json` me persist (7-din TTL). Timeout ≠ 401: auth middleware inference se PEHLE chalta hai — timeout = key pass + cold model → 'linked (warmup timeout)' honest flag.
+- **FIX 2 — provider HOT-SWAP**: `BotRunner.attachAiProviders()` partial patch (jev untouched — test overrides safe); naya provider event-stream me `provider_attached` chhodta hai (user ko decision stream me HI dikhta hai). `refreshLayaProvider()` (routes.js) + `boardAiConfirmRefresh()` (10-min memo flush) — **server restart ke bina** Bot Lab arms + Signal Board AI chips live.
+- **FIX 3 — buildProviders autolink fallback**: env key khali par FRESH validated autolink record → provider banta hai. `LAYA_ENABLED=0` explicit off hamesha jeet-ta hai; stray file kabhi flip nahi kar sakti (sirf successful handshake key persist hoti hai).
+- **FIX 4 — UI + endpoints**: `GET /api/bots/ai/laya-status` + `POST /api/bots/ai/laya-relink`; Bot Lab Laya panel me auto-link phase chip (AUTO-LINKED / LAYA-SERVE DOWN / KEY MISMATCH / PROBING) + **⟳ RECONNECT LAYA** button + honest reason line; SSE status frames me `layaAutoLink` field; arm=laya 409 pe background self-heal relink + reason-enriched hint.
+- **REPO HYGIENE**: `scripts/laya-ping.mjs` RESTORED (referenced tha par kabhi commit nahi hui — dead path); `start-laya.cmd` CRLF-strict restored (LF regression); `.env.example` ab `LAYA_API_KEY=smartai-laya-local` default ship karta hai (out-of-the-box .env ↔ laya-serve key match) + saare `LAYA_AUTOLINK*` knobs documented.
+
 ## v21.0.6 — ADVANCE-PRO FULL-SITE AUDIT (2026-10-09)
 
 **User report: "full site code deep Advance pro level Sabhi Agents se check karo har ek work flow ko check karo sab accurately kaam kar raha hai kya aur issues fix kardo"**

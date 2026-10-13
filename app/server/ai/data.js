@@ -404,6 +404,9 @@ const YF_MAP = {
   IT: '^CNXIT', AUTO: '^CNXAUTO', PHARMA: '^CNXPHARMA', FMCG: '^CNXFMCG',
   METAL: '^CNXMETAL', REALTY: '^CNXREALTY',
   USVIX: '^VIX', DXY: 'DX-Y.NYB', GOLD: 'GC=F', CRUDE: 'CL=F',
+  // v21.9.0 METALS RESCUE: silver COMEX front — fetchMetalsPrices ki
+  // Yahoo leg (gold ke saath pair) XAG price/changePct nikalti hai.
+  SILVER: 'SI=F',
   // v10.4 GLOBAL EQUITY FUTURES desk regime: NASDAQ-100 (the tech-
   // complex risk barometer) + S&P 500 fallback.
   NDX: '^NDX', SPX: '^GSPC',

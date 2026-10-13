@@ -46,6 +46,13 @@ export interface BotsStatus {
   scheduler?: string;
   ai: { jev: AiProviderStats | null; laya: AiProviderStats | null } | null;
   aiMode?: { primary: string; shadow: string; onDown: string };
+  // v21.9.0 (laya auto-link): SSE status frames me autolink phase —
+  // UI isse "Laya down / key mismatch / linked" reason dikhata hai.
+  layaAutoLink?: {
+    phase: 'linked' | 'env-linked' | 'down' | 'key_mismatch' | 'off' | 'probing' | string;
+    baseUrl: string; keyMasked: string; source: string;
+    attempts: number; lastError: string; warmupTimeout: boolean;
+  } | null;
   jev: AiProviderStats | null;
   bots: BotCard[];
   at: string;
@@ -321,5 +328,19 @@ export function useBots({ limit = 120 } = {}) {
     }
   }, []);
 
-  return { status, events, connected, error, stopBot, setArm, runSmoke };
+  // v21.9.0 (laya auto-link): manual RECONNECT — server ek fresh detect
+  // cycle chalata hai (health probe + key ladder + hot-swap). Response
+  // { ok, autolink, laya } shape me aata hai.
+  const relinkLaya = useCallback(async (): Promise<{ ok?: boolean; error?: string; autolink?: unknown; laya?: unknown } | null> => {
+    try {
+      const r = await apiFetch('/api/bots/ai/laya-relink', { method: 'POST' });
+      const j = await r.json().catch(() => null);
+      if (!r.ok) return { ok: false, error: j?.error || `HTTP ${r.status}`, autolink: j?.autolink };
+      return j;
+    } catch (e) {
+      return { ok: false, error: String((e as Error)?.message || e) };
+    }
+  }, []);
+
+  return { status, events, connected, error, stopBot, setArm, runSmoke, relinkLaya };
 }

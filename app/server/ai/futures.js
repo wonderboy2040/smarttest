@@ -97,6 +97,41 @@ export function isMetalsBase(base) {
 }
 const METALS_FAPI_KLINES = 'https://fapi.binance.com/fapi/v1/klines';
 const METALS_FAPI_TICKER = 'https://fapi.binance.com/fapi/v1/ticker/24hr';
+// v21.9.0 METALS RESCUE: Yahoo COMEX continuous fronts — gold GC=F /
+// silver SI=F. Yahoo India-accessible hai (Binance fapi kuch Indian
+// ISPs pe geo-blocked hai, CoinDCX Cloudflare WAF datacenter IPs pe
+// 403 karta hai) → ye THIRD candle leg hai jo geo-chaloos hai.
+// Domain: COMEX futures USD — spot XAU/XAG se ~0.3-0.8% contango pe;
+// caller candles ko desk ke live anchor pe RESCALE karta hai
+// (rescaleCandlesToLtp — ratios scale-invariant, levels domain-mein).
+const METALS_YAHOO_SYMBOL = { XAU: 'GC=F', XAG: 'SI=F' };
+// v21.9.0: free spot-price fallback (no key, no rate limit drama) —
+// https://api.gold-api.com/price/XAU → { price, updatedAt } (~30s fresh).
+const METALS_SPOT_API = 'https://api.gold-api.com/price/';
+
+// v21.9.0 [THE XAU/XAG FIX]: TradingView-style resolutions ('60','15',
+// '1D'…) Binance fapi me VALID INTERVALS NAHI hain — `interval=60`
+// fapi se HTTP 400 `{"code":-1120,"msg":"Invalid interval."}` lauta
+// deta tha (live-verified), isliye fetchMetalsFapiCandles kabhi bhi ek
+// bhi candle nahi de pata tha aur METALS board har cycle "No metals
+// data reachable" error se marti rahi. Ye PURE mapper TV resolution
+// ko Binance interval me translate karta hai:
+//   '1'→'1m' '5'→'5m' '15'→'15m' '30'→'30m' '60'→'1h' '120'→'2h'
+//   '240'→'4h' '360'→'6h' '480'→'8h' '720'→'12h' '1D'/'D'→'1d'
+//   '3D'→'3d' '1W'/'W'→'1w' '1M'→'1M'
+// Already-Binance-style ('1h','15m'…) as-is pass through. Unknown → null.
+const TV_TO_FAPI = {
+  '1': '1m', '2': '2m', '3': '3m', '5': '5m', '15': '15m', '30': '30m',
+  '60': '1h', '120': '2h', '240': '4h', '360': '6h', '480': '8h', '720': '12h',
+  'D': '1d', '1D': '1d', '2D': '2d', '3D': '3d', 'W': '1w', '1W': '1w',
+  'M': '1M', '1M': '1M',
+};
+export function toFapiInterval(resolution) {
+  const r = String(resolution ?? '').trim();
+  if (!r) return null;
+  if (/^[0-9]+[smhdwM]$/.test(r)) return r;      // already Binance-style
+  return TV_TO_FAPI[r] || null;
+}
 
 /** PURE: Binance fapi kline rows → the house candle shape (same as
  * fetchFuturesCandles rows: {time,open,high,low,close,volume}, ascending).
@@ -123,14 +158,20 @@ const _metalsKlineCache = new Map();
 export async function fetchMetalsFapiCandles(base, resolution = '60', limit = 300) {
   const sym = String(base || '').toUpperCase();
   if (!isMetalsBase(sym)) return null;
-  const cacheKey = `met:${sym}:${resolution}`;
-  const ttl = resolution === '15' ? 180_000 : 300_000;
+  // v21.9.0 [THE FIX]: TV resolution → Binance interval translate.
+  // Pehle raw '60'/'15' bhejte the → fapi 400 "Invalid interval" →
+  // metals candles kabhi nahi aate the. Safe default '1h'.
+  const interval = toFapiInterval(resolution) || '1h';
+  const cacheKey = `met:${sym}:${interval}`;
+  const ttl = interval === '15m' ? 180_000 : 300_000;
   const hit = _metalsKlineCache.get(cacheKey);
   if (hit && Date.now() - hit.at <= ttl) return hit.candles.slice();
-  const interval = resolution === '1D' ? '1d' : String(resolution);
   const url = `${METALS_FAPI_KLINES}?symbol=${sym}USDT&interval=${interval}&limit=${Math.max(60, Math.min(1000, limit))}`;
   try {
     const r = await fetch(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) });
+    // v21.9.0: HTTP 400 bhi ok(r) ho sakta tha? Nahi — 400 !ok hai; par
+    // fapi error JSON ({"code":-1120}) 200 ke saath bhi nahi aata. Body
+    // array-check hi kaafi hai (fapiKlinesToCandles null return karta hai).
     if (!ok(r)) return null;
     const j = await r.json().catch(() => null);
     const candles = fapiKlinesToCandles(Array.isArray(j) ? j : null);
@@ -141,35 +182,158 @@ export async function fetchMetalsFapiCandles(base, resolution = '60', limit = 30
   } catch { return null; } // honest — caller's chain falls through
 }
 
-/** Metals price fallback: CoinDCX RT down ho to Binance fapi XAUUSDT/
- * XAGUSDT 24h tickers (rows in the fetchFuturesPrices shape, USDT
- * domain 1:1 — no conversion). 30s negative-cache (fapi outage par
- * har board cycle re-hit nahi). */
+// ---------------- v21.9.0: METALS YAHOO COMEX CANDLE LEG ----------------
+// Yahoo chart API se GC=F/SI=F candles — house shape, USD domain
+// (caller rescales onto the desk anchor). TTL cache + negative cache,
+// same discipline as the fapi leg. Hermetic tests fetchImpl inject
+// kar sakte hain via __metalsYahooFetchForTest.
+const _metalsYahooCache = new Map();   // key -> { at, candles }
+let _metalsYahooNegUntil = 0;          // outage par 60s hold-off
+let _metalsYahooFetchImpl = null;      // test hook
+export function __metalsYahooForTest(impl) {
+  _metalsYahooFetchImpl = impl;
+  _metalsYahooCache.clear();
+  _metalsYahooNegUntil = 0;
+}
+/** TV resolution → Yahoo chart interval (subset jo board use karta hai). */
+export function toYahooInterval(resolution) {
+  const f = toFapiInterval(resolution);
+  if (!f) return null;
+  const m = { '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '2h': '1h', '4h': '1h', '6h': '1h', '8h': '1h', '12h': '1h', '1d': '1d', '3d': '1d', '1w': '1wk', '1M': '1mo' };
+  return m[f] || null;
+}
+const _yahooRangeFor = (interval, limit) => {
+  // bars × interval → Yahoo range (15m max 60d, 1h max 730d, 1d max olavi)
+  const n = Math.max(120, Math.min(1000, Number(limit) || 300));
+  if (interval === '1m') return n <= 400 ? '1d' : '7d';
+  if (interval === '5m' || interval === '15m' || interval === '30m') return n <= 300 ? '5d' : '1mo';
+  if (interval === '1h') return n <= 300 ? '1mo' : '3mo';
+  return '2y';
+};
+/**
+ * Yahoo COMEX candles for XAU (GC=F) / XAG (SI=F).
+ * Returns house-shape candles [{time,open,high,low,close,volume}] in
+ * USD (COMEX domain) YA null. Caller MUST rescale onto its live anchor
+ * (COMEX front ~0.3-0.8% spot se upar ho sakta hai).
+ */
+export async function fetchMetalsYahooCandles(base, resolution = '60', limit = 300) {
+  const sym = String(base || '').toUpperCase();
+  const yk = METALS_YAHOO_SYMBOL[sym];
+  if (!yk) return null;
+  if (Date.now() < _metalsYahooNegUntil) return null;
+  const interval = toYahooInterval(resolution) || '1h';
+  const cacheKey = `myh:${sym}:${interval}`;
+  const ttl = interval === '15m' || interval === '30m' ? 180_000 : 300_000;
+  const hit = _metalsYahooCache.get(cacheKey);
+  if (hit && Date.now() - hit.at <= ttl) return hit.candles.slice();
+  const f = _metalsYahooFetchImpl || ((u, o) => fetch(u, o));
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yk)}?interval=${interval}&range=${_yahooRangeFor(interval, limit)}&includePrePost=false`;
+  try {
+    const r = await f(url, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(9000) });
+    if (!ok(r)) throw new Error(`yahoo ${r?.status}`);
+    const j = await r.json().catch(() => null);
+    const res = j?.chart?.result?.[0];
+    const ts = res?.timestamp;
+    const q = res?.indicators?.quote?.[0];
+    if (!Array.isArray(ts) || !q) throw new Error('yahoo shape');
+    const candles = [];
+    for (let i = 0; i < ts.length; i++) {
+      const o = num(q.open?.[i]), h = num(q.high?.[i]), l = num(q.low?.[i]), c = num(q.close?.[i]);
+      if (!(o > 0) || !(c > 0) || !(h > 0) || !(l > 0)) continue;
+      candles.push({ time: ts[i] * 1000, open: o, high: h, low: l, close: c, volume: num(q.volume?.[i]) || 0 });
+    }
+    if (candles.length < 30) throw new Error(`yahoo thin (${candles.length})`);
+    if (_metalsYahooCache.size >= 8) _metalsYahooCache.clear();
+    _metalsYahooCache.set(cacheKey, { at: Date.now(), candles });
+    return candles.slice();
+  } catch {
+    _metalsYahooNegUntil = Date.now() + 60_000; // both syms share the hold-off
+    return null;
+  }
+}
+
+/** Metals price fallback — v21.9.0 ab THREE-leg chain hai (har leg
+ * geo-bloated ho sakti hai, chain nahi):
+ *   1. Binance fapi XAUUSDT/XAGUSDT 24h tickers (USDT 1:1 — best row)
+ *   2. gold-api.com free spot (no key; price only — changePct pichhli
+ *      successful fetch se, high/low/volume unknown → 0/null honest)
+ *   3. Yahoo COMEX quotes GC=F/SI=F (price + previousClose → changePct)
+ * Rows fetchFuturesPrices shape me ({pair, base, last, mark, changePct,
+ * high, low, volume, ts, source}). 20s cache + 30s negative-cache. */
 let _metalsPrices = { at: 0, rows: null, downUntil: 0 };
+// gold-api leg ka last-price memory (changePct compute ke liye)
+const _metalsSpotPrev = new Map(); // base -> { price, at }
+async function _metalsPricesViaFapi() {
+  const rows = await Promise.all(METALS_BASES.map(async (base) => {
+    const r = await fetch(`${METALS_FAPI_TICKER}?symbol=${base}USDT`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) });
+    if (!ok(r)) return null;
+    const t = await r.json().catch(() => null);
+    if (!t || !(Number(t.lastPrice) > 0)) return null;
+    return {
+      pair: futuresPairFor(base), base,
+      last: num(t.lastPrice), mark: num(t.lastPrice),
+      changePct: num(t.priceChangePercent), high: num(t.highPrice), low: num(t.lowPrice),
+      volume: num(t.quoteVolume) || 0, ts: Date.now(), source: 'binance-fut-usdt',
+    };
+  }));
+  return rows.filter(Boolean);
+}
+async function _metalsPricesViaSpotApi() {
+  const f = globalThis.fetch?.bind(globalThis);
+  if (!f) return null;
+  const rows = await Promise.all(METALS_BASES.map(async (base) => {
+    try {
+      const r = await fetch(`${METALS_SPOT_API}${base}`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(7000) });
+      if (!ok(r)) return null;
+      const t = await r.json().catch(() => null);
+      const p = num(t?.price);
+      if (!(p > 0)) return null;
+      const prev = _metalsSpotPrev.get(base);
+      const changePct = prev && prev.price > 0 && Date.now() - prev.at < 30 * 60_000
+        ? ((p - prev.price) / prev.price) * 100 : 0;
+      _metalsSpotPrev.set(base, { price: p, at: Date.now() });
+      return {
+        pair: futuresPairFor(base), base,
+        last: p, mark: p, changePct,
+        high: null, low: null, volume: 0, ts: Date.now(), source: 'gold-api-spot',
+      };
+    } catch { return null; }
+  }));
+  const okRows = rows.filter(Boolean);
+  return okRows.length > 0 ? okRows : null;
+}
+async function _metalsPricesViaYahoo() {
+  try {
+    const { fetchYahooQuotes } = await import('./data.js');
+    // YF_MAP keys: GOLD (GC=F) + v21.9.0 SILVER (SI=F)
+    const q = await fetchYahooQuotes(['GOLD', 'SILVER']);
+    const rows = [];
+    const m = { GOLD: 'XAU', SILVER: 'XAG' };
+    for (const [k, base] of Object.entries(m)) {
+      const p = num(q?.[k]?.price);
+      if (!(p > 0)) continue;
+      rows.push({
+        pair: futuresPairFor(base), base,
+        last: p, mark: p, changePct: num(q?.[k]?.changePct) || 0,
+        high: null, low: null, volume: 0, ts: Date.now(), source: 'yahoo-comex',
+      });
+    }
+    return rows.length > 0 ? rows : null;
+  } catch { return null; }
+}
 export async function fetchMetalsPrices() {
   if (Date.now() < _metalsPrices.downUntil) return null;
   if (_metalsPrices.rows && Date.now() - _metalsPrices.at < 20_000) return _metalsPrices.rows;
-  try {
-    const rows = await Promise.all(METALS_BASES.map(async (base) => {
-      const r = await fetch(`${METALS_FAPI_TICKER}?symbol=${base}USDT`, { headers: { 'User-Agent': UA }, signal: AbortSignal.timeout(8000) });
-      if (!ok(r)) return null;
-      const t = await r.json().catch(() => null);
-      if (!t || !(Number(t.lastPrice) > 0)) return null;
-      return {
-        pair: futuresPairFor(base), base,
-        last: num(t.lastPrice), mark: num(t.lastPrice),
-        changePct: num(t.priceChangePercent), high: num(t.highPrice), low: num(t.lowPrice),
-        volume: num(t.quoteVolume) || 0, ts: Date.now(), source: 'binance-fut-usdt',
-      };
-    }));
-    const okRows = rows.filter(Boolean);
-    if (okRows.length === 0) throw new Error('no metals rows');
-    _metalsPrices = { at: Date.now(), rows: okRows, downUntil: 0 };
-    return okRows;
-  } catch {
+  // Leg order: fapi (fullest rows) → gold-api spot → Yahoo COMEX quotes
+  let rows = await _metalsPricesViaFapi().catch(() => null);
+  if (!rows || rows.length === 0) rows = await _metalsPricesViaSpotApi().catch(() => null);
+  if (!rows || rows.length === 0) rows = await _metalsPricesViaYahoo().catch(() => null);
+  if (!rows || rows.length === 0) {
     _metalsPrices.downUntil = Date.now() + 30_000;
     return null;
   }
+  _metalsPrices = { at: Date.now(), rows, downUntil: 0 };
+  return rows;
 }
 
 // ---------------- USDINR (shared conversion, cached) ----------------
@@ -609,6 +773,15 @@ export async function fetchFuturesCandles(pair, resolution = '60', limit = 300) 
 const _futCandleCache = new Map(); // key -> { at, candles } (v12.6 TTL cache)
 /** Test hook — hermetic suites clear the candle cache between cases. */
 export function __clearFuturesCandleCacheForTest() { _futCandleCache.clear(); }
+/** v21.9.0 test hook — metals candle/price/spot caches saaf (hermetic suites). */
+export function __clearMetalsCachesForTest() {
+  _metalsKlineCache.clear();
+  _metalsYahooCache.clear();
+  _metalsYahooNegUntil = 0;
+  _metalsYahooFetchImpl = null;
+  _metalsPrices = { at: 0, rows: null, downUntil: 0 };
+  _metalsSpotPrev.clear();
+}
 function resolutionSeconds(res) {
   const r = String(res);
   if (r === '1D') return 86400;

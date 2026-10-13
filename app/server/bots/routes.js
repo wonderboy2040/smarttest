@@ -23,6 +23,8 @@ import { BotRunner, botsEnabled, STRATEGIES, runArmsBacktest } from './botRunner
 import { loadBotState, saveBotState, setKillSwitch, killSwitchActive as _killSwitchActive } from './botState.js';
 import { smokeAll } from './smoke.js';
 import { buildProviders, providerHealth } from './aiProviders.js';
+import { createLayaAutoLink, buildLayaProviderOnly } from './layaAutoLink.js';
+import { boardAiConfirmRefresh } from '../ai/boardAiConfirm.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -34,6 +36,39 @@ const SSE_BACKPRESSURE_BYTES = 1 << 20;
 const ARMS_ALLOWED = ['rules', 'gated', 'jev', 'laya', 'consensus', 'auto'];
 
 let _runner = null;
+// v21.9.0: Laya auto-link service (module singleton) — running
+// laya-serve ko detect karke provider HOT-SWAP karta hai.
+let _autolink = null;
+
+/** v21.9.0: Laya provider rebuild + runner hot-swap + board-confirm
+ *  memo flush. Jev UNTOUCHED (partial patch — tests ka override safe).
+ *  Returns the post-swap provider health (laya side). */
+export function refreshLayaProvider() {
+  if (!_runner) return null;
+  try {
+    const laya = buildLayaProviderOnly(_runner.env, { stateDir: _runner.stateDir });
+    _runner.attachAiProviders({ laya });
+    if (laya) boardAiConfirmRefresh();
+    return providerHealth({ laya }).laya;
+  } catch {
+    return providerHealth({ laya: null }).laya;
+  }
+}
+
+/** v21.9.0: autolink service ensure/get — pehli Bot Lab route registration
+ *  par banta hai (env + stateDir runner se), background timer + boot cycle
+ *  start karta hai. onLinked hook = hot-swap + board refresh. */
+export function ensureLayaAutoLink(runner) {
+  if (_autolink) return _autolink;
+  _autolink = createLayaAutoLink({
+    env: runner.env,
+    stateDir: runner.stateDir,
+    onLinked: () => { try { refreshLayaProvider(); } catch { /* never fatal */ } },
+  });
+  _autolink.start();
+  return _autolink;
+}
+export function peekLayaAutoLink() { return _autolink; }
 
 /** v21.1.0 (Phase-3): PEEK — runner banao NAHI, sirf existing return.
  *  healthMonitor ka /api/health snapshot isse use karta hai: getBotRunner()
@@ -68,6 +103,9 @@ export function getBotRunner(opts = {}) {
 
 export function registerBotRoutes(app, opts = {}) {
   const runner = getBotRunner(opts);
+  // v21.9.0: Laya auto-link background service — running laya-serve
+  // detect → validated key → provider hot-swap (Bot Lab + Signal Board).
+  ensureLayaAutoLink(runner);
 
   // v20.8.1 FIX (H1 — the lab was a static mock): the scheduler. Ticks
   // every 60s (idempotent per bar via late_decision + attempt state),
@@ -76,7 +114,11 @@ export function registerBotRoutes(app, opts = {}) {
 
   const statusNow = () => {
     if (_statusCache.data && Date.now() - _statusCache.at < 2000) return _statusCache.data;
-    _statusCache = { at: Date.now(), data: runner.status() };
+    // v21.9.0: SSE status frames me autolink phase bhi — UI "Laya not
+    // configured" ke SAATH reason (down / key_mismatch / linked) dikhata hai.
+    const base = runner.status();
+    const auto = _autolink?.status?.();
+    _statusCache = { at: Date.now(), data: auto ? { ...base, layaAutoLink: auto } : base };
     return _statusCache.data;
   };
 
@@ -183,7 +225,19 @@ export function registerBotRoutes(app, opts = {}) {
       return res.status(409).json({ error: 'provider_unavailable', provider: 'jev', hint: 'TYPESAFE_API_KEY .env me set karo' });
     }
     if (arm === 'laya' && !ai.laya) {
-      return res.status(409).json({ error: 'provider_unavailable', provider: 'laya', hint: 'LAYA_ENABLED=1 + LAYA_API_KEY — local laya-serve chalu hai?' });
+      // v21.9.0 SELF-HEAL: 409 ke saATH ek background auto-link cycle bhi
+      // fire — agar laya-serve abhi zinda hai to next arm attempt se pehle
+      // provider attach ho jayega (user ko RECONNECT dabane ki zaroorat nahi).
+      try { _autolink?.relink?.().catch(() => { /* never fatal */ }); } catch { /* never fatal */ }
+      const auto = _autolink?.status?.();
+      const why = auto?.phase === 'down'
+        ? ' — auto-link: laya-serve /health unreachable'
+        : auto?.phase === 'key_mismatch'
+          ? ' — auto-link: server zinda, key mismatch (LAYA_API_KEY = laya-serve wali key)'
+          : auto?.phase === 'off'
+            ? ' — auto-link off (LAYA_AUTOLINK=0)'
+            : '';
+      return res.status(409).json({ error: 'provider_unavailable', provider: 'laya', hint: `LAYA_ENABLED=1 + LAYA_API_KEY — local laya-serve chalu hai?${why}` });
     }
     if (arm === 'consensus' && !(ai.jev && ai.laya)) {
       return res.status(409).json({ error: 'provider_unavailable', provider: ai.jev ? 'laya' : 'jev', hint: 'consensus ke liye dono providers chahiye' });
@@ -200,6 +254,27 @@ export function registerBotRoutes(app, opts = {}) {
   // reachable/breaker/p50/p95/rejects/model/urlHost. Auth ke andar.
   app.get('/api/bots/ai/health', (_req, res) => {
     res.json(providerHealth(runner.ai || {}));
+  });
+
+  // ---------------- v21.9.0: LAYA AUTO-LINK endpoints ----------------
+  // UI "RECONNECT LAYA" button + status chip isi pe chalte hain.
+  app.get('/api/bots/ai/laya-status', (_req, res) => {
+    res.json({
+      autolink: _autolink?.status?.() || null,
+      laya: providerHealth(runner.ai || {}).laya,
+    });
+  });
+
+  app.post('/api/bots/ai/laya-relink', async (_req, res) => {
+    try {
+      const st = await (_autolink?.relink?.() || Promise.resolve(null));
+      // relink ke baad hot-swap bhi try karo (linked hua ho to provider
+      // turant attach — background hook ke dual-path, race-safe).
+      const swapped = st?.phase === 'linked' ? refreshLayaProvider() : null;
+      res.json({ ok: st?.phase === 'linked' || st?.phase === 'env-linked', autolink: st, laya: swapped || providerHealth(runner.ai || {}).laya });
+    } catch (e) {
+      res.status(500).json({ error: String(e?.message || e) });
+    }
   });
 
   // v20.8.1 FIX (M): single-flight — concurrent POSTs piled up

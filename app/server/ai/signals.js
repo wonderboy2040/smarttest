@@ -21,7 +21,7 @@ import {
 // cadence (T1 base∪hot every cycle · T2 rotating slices) + hot
 // promotion. Flag AI_INDIA_FULL_UNIVERSE=off reverts to the static base.
 import { tieredScanUniverse, absorbScanRows, fullIndiaUniverseEnabled as _fullIndiaUniverseEnabled, boardUniverseOverrides } from './indiaUniverse.js';
-import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandles, METALS_BASES, isMetalsBase, fetchMetalsFapiCandles, fetchMetalsPrices } from './futures.js';
+import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandles, METALS_BASES, isMetalsBase, fetchMetalsFapiCandles, fetchMetalsPrices, fetchMetalsYahooCandles } from './futures.js';
 // v20.7.12 [M-2]: USDINR last-known-good fallback (disk-backed) — flat-84
 // hardcode (signals.js:2240) TV-only fallback contexts ko ~6% misprice
 // kar raha tha jab real USDINR ~89 ho (v20.2 ne baaki sab sites fix kiye the,
@@ -231,6 +231,24 @@ function rescaleCandlesToLtp(candles, ltp, expectedScale = null) {
     time: c.time, volume: c.volume,
     open: c.open * scale, high: c.high * scale, low: c.low * scale, close: c.close * scale,
   }));
+}
+
+/** v21.9.0 METALS CANDLE CHAIN — board/deep/tape sab isi se guarte hain:
+ *   1. Binance fapi klines (XAUUSDT/XAGUSDT, USDT 1:1 — v21.9.0 interval
+ *      mapping fix ke baad YEHI pehli bar reliably kaam kar rahi hai)
+ *   2. Yahoo COMEX GC=F/SI=F candles → desk ke live anchor pe RESCALED
+ *      (expected scale ≈ 1: COMEX USD ≈ spot USD ≈ USDT perp — ±50%
+ *      domain guard rescaleCandlesToLtp me built-in)
+ * Binance geo-block (Indian ISPs) + CoinDCX WAF dono ke against ye
+ * chain geo-chaloos rehti hai. ltp <= 0 ho to rescale skip — raw COMEX
+ * candles hi return (ratios RSI/MACD ke liye phir bhi sahi hain). */
+async function fetchMetalsCandleChain(base, resolution, ltp, limit = 300) {
+  const fapi = await fetchMetalsFapiCandles(base, resolution, limit).catch(() => null);
+  if (Array.isArray(fapi) && fapi.length >= 30) return fapi;
+  const y = await fetchMetalsYahooCandles(base, resolution, limit).catch(() => null);
+  if (!Array.isArray(y) || y.length < 30) return null;
+  if (!(ltp > 0)) return y;
+  return rescaleCandlesToLtp(y, ltp, 1) || y;
 }
 
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
@@ -591,7 +609,8 @@ async function fetchCrypto15mTape(base, ltp, tvRow, mkt) {
       if (!Array.isArray(candles) || candles.length < 60) {
         // Binance/Bybit USDT 15m klines are ALREADY the desk's domain.
         if (isMetalsBase(base)) {
-          candles = await fetchMetalsFapiCandles(base, '15', 240).catch(() => null);
+          // v21.9.0: fapi (interval FIXED) → Yahoo COMEX 15m rescaled.
+          candles = await fetchMetalsCandleChain(base, '15', ltp, 240).catch(() => null);
         } else {
           candles = await fetchBinanceKlines(base, '15m').catch(() => null);
         }
@@ -1464,9 +1483,11 @@ async function _computeBoard(mkt, deps, opts = {}) {
       const c = await fetchFuturesCandles(futuresPairFor(b), '60').catch(() => null);
       if (Array.isArray(c) && c.length >= 30) return c;
       if (isMetalsBase(b)) {
-        const m = await fetchMetalsFapiCandles(b, '60').catch(() => null);
+        // v21.9.0: fapi (FIXED interval mapping) → Yahoo COMEX rescaled —
+        // chaar-leg candle chain, Binance geo-block ke against bhi zinda.
+        const m = await fetchMetalsCandleChain(b, '60', ltp).catch(() => null);
         if (Array.isArray(m) && m.length >= 30) return m;
-        return null; // metals: Yahoo intraday map me XAU/XAG nahi — fapi hi last leg
+        return null; // metals: Yahoo intraday map me XAU/XAG nahi — chain last leg Yahoo COMEX hai
       }
       const y = await fetchYahooIntradayCandles(b, 'FUTURES').catch(() => null);
       // USDT ≈ USD: expected scale ≈ ltp / tv.usdPrice (≈ 1)
@@ -1602,7 +1623,7 @@ async function _computeBoard(mkt, deps, opts = {}) {
         : mkt === 'FUTURES'
           ? 'No futures data reachable right now (TV + CoinDCX futures RT unavailable)'
           : mkt === 'METALS'
-            ? 'No metals data reachable right now (CoinDCX futures RT + Binance fapi both unavailable for XAU/XAG)'
+            ? 'No metals data reachable right now (CoinDCX futures RT + Binance fapi + Yahoo COMEX + gold-api — saari legs down for XAU/XAG)'
             : mkt === 'GLOBALFUTURES'
               ? 'No global equity data reachable right now (Yahoo + global feed unavailable)'
               : 'No India market data reachable right now (TV scanner unavailable)',
@@ -2690,14 +2711,16 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
     ]);
     // v21.8.0 METALS DEEP: XAU/XAG par TV scanner khali aata hai (verified)
     // + CoinDCX candles dark hone par bina fallback ke deep 500 ho jata.
-    // Binance fapi klines (XAUUSDT/XAGUSDT, USDT 1:1) = verified live leg.
+    // v21.9.0: candle chain ab fapi (FIXED) → Yahoo COMEX rescaled, aur
+    // price anchor pehle resolve hota hai taaki rescale ltp-aware ho.
+    const row = (Array.isArray(futRows) ? futRows : []).find(x => x.base === sym);
+    // metals price fallback (CoinDCX RT down → fapi ticker → gold-api → Yahoo)
+    const row2 = row?.last > 0 ? row : (isMetalsBase(sym) ? (await fetchMetalsPrices().catch(() => null) || []).find(x => x.base === sym) : null);
     let candles = candles0;
     if ((!Array.isArray(candles) || candles.length < 30) && isMetalsBase(sym)) {
-      candles = await fetchMetalsFapiCandles(sym, '60').catch(() => null);
+      // v21.9.0: full chain (fapi FIXED → Yahoo COMEX rescaled onto ltp)
+      candles = await fetchMetalsCandleChain(sym, '60', row2?.last || 0).catch(() => null);
     }
-    const row = (Array.isArray(futRows) ? futRows : []).find(x => x.base === sym);
-    // metals price fallback (CoinDCX RT down → fapi ticker)
-    const row2 = row?.last > 0 ? row : (isMetalsBase(sym) ? (await fetchMetalsPrices().catch(() => null) || []).find(x => x.base === sym) : null);
     ctx = buildFuturesCtxSync(sym, tv[sym], row2, candles, regime);
     // v12.7 (recheck R1-#2): attach the raw TV row on the FUTURES deep
     // ctx too — the 15m tape fetch below reads ctx.__tv for its

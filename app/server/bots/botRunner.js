@@ -135,6 +135,37 @@ export class BotRunner {
     return st.arm || this.env.BOTS_ARM || 'gated';
   }
 
+  /** v21.9.0 (laya auto-link): LIVE provider hot-swap — server restart
+   *  ke bina. Partial patch: sirf diye gaye fields replace hote hain
+   *  (tests ka opts.jev override kabhi overwrite nahi hota). Naya Laya
+   *  attach hone par har enabled bot ke event-stream me ek
+   *  provider_attached event chhodta hai — user ko decision stream me
+   *  HI dikhta hai ki arm_fallback band ho gaya (silent recovery nahi). */
+  attachAiProviders(patch = {}) {
+    const prevLaya = !!this.ai.laya;
+    const prevJev = !!this.ai.jev;
+    if ('jev' in patch) {
+      this.ai.jev = patch.jev || null;
+      this.jev = this.ai.jev; // back-compat alias
+    }
+    if ('laya' in patch) this.ai.laya = patch.laya || null;
+    const layaNow = !!this.ai.laya;
+    if ((!prevLaya && layaNow) || (!prevJev && !!this.ai.jev)) {
+      const provider = !prevLaya && layaNow ? 'laya' : 'jev';
+      for (const botId of botsEnabled(this.env)) {
+        try {
+          appendEvent(this.stateDir, botId, {
+            kind: 'provider_attached', provider,
+            note: provider === 'laya'
+              ? 'Laya auto-link: provider ab available — arm_fallback band, AI arms live'
+              : 'AI provider attached — arms live',
+          });
+        } catch { /* best-effort */ }
+      }
+    }
+    return { jev: !!this.ai.jev, laya: layaNow };
+  }
+
   /** One bot's full cycle on the latest closed bars. */
   async tick(botId, { now = Date.now() } = {}) {
     if (this._inTick.has(botId)) return { skipped: 'already_running' };
