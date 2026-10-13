@@ -731,7 +731,20 @@ export function createSupervisor(opts = {}) {
 
   function _frontendFresh() {
     try {
-      if (!deps.fsMod.existsSync(path.join(deps.appRoot, 'dist', 'index.html'))) return false;
+      const idxPath = path.join(deps.appRoot, 'dist', 'index.html');
+      if (!deps.fsMod.existsSync(idxPath)) return false;
+      // Asset integrity guard: index.html me script/css hashed filenames hote hain.
+      // Agar unme se koi file dist/assets me missing ho to frontend blank ho jayega!
+      try {
+        const html = deps.fsMod.readFileSync(idxPath, 'utf8');
+        if (typeof html === 'string') {
+          const matches = html.matchAll(/(?:src|href)=["'](?:\.\/|\/)?assets\/([^"']+)["']/g);
+          for (const m of matches) {
+            const assetPath = path.join(deps.appRoot, 'dist', 'assets', m[1]);
+            if (!deps.fsMod.existsSync(assetPath)) return false;
+          }
+        }
+      } catch { /* mock fs / unreadable fallback to stamp check */ }
     } catch { return false; }
     const code = _codeVersion();
     // package.json na mile = fixture/legacy layout — kabhi force-build na karo
