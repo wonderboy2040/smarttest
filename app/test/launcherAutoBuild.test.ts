@@ -415,7 +415,7 @@ describe('v20.8.3 frontend stale-build visibility', () => {
     const m = VERSION_TS.match(/APP_VERSION = '([^']+)'/);
     expect(m).toBeTruthy();
     expect(m![1]).toBe(PKG.version);
-    expect(PKG.version).toBe('21.6.1'); // v21.6.1 bump (diagnostic tool + distinct-levels plan guard)
+    expect(PKG.version).toBe('21.7.0'); // v21.7.0 bump (F&O fresh realtime + MACross seat + strict-agreement cap)
   });
 
   it('Watchdog bat: v20.8.3 title + auto-build line', () => {

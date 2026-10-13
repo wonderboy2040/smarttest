@@ -41,6 +41,65 @@ export const DEFAULT_GATES = {
 //   voters ≥ 5 → no cap — real committee territory
 export const QUORUM_CONF_CAPS = { 1: 52, 2: 54, 3: 72, 4: 85 };
 
+// ---------------- v21.7.0 STRICT AGREEMENT CAP (accuracy upgrade) ----------------
+// User ask: "Trading signals Accuracy ko Superintelligence se Upgrade
+// kardo". The gap: STRONG needs agreement ≥0.70, but ACTION (conf ≥55)
+// had NO agreement floor — a 55/45-weight SPLIT committee (jisme almost
+// aadha board against hai) could still wear ACTION and execute paper
+// entries. A split committee is a NO-TRADE, not a soft trade: ab
+// agreement < AI_STRICT_AGREEMENT_MIN (default 0.62) par ACTION → WATCH
+// cap lagta hai (board + deep dono paths, same post-pass pattern as the
+// trust guards). Flag AI_STRICT_AGREEMENT=0/false → off (rollback).
+export const STRICT_AGREEMENT_MIN = (() => {
+  const v = Number.parseFloat(String(process.env.AI_STRICT_AGREEMENT_MIN ?? ''), 10);
+  return Number.isFinite(v) && v >= 0.5 && v <= 0.9 ? v : 0.62;
+})();
+
+export function strictAgreementEnabled() {
+  return !['false', '0', 'off', 'no'].includes(String(process.env.AI_STRICT_AGREEMENT || '').trim().toLowerCase());
+}
+
+/** PURE — cap a directional consensus to WATCH when the committee is
+ * split. Returns the (possibly capped) consensus; never throws; FLAT /
+ * null-agreement / STRONG untouched. Mirrors the veto-cap style. */
+export function applyStrictAgreementCap(consensus, enabled = strictAgreementEnabled(), min = STRICT_AGREEMENT_MIN) {
+  try {
+    if (!enabled || !consensus || consensus.dir === 0) return consensus;
+    const agr = Number(consensus.agreement);
+    if (!Number.isFinite(agr) || agr >= min) return consensus;
+    if (consensus.grade !== 'ACTION') return consensus; // only ACTION is capped (STRONG already needs ≥0.70)
+    return {
+      ...consensus,
+      grade: 'WATCH',
+      strictAgreementCap: true,
+      summary: `${consensus.summary} · SPLIT CAP (agreement ${Math.round(agr * 100)}% < ${Math.round(min * 100)}%)`,
+    };
+  } catch { return consensus; }
+}
+
+/** PURE — v21.7.0 (Issue-1) F&O OPTIONS-CARD PLAN CONTEXT fix.
+ * buildOptionSignalCards ka index-plan (target1/stopLoss → premium
+ * re-price) pehle DAILY candles ke ctx se banta tha: ctx.ltp = Yahoo
+ * daily close (ghanton purana) + ind.atr = DAILY ATR (~100-150 NIFTY
+ * points) — jabki card ka Entry LIVE chain premium par tha. Result:
+ * entry/exit systematically wrong (targets din-bhar ke move ke, SL
+ * premium noise se kahin door). Ye helper options-flavor deep signals
+ * ka plan-ctx banata hai: LIVE desk spot + 15m ATR (intraday
+ * geometry). No-ops honestly when inputs absent. */
+export function buildOptionsPlanCtx(ctx, opts, ltfInd) {
+  if (!ctx) return ctx;
+  const liveSpot = Number(opts?.liveSpot);
+  const intraAtr = Number.isFinite(Number(ltfInd?.atr)) ? Number(ltfInd.atr) : NaN;
+  const spotOk = Number.isFinite(liveSpot) && liveSpot > 0;
+  const atrOk = Number.isFinite(intraAtr) && intraAtr > 0;
+  if (!spotOk && !atrOk) return ctx;
+  return {
+    ...ctx,
+    ...(spotOk ? { ltp: liveSpot } : {}),
+    ...(atrOk ? { ind: { ...(ctx.ind || {}), atr: intraAtr } } : {}),
+  };
+}
+
 const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
 const r2 = (v) => Math.round(v * 100) / 100;
 const r1 = (v) => Math.round(v * 10) / 10;

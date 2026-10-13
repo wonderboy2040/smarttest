@@ -147,6 +147,136 @@ function trendMatrix(ctx) {
 }
 
 // ------------------------------------------------------------
+// v21.7.0 MACrossTracker — the MA-CROSSOVER EVENT seat (dono tabs).
+// ------------------------------------------------------------
+// User ask: "site me dono tabs me MA Crossover hai kya trades signals
+// ke liye" — pehle NAHI tha (mlEngine.js ka heuristic golden-cross
+// sirf Ask-AI chat ke /api/ml path me tha, ensemble me kabhi vote
+// nahi karta tha). TrendMatrix EMA-STACK STATE padhta hai (kaun upar
+// hai — alignment), cross EVENT kabhi nahi. Ye seat SMTAHI event
+// momentum detect karti hai:
+//   • SMA20 × SMA50 golden/death cross — bars-ago + magnitude
+//   • EMA10 × EMA20 fast cross — fresh confirm ya whipsaw warning
+//   • fresh cross (≤3 bar) = 76+ conf; purana cross = decay;
+//     steady aligned stack = 44 continuation; mixed = no vote
+//   • chase guard: price 3.5%+ extended from EMA10 → late-entry haircut
+// Data: ctx.candles (crypto 1h / India index daily / deep LTF) YA
+// pass-2 + deep revival me 15m candles (India intraday). Pure fn —
+// unit-testable, no fetches, no clock reads.
+// ------------------------------------------------------------
+function _smaTail(closes, period, tail = 26) {
+  const n = closes.length;
+  if (n < period + 1) return null;
+  const want = Math.min(tail, n - period + 1);
+  const out = [];
+  for (let k = 0; k < want; k++) {
+    const end = n - k; // window [end-period, end)
+    let s = 0;
+    for (let i = end - period; i < end; i++) s += closes[i];
+    out.push(s / period);
+  }
+  return out.reverse(); // oldest → newest
+}
+
+function _emaTail(closes, period, tail = 26) {
+  const n = closes.length;
+  if (n < period + 6) return null;
+  const k = 2 / (period + 1);
+  let e = 0;
+  for (let i = 0; i < period; i++) e += closes[i];
+  e /= period;
+  const start = Math.max(period, n - tail);
+  const out = [];
+  for (let i = period; i < n; i++) {
+    e = closes[i] * k + e * (1 - k);
+    if (i >= start) out.push(e);
+  }
+  return out; // oldest → newest
+}
+
+/** Last sign-flip of fast-vs-slow in the window: { bars, sign }
+ * (bars = bars since the flip; bars null = steady state). */
+function _lastCross(fast, slow) {
+  const n = Math.min(fast?.length || 0, slow?.length || 0);
+  if (n < 2) return null;
+  const rel = [];
+  for (let i = 0; i < n; i++) {
+    const d = fast[i] - slow[i];
+    rel.push(d > 0 ? 1 : d < 0 ? -1 : 0);
+  }
+  const nowSign = rel[n - 1];
+  if (!nowSign) return { bars: null, sign: 0 };
+  for (let i = n - 2; i >= 0; i--) {
+    if (rel[i] !== 0 && rel[i] !== nowSign) {
+      return { bars: n - 1 - i, sign: nowSign };
+    }
+  }
+  return { bars: null, sign: nowSign };
+}
+
+/** PURE cross read from candles — signals.js pass-2/deep revival bhi
+ * isi se 15m payload banata hai (ctx.__maCross). */
+export function maCrossFromCandles(candles) {
+  if (!Array.isArray(candles) || candles.length < 60) return null;
+  const closes = candles.map(c => Number(c?.close)).filter(Number.isFinite);
+  if (closes.length < 60) return null;
+  const sma20 = _smaTail(closes, 20, 26);
+  const sma50 = _smaTail(closes, 50, 26);
+  if (!sma20 || !sma50 || sma20.length < 2 || sma50.length < 2) return null;
+  const ema10 = _emaTail(closes, 10, 26);
+  const ema20 = _emaTail(closes, 20, 26);
+  const lastSma50 = sma50[sma50.length - 1];
+  return {
+    main: _lastCross(sma20, sma50),
+    fast: (ema10 && ema20) ? _lastCross(ema10, ema20) : null,
+    sepPct: lastSma50 > 0 ? ((sma20[sma20.length - 1] - lastSma50) / lastSma50) * 100 : null,
+  };
+}
+
+function maCrossFlow(ctx) {
+  const i = ctx.ind || {};
+  const pts = [];
+  let dir = 0, conf = 30;
+  // 1) EVENT read: revival payload (pass-2/deep 15m) ya ctx.candles history
+  const cross = ctx.__maCross ?? (Array.isArray(ctx.candles) ? maCrossFromCandles(ctx.candles) : null);
+  if (cross?.main && cross.main.sign !== 0 && cross.main.bars != null && cross.main.bars <= 20) {
+    dir = cross.main.sign;
+    const mag = Number.isFinite(cross.sepPct) ? Math.abs(cross.sepPct) : null;
+    conf = cross.main.bars <= 3 ? 76 : cross.main.bars <= 8 ? 66 : cross.main.bars <= 14 ? 58 : 48;
+    pts.push(`SMA20${dir > 0 ? '>' : '<'}SMA50 cross ${cross.main.bars} bar pehle${mag != null ? ` (${r1(mag)}% sep)` : ''}`);
+    if (mag != null) conf += Math.min(10, mag * 4); // separation bonus (capped)
+    if (cross.fast && cross.fast.sign === dir && cross.fast.bars != null && cross.fast.bars <= 10) {
+      conf += 6; pts.push(`EMA10/20 ${dir > 0 ? 'golden' : 'death'} cross confirm`);
+    } else if (cross.fast && cross.fast.sign === -dir && cross.fast.bars != null && cross.fast.bars <= 3) {
+      conf -= 14; pts.push('EMA10/20 ulta fresh cross — whipsaw warning');
+    }
+  } else if (cross?.main && cross.main.sign !== 0) {
+    // steady state — no flip in window: continuation read (state-confirmed)
+    const stack = i.ema10 != null && i.ema20 != null && i.ema50 != null
+      ? (i.ema10 > i.ema20 && i.ema20 > i.ema50 ? 1 : i.ema10 < i.ema20 && i.ema20 < i.ema50 ? -1 : 0)
+      : (Number.isFinite(cross.sepPct) ? Math.sign(cross.sepPct) : 0);
+    if (stack === cross.main.sign) {
+      dir = stack; conf = 44;
+      pts.push(`MA steady ${dir > 0 ? 'bullish' : 'bearish'} — cross window me nahi, continuation`);
+    } else pts.push('MA steady par EMA stack mixed — no edge');
+  } else {
+    // 2) STATE fallback (no candle history — India board pass-1)
+    const smaSign = i.sma20 != null && i.sma50 != null ? Math.sign(i.sma20 - i.sma50) : null;
+    const emaSign = i.ema10 != null && i.ema20 != null ? Math.sign(i.ema10 - i.ema20) : null;
+    if (smaSign && smaSign === emaSign) {
+      dir = smaSign; conf = 42;
+      pts.push(`SMA20 ${smaSign > 0 ? '>' : '<'} SMA50 + EMA10 ${smaSign > 0 ? '>' : '<'} EMA20 aligned`);
+    } else pts.push('MA state missing/mixed — cross edge nahi');
+  }
+  // chase guard — late-entry haircut (price already ran away from fast MA)
+  if (dir !== 0 && i.ema10 > 0 && ctx.ltp != null) {
+    const dist = ((ctx.ltp - i.ema10) / i.ema10) * 100 * dir; // signed WITH the vote
+    if (dist > 3.5) { conf -= 12; pts.push(`price ${r1(dist)}% extended from EMA10 — late chase`); }
+  }
+  return vote(dir, Math.max(20, conf), pts);
+}
+
+// ------------------------------------------------------------
 // 2. MomentumQuant — RSI + MACD + stochastic
 // ------------------------------------------------------------
 function momentumQuant(ctx) {
@@ -714,6 +844,12 @@ export const MODELS = [
   { id: 'regime', name: 'MacroRegime', role: 'NIFTY/VIX gate (India) · BTC gate (crypto)', weight: 0.8, fn: macroRegime },
   { id: 'smc', name: 'SmartMoneyICT', role: 'Liquidity sweeps + order blocks + FVG + BOS/CHoCH + EQH/EQL + premium/discount (SMC v2)', weight: 1.1, fn: smartMoneyICT },
   { id: 'structure', name: 'StructurePro', role: 'Fib golden pocket + Volume-Profile POC + Supply/Demand zones + EMA100/200 (BOS/CHoCH v21.0 me SMC ko diya — duplicate fix)', weight: 1.0, fn: structurePro },
+  // v21.7.0 (Issue-2): the MA-CROSSOVER EVENT seat — dono tabs (India
+  // 15m revival / crypto 1h candles). TrendMatrix reads STACK STATE;
+  // ye seat SMTAHI 20/50 + 10/20 cross events vote karti hai. core
+  // weight — seatCorrelation me trend>macross static pair hai (ledger
+  // evidence jaam hone par auto-discount, pehle 1.0 weight).
+  { id: 'macross', name: 'MACrossTracker', role: 'SMA20/50 + EMA10/20 golden/death CROSS EVENTS (fresh cross momentum — dono tabs)', weight: 1.15, fn: maCrossFlow },
   // v10.5 MTF CONFLUENCE (Upgrade 1): flag ON → the tape seat is held
   // by IntradayTapeMTF (w 1.6, 5m/15m/1h confluence); flag OFF → the
   // exact v9.3 11-model board (plain IntradayTape w 1.3). Same seat —

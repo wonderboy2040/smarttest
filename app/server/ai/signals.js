@@ -27,7 +27,7 @@ import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandl
 // kar raha tha jab real USDINR ~89 ho (v20.2 ne baaki sab sites fix kiye the,
 // ye sync-branch chhoot gaya tha).
 import { usdInrFallback } from './lib/usdinr.js';
-import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfConfluenceEnabled, tapeVote, meshModelsEnabled, structurePro } from './models.js';
+import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfConfluenceEnabled, tapeVote, meshModelsEnabled, structurePro, maCrossFromCandles } from './models.js';
 // v21.3.0 (Issue-5): Laya + Jev dual-AI confirmation on board signals
 import { confirmBoardSignals as _confirmBoardSignals, boardAiConfirmActive as _boardAiConfirmActive } from './boardAiConfirm.js';
 
@@ -55,7 +55,7 @@ import { attachFundamentals } from './fundamentals.js';
 import { adaptiveMultipliers, applyAdaptiveWeights } from './adaptive.js';
 import { modelStats as _ledgerModelStats } from './ledger.js';
 import { explainTicker } from './narrative.js';
-import { aggregateVotes, aggregateVotesWithMeta, buildTradePlan, buildSignal, DEFAULT_GATES, applyRegimeWeights, classifyRegimeFor, regimeMulFor, regimeWeightsEnabled } from './ensemble.js';
+import { aggregateVotes, aggregateVotesWithMeta, buildTradePlan, buildSignal, DEFAULT_GATES, applyRegimeWeights, classifyRegimeFor, regimeMulFor, regimeWeightsEnabled, applyStrictAgreementCap, buildOptionsPlanCtx } from './ensemble.js';
 // v6.12 PRO TRADER BRAIN — quality/honesty layer over the consensus
 import { qualityVerdict, sessionPhase as sessionPhaseOf } from './probrain.js';
 import { smcVote } from './lib/smc.js';
@@ -1846,6 +1846,25 @@ async function _computeBoard(mkt, deps, opts = {}) {
           votes.push({ id: seatId, name: tapeReg.name, role: tapeReg.role, weight: tapeReg.weight * (_ad?.tape?.mul ?? 1), ...tapeV, revived: true });
         }
       }
+      // v21.7.0 (Issue-2) MACROSS REVIVAL — the 15m candles we already
+      // fetched carry the SMA20/50 + EMA10/20 CROSS EVENTS (the seat's
+      // event read). Same replace-the-vote pattern as SMC/tape: the
+      // pass-1 state-only read (TV snapshot) gives way to the REAL 15m
+      // cross event when one exists. Adaptive multiplier carried like
+      // every other injected vote.
+      try {
+        const maReg = MODELS.find(m => m.id === 'macross');
+        if (maReg?.fn) {
+          const maV = maReg.fn({
+            market: mkt, ltp: c.ctx.ltp, ind: enr.ltfInd || c.ctx.ind, candles: enr.candles,
+          });
+          if (maV && maV.dir !== 0 && (maV.conf || 0) > 0) {
+            const mIdx = votes.findIndex(v => v.id === 'macross');
+            if (mIdx >= 0) votes.splice(mIdx, 1);
+            votes.push({ id: 'macross', name: maReg.name, role: maReg.role, weight: maReg.weight * (_ad?.macross?.mul ?? 1), ...maV, revived: true });
+          }
+        }
+      } catch { /* honest degrade — pass-1 state vote stays */ }
       // v8.0 PASS-2 REVIVAL: the TV crypto rows used to leave pattern /
       // sr / volume abstaining on the WHOLE crypto board (patterns:[],
       // pivot:null, vwap:null) — participation ~47% crushed every
@@ -2110,6 +2129,12 @@ async function _computeBoard(mkt, deps, opts = {}) {
         }
       }
     } catch { /* MTF-6 never breaks the board */ }
+    // v21.7.0 (Issue-3) STRICT AGREEMENT CAP — Superintelligence accuracy
+    // upgrade: a 55/45 SPLIT committee (actionable-looking conf par aadha
+    // board against) pehle ACTION pehen ke paper entries execute karwa
+    // deta tha. Split committee = NO-TRADE: agreement < 0.62 → ACTION
+    // cap WATCH (AI_STRICT_AGREEMENT=0 se off). Deep path me bhi same.
+    consensus2 = applyStrictAgreementCap(consensus2);
     // v21.3.0: per-signal stamp for the superIntel cap + wire payload.
     const _scoreCap = _htfVetoed || _chopCapped ? 62 : null;
     const sig = buildSignal({
@@ -2781,6 +2806,21 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
   }
   if (Array.isArray(ltfCandles) && ltfCandles.length >= 60) {
     ltfInd = computeIndicatorsFromCandles(ltfCandles);
+    // v21.7.0 (Issue-2) MACROSS REVIVAL (deep) — 15m LTF candles carry the
+    // SMA20/50 + EMA10/20 cross events; the seat's pass-1 state vote
+    // (ya 1h/daily event read) gives way to the trading-TF cross read.
+    try {
+      const maReg = MODELS.find(m => m.id === 'macross');
+      if (maReg?.fn) {
+        const maV = maReg.fn({ market: mkt, ltp: ctx.ltp, ind: ltfInd || ctx.ind, candles: ltfCandles });
+        if (maV && maV.dir !== 0 && (maV.conf || 0) > 0) {
+          const mIdx = votes.findIndex(v => v.id === 'macross');
+          if (mIdx >= 0) votes.splice(mIdx, 1);
+          const _adM = adaptiveMultipliers(_ledgerModelStats());
+          votes.push({ id: 'macross', name: maReg.name, role: maReg.role, weight: maReg.weight * (_adM?.macross?.mul ?? 1), ...maV, revived: true });
+        }
+      }
+    } catch { /* honest degrade */ }
     // SMC revival on the LTF structure (replace the abstained vote)
     const smcV = smcVote(ltfCandles);
     if (smcV && smcV.dir !== 0 && (smcV.conf || 0) > 0) {
@@ -2921,6 +2961,9 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
       grade: finalGrade,
       summary: `${consensus.summary}${qv.flags.veto ? ` · ${qv.flags.veto.toUpperCase()} VETO` : ''}`,
     };
+    // v21.7.0 (Issue-3) STRICT AGREEMENT CAP (deep) — board path jaisa hi:
+    // split committee (agreement < 0.62) ka ACTION bhi WATCH cap hota hai.
+    consensus = applyStrictAgreementCap(consensus);
     // EDGE: walk-forward replay of THIS symbol through the same
     // ensemble + plan discipline (the v6.5 backtester). Honest sample
     // size + disclaimer — past ≠ future, ye context hai guarantee nahi.
@@ -2956,7 +2999,16 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
     });
     if (guarded) consensus = guarded;
   }
-  const plan = buildTradePlan(consensus, ctx, mkt, {
+  // v21.7.0 (Issue-1) F&O CARD PLAN FIX — options-desk flavor (opts.
+  // optionsCtx set = NIFTY/SENSEX cards ke liye deep run) ka index plan
+  // pehle DAILY ctx se banta tha: ltp = Yahoo daily close (ghanton
+  // purana) + atr = DAILY ATR — jabki card ka Entry LIVE chain premium.
+  // Result: Target/SL premium levels systematically galat (daily-move
+  // geometry intraday option me). Ab LIVE desk spot (optionsDesk se
+  // pass hota hai) + 15m ATR (intraday geometry) — entry/exit cards ke
+  // index-levels ab real market se aligned.
+  const _planCtx = (opts?.optionsCtx && mkt === 'INDIA') ? buildOptionsPlanCtx(ctx, opts, ltfInd) : ctx;
+  const plan = buildTradePlan(consensus, _planCtx, mkt, {
     maxRiskPct: riskCapFor(deps),
     ...(structureStopOpt && consensus.dir !== 0 ? { structureStop: structureStopOpt } : {}),
   });

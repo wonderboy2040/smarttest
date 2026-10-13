@@ -704,6 +704,10 @@ export function registerAITradingRoutes(app, deps) {
   // · Stop Loss" strip on the Options Desk.
   app.get('/api/ai/option-signals', async (_req, res) => {
     try {
+      // v21.7.0 (Issue-1): explicit no-store — option-signals sirf fresh
+      // serve honge (options-scan/status ke saath parity; pehle Express
+      // default Etag hi tha).
+      res.set('Cache-Control', 'no-store');
       const view = await getOptionSignalsView(depsForSignals());
       res.json(view);
     } catch (e) {
@@ -741,10 +745,13 @@ export function registerAITradingRoutes(app, deps) {
 
   app.get('/api/ai/options', async (req, res) => {
     try {
+      res.set('Cache-Control', 'no-store'); // v21.7.0: fresh-only parity
       const symbol = String(req.query.symbol || 'NIFTY').toUpperCase();
       const desk = await getOptionsDesk(symbol);
       if (!desk?.ok) return res.status(502).json(desk);
-      const deep = await getDeepSignal(symbol, 'INDIA', depsForSignals(), { optionsCtx: desk.optionsCtx }).catch(() => null);
+      // v21.7.0 (Issue-1): liveSpot pass — deep index-plan LIVE desk spot
+      // par anchor (F&O cards entry/exit accuracy fix).
+      const deep = await getDeepSignal(symbol, 'INDIA', depsForSignals(), { optionsCtx: desk.optionsCtx, liveSpot: desk.spot }).catch(() => null);
       const consensus = deep?.ok ? {
         side: deep.signal.side, confidence: deep.signal.confidence,
         agreement: deep.signal.agreement, grade: deep.signal.grade,
@@ -2107,6 +2114,7 @@ export function registerAITradingRoutes(app, deps) {
 
   // ---------------- v6.11: income setup ranker (NSE indices) ----------------
   app.get('/api/ai/income', async (_req, res) => {
+    res.set('Cache-Control', 'no-store'); // v21.7.0: fresh-only parity (options family)
     try { res.json(await rankIncomeSetups()); } catch (e) { jsonError(res, 500, 'income ranker failed', e); }
   });
 
@@ -2414,6 +2422,20 @@ export function registerAITradingRoutes(app, deps) {
     } catch { /* non-fatal — options auto logs its own errors */ }
   }, 30 * 1000);
   if (optionsAutoLoop.unref) optionsAutoLoop.unref();
+
+  // v21.7.0 (Issue-1) F&O 10-MIN REFRESH WARMER — user spec: "every 10
+  // min me refresh hote rehna hai". NSE hours me har 10 min NIFTY+SENSEX
+  // cards view pre-compute hota hai — site kholte hi instant fresh view
+  // (cold compute ka 2-5s loading nahi) + chain fetch paths warm rehte
+  // hain. After-hours tick = sasta no-op (isNseOpen gate). Browser side
+  // strip 30s poll + desk 10-min auto-refresh pehle se hain.
+  const optionsWarmLoop = setInterval(async () => {
+    try {
+      if (!isNseOpen()) return;
+      await getOptionSignalsView(depsForSignals());
+    } catch { /* non-fatal — next tick retries */ }
+  }, 10 * 60 * 1000);
+  if (optionsWarmLoop.unref) optionsWarmLoop.unref();
 
   // India watcher — SL/TP + trailing + 15:15 square-off (NSE hours only).
   const indiaWatcher = setInterval(async () => {

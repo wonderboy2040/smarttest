@@ -264,6 +264,9 @@ function OptionSignalCardsStrip({ onOpened }: { onOpened?: (msg: string, ok: boo
   // err=true even with data on screen (render masked it, but it was a
   // latent trap). The ref reads the CURRENT data state.
   const viewRef = useRef<OptionSignalsView | null>(null);
+  // v21.7.0 (Issue-1): staleness badge ke liye render-tick — view.asOf ka
+  // age dikhana (old data ko "live" mask karne ka end).
+  const [, setAgeTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -294,8 +297,14 @@ function OptionSignalCardsStrip({ onOpened }: { onOpened?: (msg: string, ok: boo
     // v10.18: hidden tabs skip the poll (every sibling poller gates on
     // document.hidden — a backgrounded options tab no longer burns a
     // 12s-timeout API call every 30s).
-    const iv = setInterval(() => { if (!document.hidden) run(false); }, 30_000);
-    return () => { alive = false; clearInterval(iv); };
+    const iv = setInterval(() => { if (!document.hidden) run(false); setAgeTick(t => t + 1); }, 30_000);
+    // v21.7.0 (Issue-1): TAB WAPAS KHOLTE HI FORCE-FRESH — pura hidden
+    // session ke baad wapas aane par pehli paint ≤30s purani cache se hoti
+    // thi. visibilitychange par turant fresh fetch ("site open tak fresh
+    // signals" user spec).
+    const onVis = () => { if (!document.hidden) run(true); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { alive = false; clearInterval(iv); document.removeEventListener('visibilitychange', onVis); };
   }, []);
 
   const toggleAuto = useCallback(async () => {
@@ -334,6 +343,15 @@ function OptionSignalCardsStrip({ onOpened }: { onOpened?: (msg: string, ok: boo
     <div className="space-y-2" aria-label="F&O option signal cards">
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-xs font-black text-slate-200">🎯 F&amp;O SIGNAL CARDS</span>
+        {/* v21.7.0 (Issue-1) FRESHNESS BADGE — data kab ka hai, saaf dikhna
+            chahiye. <1m LIVE · <3m amber · usse zyada RED STALE (fetch atka
+            hai — 30s poll khud retry karta rahega). */}
+        {view?.asOf ? (() => {
+          const ageMin = Math.floor((Date.now() - view.asOf) / 60_000);
+          if (ageMin < 1) return <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-emerald-500/15 text-emerald-300 border border-emerald-400/30">● LIVE</span>;
+          if (ageMin < 3) return <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-amber-500/15 text-amber-300 border border-amber-400/30">● {ageMin}m purana</span>;
+          return <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-red-500/15 text-red-300 border border-red-400/30">● STALE {ageMin}m — retry chalu</span>;
+        })() : null}
         <span className="text-[9px] text-slate-500 font-mono">Nifty50 + Sensex · AI-scored TOP 4 (ATM/ITM/OTM candidates) · premium Entry/Target/SL · 30s re-rank</span>
         {/* v21.0.2 OPTIONS AUTO-ENTRY toggle — NIFTY/SENSEX tradeable cards
             se paper auto-entry (server loop optionsAutoEntry.js, default OFF). */}
@@ -724,6 +742,18 @@ export const OptionsDeskPanel = memo(function OptionsDeskPanel({ onPaperOpened }
   }, []);
 
   useEffect(() => { load(symbol); }, [symbol, load]);
+
+  // v21.7.0 (Issue-1) DESK AUTO-REFRESH — pehle chain desk sirf symbol-switch
+  // ya manual Refresh par hi jaagta tha; minutes-purana data "live" dikhata
+  // rehta tha. Ab: (a) har 10 min force refresh (user spec "every 10 min me
+  // refresh"), (b) tab wapas visible hote hi force refresh (site kholte hi
+  // fresh). Hidden ticks skip (poller hygiene — har sibling yahi karta hai).
+  useEffect(() => {
+    const iv = setInterval(() => { if (!document.hidden) load(symbol, true); }, 10 * 60_000);
+    const onVis = () => { if (!document.hidden) load(symbol, true); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVis); };
+  }, [symbol, load]);
 
   // v10.17: scan loads lazily — only when the sub-view is opened.
   const loadScan = useCallback(async (force = false) => {

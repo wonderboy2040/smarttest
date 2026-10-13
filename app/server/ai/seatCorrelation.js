@@ -46,6 +46,10 @@ export const CORE_DEDUP_PAIRS = [
   ['momentum', 'tape'],
   ['momentum', 'tape-mtf'],
   ['smc', 'structure'],
+  // v21.7.0: MACrossTracker (SMA20/50 cross events) TrendMatrix ke EMA-stack
+  // read ke naikfamily hai — trend primary (ADX/Supertrend unique context),
+  // macross redundant-side discount (sirf ledger evidence ≥20 overlap par).
+  ['trend', 'macross'],
 ];
 
 // Core quant seats (mesh/shadow seats alag se gate hote hain).

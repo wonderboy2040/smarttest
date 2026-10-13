@@ -784,7 +784,12 @@ const GROWW_INDEX_PAGES = {
 // LOT_SIZES ke saath sync me rakhna hai.
 const NSE_STATIC_LOT_SIZES = { NIFTY: 75, BANKNIFTY: 35, FINNIFTY: 65, MIDCPNIFTY: 140, NIFTYNXT50: 25 };
 const GROWW_CHAIN_TTL = 90 * 1000;      // re-fetch at most every 90s
-const GROWW_NEG_MS = 5 * 60 * 1000;     // back off 5 min after a failure
+// v21.7.0 (Issue-1): 5 min → 90s — NSE-direct 403 hone par Groww mirror
+// hi live premiums ka source hai; ek transient blip (timeout/CDN hiccup)
+// poore 5 min tak NIFTY/SENSEX cards ko BS-model premiums par dhakel
+// deta tha (user ko "entry/exit galat" dikhta tha). 90s negative hold
+// recovery 3x fast hai, abuse-guard bana rehta hai.
+const GROWW_NEG_MS = 90 * 1000;     // back off 90s after a failure
 const GROWW_HEADERS = {
   'User-Agent': UA,
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',

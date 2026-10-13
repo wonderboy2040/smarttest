@@ -624,6 +624,16 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
 // Options desk fetch (per-index, on demand with 60s client cache).
 const deskCache = new Map<string, { at: number; data: OptionsDesk }>();
 
+// v21.7.0 (Issue-1) STALE-FOREVER FIX: error fallbacks pehle LAST-CACHED
+// payload ko hamesha ke liye serve karte the (koi max-age nahi) — ek lambi
+// backend hiccup/session-expiry par F&O cards ghanton-purane entry/exit
+// dikhate rehte the aur "live" lagte the. Ab har options-family fallback
+// MAX-AGE capped hai: signal cards (trade decisions) 2 min, desk 10 min,
+// scan 2 min. Uske baad null → UI honest STALE/error state dikhaata hai.
+const OPTION_SIGNALS_STALE_MAX_MS = 2 * 60_000;
+const OPTIONS_DESK_STALE_MAX_MS = 10 * 60_000;
+const OPTIONS_SCAN_STALE_MAX_MS = 2 * 60_000;
+
 // v20.2 DESKTOP PUSH — fires a native OS notification when a NEW
 // STRONG/ELITE signal lands on any served board while the tab is
 // hidden (the visible tab doesn't need a toast — it IS the display).
@@ -663,25 +673,26 @@ export async function fetchOptionsDesk(symbol: string, force = false): Promise<O
   if (!force && hit && Date.now() - hit.at < 60_000) return hit.data;
   try {
     const r = await apiFetch(`${getProxyBase()}/api/ai/options?symbol=${symbol}&t=${Date.now()}`, { signal: AbortSignal.timeout(30000) });
-    if (!r.ok) return hit?.data || null;
+    if (!r.ok) return (hit && Date.now() - hit.at < OPTIONS_DESK_STALE_MAX_MS) ? hit.data : null;
     const data = await r.json();
     deskCache.set(symbol, { at: Date.now(), data });
     return data;
-  } catch { return hit?.data || null; }
+  } catch { return (hit && Date.now() - hit.at < OPTIONS_DESK_STALE_MAX_MS) ? hit.data : null; }
 }
 
-// v9.4 — F&O OPTION SIGNAL CARDS (NIFTY + SENSEX, one request, 60s
-// client cache; server side is 30s cached anyway).
+// v9.4 — F&O OPTION SIGNAL CARDS (NIFTY + SENSEX, one request; client
+// cache 30s = server's 30s re-rank cadence — v21.7.0: 60s se 30s, har
+// strip poll fresh view laata hai).
 let _optSigCache: { at: number; data: OptionSignalsView } | null = null;
 export async function fetchOptionSignals(force = false): Promise<OptionSignalsView | null> {
-  if (!force && _optSigCache && Date.now() - _optSigCache.at < 60_000) return _optSigCache.data;
+  if (!force && _optSigCache && Date.now() - _optSigCache.at < 30_000) return _optSigCache.data;
   try {
     const r = await apiFetch(`${getProxyBase()}/api/ai/option-signals?t=${Date.now()}`, { signal: AbortSignal.timeout(30000) });
-    if (!r.ok) return _optSigCache?.data || null;
+    if (!r.ok) return (_optSigCache && Date.now() - _optSigCache.at < OPTION_SIGNALS_STALE_MAX_MS) ? _optSigCache.data : null;
     const data = await r.json();
     _optSigCache = { at: Date.now(), data };
     return data;
-  } catch { return _optSigCache?.data || null; }
+  } catch { return (_optSigCache && Date.now() - _optSigCache.at < OPTION_SIGNALS_STALE_MAX_MS) ? _optSigCache.data : null; }
 }
 
 // v10.17 — WHOLE-F&O OPTIONS SCANNER (indices + top stock underlyings,
@@ -691,11 +702,11 @@ export async function fetchOptionsScan(force = false): Promise<OptionsScanView |
   if (!force && _optScanCache && Date.now() - _optScanCache.at < 45_000) return _optScanCache.data;
   try {
     const r = await apiFetch(`${getProxyBase()}/api/ai/options-scan${force ? '?fresh=1' : ''}`, { signal: AbortSignal.timeout(45000) });
-    if (!r.ok) return _optScanCache?.data || null;
+    if (!r.ok) return (_optScanCache && Date.now() - _optScanCache.at < OPTIONS_SCAN_STALE_MAX_MS) ? _optScanCache.data : null;
     const data = await r.json();
     _optScanCache = { at: Date.now(), data };
     return data;
-  } catch { return _optScanCache?.data || null; }
+  } catch { return (_optScanCache && Date.now() - _optScanCache.at < OPTIONS_SCAN_STALE_MAX_MS) ? _optScanCache.data : null; }
 }
 
 // v10.17 — CLEAR CLOSED POSITIONS (Execution Console button). Server

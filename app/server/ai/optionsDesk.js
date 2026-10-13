@@ -1161,7 +1161,11 @@ export async function getOptionSignalsView(deps, symbols = ['NIFTY', 'SENSEX']) 
       const s = String(sym || '').toUpperCase();
       const desk = await getOptionsDesk(s);
       if (!desk?.ok) return { symbol: s, ok: false, reason: desk?.reason || 'desk unavailable' };
-      const deep = await getDeepSignal(s, 'INDIA', deps, { optionsCtx: desk.optionsCtx }).catch(() => null);
+      // v21.7.0 (Issue-1): liveSpot pass — options-flavor deep signal ka
+      // index plan ab LIVE desk spot par anchor hota hai (Yahoo daily
+      // close nahi) + 15m ATR geometry (signals.js buildOptionsPlanCtx).
+      // Entry/exit cards ka index-level geometry real market se aligned.
+      const deep = await getDeepSignal(s, 'INDIA', deps, { optionsCtx: desk.optionsCtx, liveSpot: desk.spot }).catch(() => null);
       const consensus = deep?.ok
         ? { side: deep.signal.side, confidence: deep.signal.confidence, grade: deep.signal.grade }
         : { side: 'FLAT', confidence: 0, grade: 'NEUTRAL' };
