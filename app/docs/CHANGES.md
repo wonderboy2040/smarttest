@@ -1,5 +1,30 @@
 # Changelog
 
+## v21.10.0 — LAYA BIND-WAR FIX (watchdog crash-loop) (2026-10-14)
+
+**User report: "Start-SmartAI-Watchdog.bat run karne par logs me Laya ka crash-loop dikh raha hai"** — log me `[Errno 10048] error while attempting to bind on address ('127.0.0.1', 8000)` → `exit(3)` → `restart #1 5s → #2 10s → #3 20s → #4 40s` infinite, saath me misleading `[laya] READY (8.1s)` lines aur `[selfheal] EVENT-LOOP FREEZE detected — worst lag 5.9s`.
+
+### ROOT CAUSE (log se reconstruct)
+`Start-SmartAI-Watchdog.bat` ka Laya fallback block **unconditionally** chalta tha (LAYA_AUTOSTART check hi nahi karta tha). User ke `.env` me `LAYA_AUTOSTART=1` hai → supervisor sidecar **bhi** laya-serve spawn karta hai. Bat ka 2s `curl` probe booting-laye ko miss kar deta tha (laya-serve ~8-10s me bind hota hai — "Fetching 5 files" + router init) → **DONO ne spawn kiya**. Naya process `[Errno 10048]` (port already bound) pe `exit(3)` karta hai; sidecar ka `/health` probe BAT-wale healthy instance se OK milta hai (isliye "READY (8.1s)" misleading) — par exit-handler blindly restart schedule karta tha → infinite crash-loop. Har restart weights fetch + router load karta tha → CPU churn → event-loop freeze warnings. Site isliye "working fine" thi ki BAT-wala laya port pe healthy baitha tha — bas console war me tha.
+
+### FIX 1 — Sidecar CONFLICT RESOLVER (`server/layaSidecar.js`, 5 naye layers)
+- **ADOPT-WINDOW**: init me port occupied+unhealthy mile (timeout/reset, NOT `ECONNREFUSED`) to blind-spawn NAHI — `LAYA_ADOPT_WINDOW_MS` (default 20s) tak poll; booting laya healthy hote hi ADOPT. Live bug me yahi war rok deta: bat ka laya 8-10s me bind hota aur sidecar usse adopt kar leta.
+- **EXIT-RECONCILE**: spawn ke exit ke baad port dobara probe (3 sequential, gap `LAYA_ADOPT_POLL_MS`). Healthy Laya mile → restart **CANCEL** + **ADOPT** (`conflict-exit(...)-healthy-port`) — war khatam, `conflicts` counter status me expose.
+- **ZOMBIE CLEANUP**: quick bind-conflict exit (`<60s`, kabhi ready nahi) + port occupied-unhealthy → squatter pehchaan: win32 `netstat -ano` + `tasklist /FO CSV`, POSIX `lsof` + `ps`. Image `laya-serve` ho (hung zombie — user ka original "background me running phir bhi no response" case) → `taskkill /F /T` + backoff reset + 1.5s me fresh spawn.
+- **FOREIGN GUARD**: port pe koi AUR app baithi ho → **KABHI kill nahi** — honest `gave-up` (`port-occupied-foreign`) + actionable log (`.env` me `LAYA_BASE_URL` port badlo ya app band karo). War against innocent app impossible.
+- **STALE-GUARDS**: `epoch` generation counter — naya spawn/adopt hone par purane async reconcile no-op (double-restart race impossible).
+
+### FIX 2 — Bat WAR-PROOF single-owner (`Start-SmartAI-Watchdog.bat` v21.10)
+Naya `scripts/laya-autostart-check.mjs`: bat ab **node se** puchta hai ki Laya start karne ka kaam kiska hai. Script sidecar ke EXACT parser (`parseDotEnvKeys` — BOM/CRLF/quotes/comments) aur armed-conditions (`LAYA_AUTOSTART=1 + LAYA_ENABLED=1 + LAYA_API_KEY + loopback`) use karti hai → **dono layers kabhi disagree nahi kar sakte**. Sidecar armed → bat-block SKIP (`LAYA_BAT_FALLBACK=0`) → double-spawn structurally impossible. Script fail/missing ho → purana fallback behaviour (safety).
+
+### FIX 3 — `start-laya.cmd` hardening
+(1) Pre-flight `/health` curl check — healthy laya already chal raha ho to double start nahi; (2) laya-serve exit≠0 par **error dikhana + pause** — pehle `[Errno 10048]` wali window turant band ho jaati thi, error chhup jaata tha; ab `netstat -ano | findstr :8000` hint ke saath dikhta hai.
+
+### REGRESSION LOCKS
+- Parsers unit-locked: `parseNetstatListeningPids` (IPv4+IPv6+dup+non-LISTENING+port-mismatch), `parseTasklistImage` (CSV+INFO line+empty), `parseLsofPids`.
+- Naye `test/layaConflict.test.ts` flows: window→adopt (war avoided), window-expiry→zombie→kill→fresh spawn, window-expiry→foreign→give-up (no kill), exit-reconcile→conflict-adopt (crash-loop cancel + backoff reset), exit-reconcile→zombie (fast respawn), exit-reconcile→refused (normal backoff intact — purana contract), ready-child exit (no zombie hunt), `laya-autostart-check.mjs` real exit-code matrix (env-armed=0 / .env-adha=1 / missing=1), bat/cmd source contracts (war-guard present, CRLF-strict).
+- Existing 21.4/21.5 sidecar contracts (spawn env/masking, backoff 5→60s, budget pause, adopt/stop semantics) untouched-pass.
+
 ## v21.9.0 — XAU/XAG METALS RESCUE + LAYA AUTO-LINK (2026-10-14)
 
 **User report: "CoinDCX tab me Gold & silver (XAU & XAG) me koi trade signals nahi dikh rahe — No metals data reachable (CoinDCX futures RT + Binance fapi both unavailable for XAU/XAG)" + "Bot Lab aur Superintelligence Signal Board me Laya ka koi feature useable nahi — laya background me running phir bhi no_laya_instance"**

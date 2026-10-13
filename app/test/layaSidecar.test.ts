@@ -587,7 +587,7 @@ describe('layaSidecar — SOURCE contracts (plan §3)', () => {
   });
 
   it('layaSidecar.js: saare journal events + safety rules', () => {
-    for (const ev of ['laya-start', 'laya-ready', 'laya-adopted', 'laya-crash', 'laya-hang-restart', 'laya-giveup', 'laya-stop', 'laya-budget-pause']) {
+    for (const ev of ['laya-start', 'laya-ready', 'laya-adopted', 'laya-crash', 'laya-hang-restart', 'laya-giveup', 'laya-stop', 'laya-budget-pause', 'laya-zombie-kill']) {
       expect(SERVER_SRC).toContain(`'${ev}'`);
     }
     expect(SERVER_SRC).toContain('taskkill');
@@ -596,12 +596,16 @@ describe('layaSidecar — SOURCE contracts (plan §3)', () => {
     expect(SERVER_SRC).toContain('LOOPBACK_HOSTS');
   });
 
-  it('Watchdog bat: Laya block (health-check + start-laya.cmd) + v21.6.0', () => {
-    expect(BAT_SRC).toContain('v21.6.0');
+  it('Watchdog bat: Laya block (health-check + start-laya.cmd) + v21.10 war-guard', () => {
+    expect(BAT_SRC).toContain('v21.10.0');
     expect(BAT_SRC).toContain('start-laya.cmd');
     expect(BAT_SRC).toContain('curl.exe -s -m 2 http://127.0.0.1:8000/health');
     expect(BAT_SRC).toContain('start "Laya AI" /min cmd /c "%~dp0start-laya.cmd"');
     expect(BAT_SRC).toContain('pehle se chal raha hai');
+    // v21.10: single-owner guard — bat sidecar-armed hone par SKIP
+    expect(BAT_SRC).toContain('laya-autostart-check.mjs');
+    expect(BAT_SRC).toContain('LAYA_BAT_FALLBACK');
+    expect(BAT_SRC).toContain('bat fallback SKIP');
   });
 
   it('bat + start-laya.cmd pure CRLF hain (v21.1.0 lesson)', () => {

@@ -1,8 +1,28 @@
 #!/usr/bin/env node
 // ============================================================
-// server/layaSidecar.js — v21.4.0 LAYA SIDECAR (watchdog-managed
+// server/layaSidecar.js — v21.10.0 LAYA SIDECAR (watchdog-managed
 //                                                local AI)
 // ------------------------------------------------------------
+// v21.10 CONFLICT RESOLVER (live bug: bind-war crash-loop):
+//   User log: watchdog start → "[Errno 10048] bind on 127.0.0.1:8000"
+//   → exit(3) → restart #1 5s → #2 10s → #3 20s → #4 40s … infinite.
+//   Wajah: bat ka Laya fallback block + ye sidecar DONO laya-serve
+//   spawn kar dete the (bat ka 2s curl-probe fail hua kyunki laya
+//   ~8-10s me bind hota hai) → do process, ek port → naya wala har
+//   baar 10048 pe mara, aur /health PURANE healthy instance se OK —
+//   "READY" log bhi misleading tha. Teen naye layers:
+//   8. ADOPT-WINDOW — init me port occupied+unhealthy mile (timeout/
+//      reset, NOT refused) to blind-spawn NAHI — laya booting ho sakta
+//      hai; LAYA_ADOPT_WINDOW_MS tak poll, healthy hote hi ADOPT.
+//   9. EXIT-RECONCILE — spawn ke exit ke baad port dobara probe:
+//      healthy laya mila to restart CANCEL + ADOPT (war khatam);
+//      quick bind-conflict exit + occupied-unhealthy port tha to
+//      squatter pehchaan (netstat/tasklist · lsof/ps) — hung laya-serve
+//      = taskkill + fresh spawn; FOREIGN app = kabhi kill nahi,
+//      honest give-up + actionable message.
+//  10. Bat ab scripts/laya-autostart-check.mjs se puchta hai —
+//      LAYA_AUTOSTART=1 hai to bat-block SKIP (single-owner).
+//
 // MAQSAD: Start-SmartAI-Watchdog.bat double-click karte hi site
 // + Laya (local open-weight AI) DONO up hon, aur Laya ko bhi site
 // jaisa protection mile: auto-restart, hang detect, clean shutdown.
@@ -61,6 +81,11 @@
 //   LAYA_PROBE_MS=30000     LAYA_PROBE_TIMEOUT_MS=3000
 //   LAYA_BACKOFF_BASE_MS=5000  LAYA_BACKOFF_MAX_MS=60000
 //   LAYA_MAX_RESTARTS_HOUR=10  LAYA_BUDGET_PAUSE_MS=600000
+//   --- v21.10 conflict resolver ---
+//   LAYA_ADOPT_WINDOW_MS=20000     # port occupied+booting patience
+//   LAYA_ADOPT_POLL_MS=1000        # adopt-window probe gap
+//   LAYA_CONFLICT_ZOMBIE_KILL=1    # hung laya-serve squatter taskkill
+//                                   # (foreign app ko KABHI kill nahi)
 // ============================================================
 import path from 'node:path';
 import http from 'node:http';
@@ -69,6 +94,46 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
+
+// v21.10: netstat -ano -p tcp output se LISTENING pids nikaalo (win32
+// squatter pehchaan). Lines: `  TCP  127.0.0.1:8000  0.0.0.0:0  LISTENING  4712`
+export function parseNetstatListeningPids(text, port) {
+  const out = [];
+  const want = String(port);
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const m = raw.trim().match(/^TCP\s+(\S+)\s+\S+\s+LISTENING\s+(\d+)$/i);
+    if (!m) continue;
+    const local = m[1];
+    const p = local.substring(local.lastIndexOf(':') + 1);
+    if (p === want) {
+      const pid = parseInt(m[2], 10);
+      if (Number.isFinite(pid) && pid > 0 && !out.includes(pid)) out.push(pid);
+    }
+  }
+  return out;
+}
+
+// v21.10: tasklist /FO CSV /NH output se image name — pehla quoted field.
+// `"laya-serve.exe","4712","Console","1","5,840 K"` → laya-serve.exe
+export function parseTasklistImage(text) {
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || /^INFO:/i.test(line)) continue;
+    const m = line.match(/^"?([^",]+)"?/);
+    if (m && m[1].trim()) return m[1].trim();
+  }
+  return '';
+}
+
+// v21.10: lsof -ti tcp:PORT -sTCP:LISTEN output → pids (POSIX path).
+export function parseLsofPids(text) {
+  const out = [];
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const n = parseInt(raw.trim(), 10);
+    if (Number.isFinite(n) && n > 0 && !out.includes(n)) out.push(n);
+  }
+  return out;
+}
 
 // v21.5.0 (laya fast): warmup inference payload — minimal par contract-
 // valid (state + choice question). Response ignore hota hai; maqsad sirf
@@ -207,6 +272,10 @@ export function createLayaSidecar(opts = {}) {
     backoffMaxMs: _int(val('LAYA_BACKOFF_MAX_MS'), 60000, 4000, 900000),
     maxRestartsHour: _int(val('LAYA_MAX_RESTARTS_HOUR'), 10, 2, 1000),
     budgetPauseMs: _int(val('LAYA_BUDGET_PAUSE_MS'), 600000, 10000, 86400000),
+    // v21.10 (conflict resolver): port bind-war fix knobs
+    adoptWindowMs: _int(val('LAYA_ADOPT_WINDOW_MS'), 20000, 500, 600000),
+    adoptPollMs: _int(val('LAYA_ADOPT_POLL_MS'), 1000, 200, 30000),
+    zombieKill: String(val('LAYA_CONFLICT_ZOMBIE_KILL') ?? '1') !== '0',
     // v21.5.0 (laya fast): boot warmup — default ON, key/loopback required
     warmup: String(val('LAYA_WARMUP') ?? '1') !== '0',
     warmupTimeoutMs: _int(val('LAYA_WARMUP_TIMEOUT_MS'), 30000, 1000, 300000),
@@ -235,6 +304,9 @@ export function createLayaSidecar(opts = {}) {
     lastProbeResult: null,
     tickTimer: null,
     lastWarmupAt: 0,   // v21.5.0: warmup rate-limit (10 min gap)
+    epoch: 0,          // v21.10: spawn/adopt generation — stale async reconcile guard
+    conflicts: 0,      // v21.10: bind-war resolves (adopt-on-conflict + zombie kill)
+    childEverReady: false, // v21.10: is spawn-ki-zindagi me kabhi ready hua? (quick-conflict heuristic)
   };
 
   const now = () => deps.nowFn();
@@ -262,6 +334,7 @@ export function createLayaSidecar(opts = {}) {
       readyMs: st.readyMs,
       restarts: st.restarts,
       failStreak: st.failStreak,
+      conflicts: st.conflicts,   // v21.10: bind-war resolve count (observability)
     };
   }
 
@@ -335,6 +408,105 @@ export function createLayaSidecar(opts = {}) {
     cfg.device = dev;
     journal({ ev: 'laya-device', device: dev, source: 'auto' });
     log(`[laya] LAYA_DEVICE=auto → ${dev}${dev === 'cuda' ? ' (NVIDIA GPU mila — inference ~10-50× fast)' : ' (GPU nahi mila — cpu pe chalega)'}`);
+  }
+
+  // ---------- v21.10: conflict-resolver helpers ----------
+  // Real-timer sleep (unref'd) — injectable fake timers se NAHI, kyunki
+  // purane test-scaffolds ke fake setTimeout kabhi fire nahi hote aur
+  // async flows atke rehte. Tests chhote knob values (1-200ms) use
+  // karte hain taaki real waits negligible rahein.
+  function _sleep(ms) {
+    return new Promise((resolve) => {
+      try {
+        const t = setTimeout(resolve, Math.max(0, ms));
+        if (t && typeof t.unref === 'function') t.unref();
+      } catch { resolve(); }
+    });
+  }
+
+  // Command output capture (netstat/tasklist/ps/lsof/kill) — har path
+  // bounded, never-fatal. 'close' ya 'exit' (jo pehle) + timeout net.
+  function _runCapture(cmd, args, timeoutMs = 5000) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let out = '';
+      const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+      try {
+        const child = deps.spawnFn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+        const t = deps.setTimeoutFn(() => { try { child.kill?.(); } catch { /* noop */ } done(out); }, timeoutMs);
+        const onData = (d) => { try { out += String(d || ''); } catch { /* never fatal */ } };
+        try {
+          child.stdout?.on?.('data', onData);
+          child.stderr?.on?.('data', onData);
+        } catch { /* pipe wire best-effort */ }
+        child.on?.('error', () => { try { deps.clearTimeoutFn(t); } catch { /* noop */ } done(out); });
+        child.on?.('close', () => { try { deps.clearTimeoutFn(t); } catch { /* noop */ } done(out); });
+        child.on?.('exit', () => { try { deps.clearTimeoutFn(t); } catch { /* noop */ } done(out); });
+      } catch { done(out); }
+    });
+  }
+
+  function _isLayaImage(squatter) {
+    // win32: image = tasklist exe naam; POSIX: comm ("MainThread" ho
+    // sakta hai modern node/python pe) + full cmdline dono check —
+    // venv shim `/…/bin/laya-serve` args me dikhta hai.
+    const img = String(squatter?.image || '').toLowerCase();
+    const cmdline = String(squatter?.cmdline || '').toLowerCase();
+    return img.includes('laya-serve') || cmdline.includes('laya-serve');
+  }
+
+  // Port squatter pehchaan — win32: netstat+tasklist; POSIX: lsof+ps.
+  // Return { pid, image, cmdline? } | null (unknown/free).
+  async function _findPortSquatter() {
+    try {
+      if (deps.platformFn() === 'win32') {
+        const net = await _runCapture('netstat', ['-ano', '-p', 'tcp']);
+        const pids = parseNetstatListeningPids(net, cfg.port);
+        if (!pids.length) return null;
+        const pid = pids[0];
+        const tl = await _runCapture('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH']);
+        return { pid, image: parseTasklistImage(tl) };
+      }
+      const lsof = await _runCapture('lsof', ['-ti', `tcp:${cfg.port}`, '-sTCP:LISTEN']);
+      const pids = parseLsofPids(lsof);
+      if (!pids.length) return null;
+      const pid = pids[0];
+      const comm = String(await _runCapture('ps', ['-p', String(pid), '-o', 'comm=']) || '').trim();
+      const cmdline = String(await _runCapture('ps', ['-p', String(pid), '-o', 'args=']) || '').trim();
+      return { pid, image: comm || (cmdline.split(/\s+/).pop() || ''), cmdline };
+    } catch { return null; }
+  }
+
+  async function _killSquatter(pid) {
+    try {
+      if (deps.platformFn() === 'win32') {
+        await _runCapture('taskkill', ['/F', '/T', '/PID', String(pid)], 8000);
+      } else {
+        await _runCapture('kill', ['-9', String(pid)], 8000);
+      }
+      return true;
+    } catch { return false; }
+  }
+
+  // ADOPT state-transition (init-first-probe / adopt-window / conflict-
+  // exit teeno paths share karte hain). conflict=true → war counters
+  // reset + pending restart cancel + conflicts++ (observability).
+  function _becomeAdopted(reason, msg, { conflict = false } = {}) {
+    st.phase = 'adopted';
+    st.owned = false;
+    st.child = null;
+    st.hasEverReady = true;
+    st.epoch++;
+    if (conflict) {
+      st.conflicts++;
+      st.backoffDelayMs = cfg.backoffBaseMs;
+      st.nextRestartAt = 0; // pending crash-restart CANCEL — war khatam
+    }
+    try { deps.clearIntervalFn(st.tickTimer); } catch { /* noop */ }
+    st.tickTimer = null; // adopted process ka koi timer nahi (design §3.1)
+    journal({ ev: 'laya-adopted', reason, baseUrl: cfg.baseUrl });
+    log(msg);
+    _warmup('adopted');
   }
 
   // ---------- health probe (supervisor probeOnce pattern) ----------
@@ -499,20 +671,32 @@ export function createLayaSidecar(opts = {}) {
     st.phase = 'starting';
     st.spawnedAt = now();
     st.failStreak = 0;
+    st.childEverReady = false; // v21.10: quick-conflict heuristic reset
+    st.epoch++;                // v21.10: stale async reconcile invalidate
     _relay(child);
     try {
       child.on('error', (err) => {
         if (st.shuttingDown) return;
         journal({ ev: 'laya-crash', reason: 'spawn-error', detail: String(err && err.code || err).slice(0, 80) });
         st.child = null;
+        // v21.10: spawn-error (ENOENT/EACCES) pe bhi reconcile — port pe
+        // healthy Laya already baitha ho to adopt (crash-loop nahi)
+        const myEpoch = st.epoch;
         _scheduleRestart('spawn-error');
+        _reconcileExit({ code: null, signal: null, quick: true, epoch: myEpoch });
       });
       child.on('exit', (code, signal) => {
         if (st.shuttingDown) return; // stop() owns the shutdown journal
         journal({ ev: 'laya-crash', reason: `exit(${signal || code})`, code, signal });
         log(`[laya] process band hua (${signal || `code ${code}`}) — auto-restart backoff me.`);
         st.child = null;
+        // v21.10: restart SYNC schedule (purana contract) — par agar port
+        // pe koi healthy Laya already baitha hai (bind-war) to async
+        // reconcile us restart ko CANCEL karke ADOPT karega.
+        const myEpoch = st.epoch;
+        const quick = !st.childEverReady && (now() - st.spawnedAt) < 60000;
         _scheduleRestart(`exit(${signal || code})`);
+        _reconcileExit({ code, signal, quick, epoch: myEpoch });
       });
     } catch { /* wiring never fatal */ }
     return child;
@@ -527,6 +711,7 @@ export function createLayaSidecar(opts = {}) {
       if (result.ok) {
         const ms = t - st.spawnedAt;
         st.hasEverReady = true;
+        st.childEverReady = true; // v21.10
         st.readyMs = ms;
         st.phase = 'ready';
         st.failStreak = 0;
@@ -595,18 +780,137 @@ export function createLayaSidecar(opts = {}) {
     }
   }
 
+  // ---------- v21.10: EXIT RECONCILIATION (bind-war killer) ----------
+  // Spawn ke exit ke baad port dobara probe karo. Live bug me naya
+  // laya-serve 10048 pe mar raha tha jabki port pe BAT-wala purana
+  // healthy laya chal raha tha — sidecar "READY" bhi bol raha tha
+  // (probe purane se OK) par exit-handler blindly restart karta tha
+  // → infinite crash-loop. Ab: healthy port = ADOPT (restart cancel);
+  // occupied-unhealthy + quick conflict-exit = squatter pehchaan
+  // (hung laya-serve → taskkill + fast respawn; foreign app → honest
+  // give-up, kabhi kill nahi). Stale-guards (epoch/child) har await
+  // ke baad — naya spawn ho gaya to reconcile no-op.
+  async function _reconcileExit(info) {
+    try {
+      if (st.shuttingDown || !st.started) return;
+      const stale = () => st.shuttingDown || st.epoch !== info.epoch || st.child !== null;
+      // 3 sequential probes — prod me occupied-silent port har probe
+      // apne 2s timeout tak leta hai, tabhi booting-laya ko window
+      // milti hai; refused turant fail hota hai (loop nahi).
+      let last = null;
+      for (let i = 0; i < 3; i++) {
+        last = await healthCheck(2000);
+        if (stale()) return;
+        if (last.ok) break;
+        if (i < 2) await _sleep(Math.min(cfg.adoptPollMs, 1500));
+      }
+      if (last && last.ok) {
+        _becomeAdopted(
+          `conflict-exit(${info.signal || info.code})-healthy-port`,
+          `[laya] exit ke baad :${cfg.port} pe healthy Laya mila — ADOPT kiya, crash-loop CANCEL. (Pehle do spawner ki war thi; ab single-owner.)`,
+          { conflict: true },
+        );
+        return;
+      }
+      const occupied = last && last.why !== 'ECONNREFUSED';
+      if (occupied && info.quick && cfg.zombieKill && cfg.loopback) {
+        const squatter = await _findPortSquatter();
+        if (stale()) return;
+        if (squatter && _isLayaImage(squatter)) {
+          journal({ ev: 'laya-zombie-kill', pid: squatter.pid, image: squatter.image, port: cfg.port, phase: 'exit-reconcile' });
+          log(`[laya] port :${cfg.port} pe hung laya-serve (pid ${squatter.pid}) baitha tha — taskkill karke fresh start.`);
+          await _killSquatter(squatter.pid);
+          if (stale()) return;
+          st.conflicts++;
+          st.backoffDelayMs = cfg.backoffBaseMs; // zombie hata — war counters reset
+          st.nextRestartAt = now() + 1500;       // port ab free — turant wapas
+          st.phase = 'restarting';
+          log('[laya] zombie squatter hata — 1.5s me fresh spawn.');
+          return;
+        }
+        if (squatter && squatter.image && !_isLayaImage(squatter)) {
+          // FOREIGN app — kabhi kill nahi; honest give-up + actionable msg
+          st.phase = 'gave-up';
+          st.nextRestartAt = 0; // pending restart cancel — war nahi
+          st.epoch++;
+          try { deps.clearIntervalFn(st.tickTimer); } catch { /* noop */ }
+          st.tickTimer = null;
+          journal({ ev: 'laya-giveup', reason: 'port-occupied-foreign', port: cfg.port, pid: squatter.pid, image: squatter.image, phase: 'exit-reconcile' });
+          log(`[laya] port :${cfg.port} pe "${squatter.image}" (pid ${squatter.pid}) baitha hai — ye Laya nahi hai, hum usse kill nahi karenge. .env me LAYA_BASE_URL ka port badlo ya wo app band karo. Sidecar band; site normal chalegi.`);
+          return;
+        }
+        // squatter unknown (netstat/tasklist fail) — scheduled restart
+        // hi rahega (backoff + budget contain karte hain)
+      }
+      // default: _scheduleRestart pehle se set — reconcile ne kuch nahi badla
+    } catch { /* reconcile never fatal */ }
+  }
+
   // ---------- start: adopt ya spawn (site kabhi block nahi) ----------
   async function _initFlow() {
     if (st.phase === 'disabled' || st.phase === 'off' || st.phase === 'refused') return;
-    const r = await healthCheck(2000);
-    if (r.ok) {
-      st.phase = 'adopted';
-      st.owned = false;
-      st.hasEverReady = true;
-      journal({ ev: 'laya-adopted', reason: 'health-already-200', baseUrl: cfg.baseUrl });
-      log('[laya] pehle se chal raha hai (/health OK) — ADOPT kiya (double spawn nahi). Watchdog band hone par ye wala process nahi maarega.');
-      _warmup('adopted'); // v21.5.0: adopted server ka bhi cold-start absorb
+    const first = await healthCheck(2000);
+    if (first.ok) {
+      _becomeAdopted(
+        'health-already-200',
+        '[laya] pehle se chal raha hai (/health OK) — ADOPT kiya (double spawn nahi). Watchdog band hone par ye wala process nahi maarega.',
+      );
       return;
+    }
+    if (first.why === 'ECONNREFUSED') {
+      // port bilkul free — safe spawn (purana fast path)
+      _spawn();
+      return;
+    }
+    // v21.10 ADOPT-WINDOW: port OCCUPIED hai par /health nahi de raha
+    // (timeout/reset) — koi laya booting ho sakta hai (live bug: bat ka
+    // laya ~8-10s me bind hota tha; blind spawn = guaranteed 10048 war).
+    // Patience window tak poll — healthy hote hi ADOPT.
+    const winStart = now();
+    log(`[laya] port :${cfg.port} occupied hai par /health abhi nahi de raha (${first.why}) — ${Math.round(cfg.adoptWindowMs / 1000)}s adopt-window (booting laya ka intezaar; blind spawn se 10048 war nahi).`);
+    for (;;) {
+      const r = await healthCheck(2000);
+      if (st.shuttingDown) return;
+      if (r.ok) {
+        _becomeAdopted(
+          'adopt-window-healthy',
+          `[laya] adopt-window me :${cfg.port} healthy ho gaya — ADOPT kiya (blind spawn nahi hua, 10048 war nahi hui).`,
+        );
+        return;
+      }
+      if (r.why === 'ECONNREFUSED') {
+        // booting wala mar gaya — port ab free
+        _spawn();
+        return;
+      }
+      if (now() - winStart >= cfg.adoptWindowMs) break;
+      await _sleep(cfg.adoptPollMs);
+    }
+    // Window khatam — port ab bhi occupied + unhealthy. Zombie laya hai
+    // to hata ke fresh spawn; foreign app hai to give-up (kill kabhi nahi);
+    // pehchaan na ho to best-effort spawn (reconcile+backoff contain).
+    if (cfg.zombieKill && cfg.loopback) {
+      const squatter = await _findPortSquatter();
+      if (!st.shuttingDown) {
+        if (squatter && _isLayaImage(squatter)) {
+          journal({ ev: 'laya-zombie-kill', pid: squatter.pid, image: squatter.image, port: cfg.port, phase: 'init-window' });
+          log(`[laya] adopt-window khatam — port :${cfg.port} pe hung laya-serve (pid ${squatter.pid}) tha. taskkill + fresh spawn.`);
+          await _killSquatter(squatter.pid);
+          st.conflicts++;
+          if (!st.shuttingDown) {
+            _spawn();
+            return;
+          }
+        } else if (squatter && squatter.image && !_isLayaImage(squatter)) {
+          st.phase = 'gave-up';
+          st.epoch++;
+          try { deps.clearIntervalFn(st.tickTimer); } catch { /* noop */ }
+          st.tickTimer = null;
+          journal({ ev: 'laya-giveup', reason: 'port-occupied-foreign', port: cfg.port, pid: squatter.pid, image: squatter.image, phase: 'init-window' });
+          log(`[laya] port :${cfg.port} pe "${squatter.image}" (pid ${squatter.pid}) baitha hai — ye Laya nahi hai, hum usse kill nahi karenge. .env me LAYA_BASE_URL ka port badlo ya wo app band karo. Sidecar band; site normal chalegi.`);
+          return;
+        }
+      }
     }
     _spawn();
   }
@@ -646,7 +950,7 @@ export function createLayaSidecar(opts = {}) {
       log(`[laya] LAYA_BASE_URL non-loopback hai (${cfg.baseUrl}) — autostart REFUSED (security: sirf 127.0.0.1). Site normal chalegi.`);
       return null;
     }
-    log(`[laya] sidecar armed — base ${cfg.baseUrl} | probe ${Math.round(cfg.probeMs / 1000)}s | threads ${cfg.threads} | device ${cfg.device}`);
+    log(`[laya] sidecar armed — base ${cfg.baseUrl} | probe ${Math.round(cfg.probeMs / 1000)}s | threads ${cfg.threads} | device ${cfg.device} | war-guard ON (v21.10: adopt-window ${Math.round(cfg.adoptWindowMs / 1000)}s + conflict-reconcile${cfg.zombieKill ? ' + zombie-kill' : ''})`);
     // Site kabhi Laya ka intezaar nahi karti — init flow fire-and-forget.
     // v21.5.0: device auto-detect (sirf LAYA_DEVICE=auto pe) spawn se
     // PEHLE — spawn env me final device value jaati hai.
@@ -689,6 +993,8 @@ export function createLayaSidecar(opts = {}) {
       healthCheck, onHealthResult, _tick, _spawn, _initFlow,
       forceKill, _exePath, _exeMissing, _reloadDotEnv, _mask, _scheduleRestart,
       _warmup, _endpoint, _probeNvidia, _detectDevice, // v21.5.0
+      _reconcileExit, _becomeAdopted, _findPortSquatter, _killSquatter,
+      _isLayaImage, _runCapture, _sleep, // v21.10 conflict resolver
     },
   };
 }
