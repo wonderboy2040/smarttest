@@ -55,7 +55,7 @@ const INDEX_SYMBOLS = new Set([
 // Groww calls ride the 3s micro-cache shared with /api/quote + the SSE
 // poller, so 34 symbols × every 5s is still one digit % of the cache's
 // dedupe budget.
-const MAX_WATCH_NSE = 34;
+const MAX_WATCH_NSE = 56; // v21.13: 34 → 56 — MAX_PER_DAY (80) ke against cap mismatch; busy days me late tracked rows ab quotes se starve nahi hote (Groww calls 3s micro-cache pe ride)
 const MAX_WATCH_CRYPTO = 40; // v21.4.1 [C5]: 14 → 40 — fetch ek hi batched ticker round hai, slice sirf map-lookup tha; 14 ke baad wali tracked rows kabhi evaluate hi nahi hoti thi (reconcile zombies)
 
 let _deps = null;               // { fetchGrowwNseQuote, fetchCoinDcxTickers, sendTelegramRaw, escapeHtml, dispatchOutcomeAlert }

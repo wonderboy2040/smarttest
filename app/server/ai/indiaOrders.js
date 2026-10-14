@@ -103,8 +103,9 @@ export async function executeIndiaSignal(opts) {
 
   // PAPER/NOTIFY practice fallback — same honesty as the crypto path, plus
   // v9.0.2 side-flip + below-floor coverage (the "paper trading start hi
-  // nhi ho raha" fix): synthesize a practice plan at the live price for
-  // the requested side, journal the real fresh grade.
+  // nhi ho raha" fix). v21.13: a FLIPPED fresh consensus REALIGNS the
+  // trade to the engine's current side; FLAT/planless synthesizes at the
+  // live price for the requested side. Journal keeps the real fresh grade.
   let effectiveSignal = signal;
   let synthNote = null;
   // v12.7 (recheck R1-#9): an ABSENT side no longer silently defaults
@@ -117,11 +118,16 @@ export async function executeIndiaSignal(opts) {
   const sideConflict = signal.side !== 'FLAT' && signal.side !== reqSide;
   const belowFloor = signal.grade !== 'STRONG' && signal.grade !== 'ACTION';
   if (wantMode !== 'live' && (sideConflict || signal.side === 'FLAT' || !signal.plan)) {
-    const synthPlan = buildTradePlan({ side: reqSide, dir: reqSide === 'LONG' ? 1 : -1 }, { ltp: signal.ltp, ind: {} }, 'INDIA');
+    // v21.13 FLIP REALIGN (crypto path ke saath parity): sideConflict me
+    // pehle trade STALE clicked side pe khulta tha — engine ki fresh view
+    // ke AGAINST entry. Ab fresh DIRECTIONAL consensus ki side hi practice
+    // hoti hai; FLAT/planless (direction-less) hi requested side pe synth.
+    const openSide = sideConflict ? signal.side : reqSide;
+    const synthPlan = buildTradePlan({ side: openSide, dir: openSide === 'LONG' ? 1 : -1 }, { ltp: signal.ltp, ind: {} }, 'INDIA');
     if (synthPlan && signal.ltp > 0) {
-      effectiveSignal = { ...signal, side: reqSide, plan: synthPlan };
+      effectiveSignal = { ...signal, side: openSide, plan: synthPlan };
       synthNote = sideConflict
-        ? `practice plan @ live price (fresh consensus FLIPPED: ${signal.side} ${signal.confidence}%)`
+        ? `REALIGNED to fresh consensus ${signal.side} ${signal.confidence}% (clicked card was stale-flipped; engine's current view hi practice hota hai)`
         : `practice plan @ live price (fresh consensus: ${signal.side} ${signal.confidence}%)`;
     }
   }
@@ -143,7 +149,11 @@ export async function executeIndiaSignal(opts) {
   }
 
   const verdict = evaluateExecutionGate(effectiveSignal, {
-    side: side || effectiveSignal.side,
+    // v21.13: PAPER/NOTIFY practice the REALIGNED trade side se gate hota
+    // hai (fresh view pe realign, phir chase/UCV/grade vetoes guard karte
+    // hain). LIVE keeps the STRICT requested-vs-fresh match — the
+    // no-auto-flip veto is LIVE-only by design (kabhi silent flip nahi).
+    side: wantMode === 'live' ? (side || effectiveSignal.side) : (effectiveSignal.side || side),
     gates: { minConfidence: cfg.minConfidence, minAgreement: cfg.minAgreement },
     requireStrong: wantMode === 'live',
     maxAgeMs: wantMode === 'live' ? 90_000 : 600_000,

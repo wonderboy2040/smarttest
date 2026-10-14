@@ -37,6 +37,14 @@
 import { istMinutes, marketPhaseFor, paceRelVolume } from './time.js';
 // v11.1 GAP 2 — circuit-limit guard (pure helpers, no fetch)
 import { entryCircuitRisk } from '../ai/circuitGuard.js';
+// v21.13.0 — the pure chase/entry-timing guard (entryTiming.js has ZERO
+// imports of its own — no cycle risk; same module the board's signalMemory
+// chase guard runs, so both desks time entries by the SAME rules).
+import {
+  entryTimingRead,
+  CHASE_HARD_CONF_CAP, CHASE_SOFT_CONF_PENALTY,
+  QUALITY_EXTENDED_CONF_PENALTY,
+} from '../ai/entryTiming.js';
 import { TV_SCAN_HEADERS } from '../lib/tvHeaders.js';
 
 export const INTRADAY_MIN_CONFIDENCE = 75;
@@ -104,15 +112,29 @@ export function isCryptoSymbolBase(sym) {
   return _knownCryptoBases.has(String(sym || '').trim().toUpperCase());
 }
 
+// v21.13.0 MOMENTUM CAPTURE ENGINE v2: the columns are INTRADAY-RESOLUTION
+//   now (live-verified on scanner.tradingview.com/india + /crypto):
+//   `EMA10|15` = 15-minute EMA10, `SMA50|60` = 1-HOUR SMA50 (genuine HTF
+//   confluence, not daily-vs-daily), `ATR|15` = 15m ATR (risk geometry —
+//   stops/targets finally intraday-scaled for the 15:10 sq-off),
+//   `ADX|15` = 15m trend strength (chop filter reads the REAL intraday
+//   regime). Daily stays: OHLC/change (day-range/gap factors), VWAP
+//   (session anchor), relVolume (session pace), monthly pivots
+//   (Pivot.B.Classic.* returns null on TV — live-probed; .M. stays).
+//   THE 90%-OPPOSITE DISEASE, LIVE-PROVEN 2026-10-14: RELIANCE daily RSI
+//   41.8 (SHORT zone) while the 15m RSI was 83 (strong rally) — the old
+//   engine voted YESTERDAY'S trend against TODAY's tape. Same for SMA50:
+//   daily 1263 (bearish) vs SMA50|60 1181 (bullish). Order of this array
+//   is POSITIONAL (d[0..23] parse below) — suffixes only, never reorder.
 export const TV_INTRADAY_COLUMNS = [
   'close', 'open', 'high', 'low', 'volume', 'change',
-  'EMA10', 'EMA20', 'SMA20', 'SMA50',
-  'RSI', 'MACD.macd', 'MACD.signal',
-  'ATR', 'VWAP',
-  'ADX', 'ADX+DI', 'ADX-DI',
+  'EMA10|15', 'EMA20|15', 'SMA20|15', 'SMA50|60',
+  'RSI|15', 'MACD.macd|15', 'MACD.signal|15',
+  'ATR|15', 'VWAP',
+  'ADX|15', 'ADX+DI|15', 'ADX-DI|15',
   'relative_volume_10d_calc',
   'Pivot.M.Classic.Middle', 'Pivot.M.Classic.S1', 'Pivot.M.Classic.R1',
-  'Recommend.All', 'last',
+  'Recommend.All|15', 'last',
 ];
 
 // ------------------------------------------------------------
@@ -410,7 +432,7 @@ export function analyzeIntradayFromScanner(symbol, tv, groww, opts = {}) {
 
   const prevClose = groww?.prevClose || (tv?.change != null && tv.change !== 0
     ? ltp / (1 + tv.change / 100) : ltp);
-  const changePct = groww?.change || tv?.change || 0;
+  const changePct = groww?.change ?? tv?.change ?? 0; // v21.13: nullish — a legitimate 0.00% no longer falls through to the TV value
   const open = tv?.open || ltp;
   const high = Math.max(groww?.high || 0, tv?.high || 0) || ltp;
   const low = Math.min(
@@ -593,6 +615,42 @@ export function analyzeIntradayFromScanner(symbol, tv, groww, opts = {}) {
   }
   quantConfidence = Math.max(0, Math.min(100, quantConfidence));
 
+  // ---------- v21.13 MOMENTUM-CAPTURE GATE (chase guard, board parity) ----------
+  // The engine scored the setup; this gate times the ENTRY. Same contract
+  // as the board's signalMemory chase guard (entryTiming.js — PURE module):
+  // never flips the side, only SUPPRESSES the entry. INDIA anchors to the
+  // session VWAP, crypto to EMA20 — both in 15m ATR units.
+  //   HARD  (>=2.5×ATR, or RSI 64/36 + >=1.9×ATR): conf cap 48 → the
+  //         routes pool floor (70) drops the chase setup entirely.
+  //   SOFT  (>=1.8×ATR): −7.  EXTENDED (1.5-1.8×ATR): −4.
+  //   PULLBACK band: NO boost here (intentional) — the +4 belongs to the
+  //   BOARD's signalMemory (ranking). Engine pe sirf suppression hai, so
+  //   confidence diffs (regime/circuit penalties) saturation me kabhi
+  //   distort nahi hote — deterministic penalties, deterministic tests.
+  const chase = entryTimingRead({
+    side: direction, ltp, ema20, vwap, atr, rsi,
+    market: isCrypto ? 'CRYPTO' : 'INDIA',
+  });
+  let chaseGuard = null;
+  if (chase && (chase.severity || chase.extAtr != null)) {
+    chaseGuard = chase;
+    if (chase.severity === 'HARD') {
+      quantConfidence = Math.min(quantConfidence, CHASE_HARD_CONF_CAP);
+      reasons.push(`🚀 CHASING — ${chase.reason} — ${direction} entry suppressed (pullback ka wait karo)`);
+    } else if (chase.severity === 'SOFT') {
+      quantConfidence = Math.max(5, quantConfidence - CHASE_SOFT_CONF_PENALTY);
+      reasons.push(`🚀 extended — ${chase.reason}`);
+    }
+    if (chase.quality === 'EXTENDED') {
+      quantConfidence = Math.max(5, quantConfidence - QUALITY_EXTENDED_CONF_PENALTY);
+      reasons.push(`📐 stretched — ${chase.qualityNote}`);
+    } else if (chase.quality === 'PULLBACK') {
+      // payload-only (no conf boost on the engine — see note above)
+      reasons.push(`🌊 PULLBACK — ${chase.qualityNote}`);
+    }
+    quantConfidence = Math.max(0, Math.min(100, quantConfidence));
+  }
+
   // ---------- PRO-DESK RISK ARCHITECTURE ----------
   const entry = ltp;
   const entryZoneLow = +(entry - 0.25 * atr).toFixed(2);
@@ -697,6 +755,9 @@ export function analyzeIntradayFromScanner(symbol, tv, groww, opts = {}) {
     _rrOk: rr >= HIGH_CONV_RR_FLOOR, // v4: 1.5 floor (was 1.25)
     _momentumPct: changePct,
     _deadZone: deadZone,
+    // v21.13: the chase/timing read (entryTimingRead payload — severity,
+    // extAtr vs VWAP/EMA20, quality band). null = nothing computable.
+    chaseGuard,
   };
 }
 

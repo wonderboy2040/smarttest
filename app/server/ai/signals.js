@@ -364,7 +364,12 @@ function tvToInd(row, ltp) {
   const macdHist = (row.macd != null && row.macdSignal != null) ? row.macd - row.macdSignal : null;
   return {
     rsi: row.rsi ?? null,
-    macd: macdHist != null ? { macd: row.macd, signal: row.macdSignal, hist: macdHist, histSlope: macdHist } : null,
+    // v21.13: histSlope null on TV snapshots — a SNAPSHOT cannot know the
+    // previous bar. The old code ALIASED the slope to the hist LEVEL
+    // (a disguised hist-sign vote). Consumers now treat a null slope
+    // honestly (models.js v21.13: hist-sign votes at reduced weight,
+    // never a fake "rising").
+    macd: macdHist != null ? { macd: row.macd, signal: row.macdSignal, hist: macdHist, histSlope: null } : null,
     ema10: row.ema10 ?? null, ema20: row.ema20 ?? null, ema50: row.ema50 ?? null,
     sma20: row.sma20 ?? null, sma50: row.sma50 ?? null,
     atr: row.atr ?? null, atrPct: null,
@@ -545,19 +550,78 @@ export async function buildRegime(market) {
 }
 
 // ---------------- per-symbol context builders ----------------
-async function buildIndiaStockCtx(row, regime) {
+// v21.13.0 INDIA 1H COMMITTEE REVIVAL (the Intraday INDIA tab's core fix —
+// IndiaIntradayTab polls /api/ai/signals?market=INDIA → this ctx):
+// pehle ind = DAILY TV snapshot + candles:null — 15/16 seats voted on
+// YESTERDAY'S trend against TODAY's tape (the live-proven "90% opposite"
+// disease: RELIANCE daily RSI 41.8/SHORT while the 15m RSI was 83/rally).
+// Ab every India ctx carries the Yahoo 15m series (1mo, 2-min TTL cache —
+// the SAME series the pass-2 tape enrichment already fetched) and the
+// committee votes the 1H VIEW — the 15m series resampled to 1h — exactly
+// the crypto desks' proven architecture (1h committee reads the swing +
+// the 15m tape seat w1.6 times the entry + MTF-6 veto + daily HTF veto +
+// regime). "Today's 1h trend", NOT "yesterday's daily trend".
+//   • ctx.ind        = 1h-resampled candle ind (>=30 1h bars; thin history
+//                      → honest fallback to the daily view, tape seat still
+//                      votes 15m)
+//   • ctx.candles    = the 15m series (SMC/chase-guard/structure read the
+//                      TRADING timeframe; pass-2 replaces the SMC vote on
+//                      the same series — no double count)
+//   • ctx.__ltfInd   = 15m ind (expert factors' ltf — fresher wins)
+//   • ctx.__dailyInd = the DAILY TV view (qualityVerdict's htf — the
+//                      MISALIGNED daily-vs-15m counter-tape wiring needs
+//                      the REAL HTF, not a 15m-vs-15m self-compare)
+// Daily survives inside ctx.ind for relVolume (session pace), patterns/
+// 52w/pivot/recommend (HTF context) and the SESSION VWAP (row.vwap — the
+// month-anchored candle VWAP is NOT a session anchor). Yahoo down →
+// honest degrade to the daily snapshot (pehle jaisa).
+async function buildIndiaStockCtx(row, regime, preloadedCandles = null) {
   const ltp = row.ltp;
   if (!(ltp > 0)) return null;
-  return {
+  let candles15 = Array.isArray(preloadedCandles) && preloadedCandles.length >= 30 ? preloadedCandles : null;
+  if (!candles15) {
+    candles15 = await fetchYahooIntradayCandles(row.symbol, 'INDIA').catch(() => null);
+    if (!Array.isArray(candles15) || candles15.length < 30) candles15 = null;
+  }
+  const dailyInd = tvToInd(row, ltp); // the DAILY view — the HTF reference
+  let ind = dailyInd;
+  let h1Candles = null;
+  if (candles15) {
+    // v21.13: the committee votes the 1H view — 15m series resampled to
+    // 1h (1mo of 15m ≈ 500 bars → ~125 1h bars; a thin fixture/history
+    // under 30 1h bars degrades honestly to the daily view). ctx.candles
+    // = the 1h series TOO (crypto-desk mirror: sr/momentum/structure ka
+    // candle-geometry 1h pe; the 15m stays the TAPE seat's series — pass-2
+    // fetch + __ltfInd). A coherent pair: ind 1h + candles 1h.
+    const h1 = resampleCandles(candles15, 60);
+    h1Candles = (Array.isArray(h1) && h1.length >= 30) ? h1 : null;
+    const ci = h1Candles ? computeIndicatorsFromCandles(h1Candles) : null;
+    if (ci) {
+      ind = {
+        ...ind, ...ci,
+        // daily/session fields that must SURVIVE the 1h override:
+        relVolume: ind.relVolume ?? (ci.avgVolume20 > 0 ? +(ci.volume / ci.avgVolume20).toFixed(2) : null),
+      };
+      if (row.vwap != null && row.vwap > 0) ind.vwap = row.vwap; // SESSION VWAP (not the month-anchored candle VWAP)
+    }
+  }
+  const ctx = {
     market: 'INDIA', symbol: row.symbol, ltp, changePct: row.changePct ?? 0,
     volume: row.volume ?? 0, exchange: row.exchange || 'NSE',
     // accuracy-plan Phase 2.2: per-stock REAL option-chain ctx (PCR /
     // max-pain / IV / OI-skew) for the top-F&O turnover names — the
     // cached snapshot (10-min TTL, nse/bse chains only); absent names
     // honestly abstain exactly as before.
-    ind: tvToInd(row, ltp), candles: null,
+    ind, candles: h1Candles || candles15 || null,
+    __dailyInd: dailyInd,
     options: _stockOptionsSnapshot(row.symbol), regime,
   };
+  // v21.13: attach moved INSIDE (board + deep path both get __tv/__ltfInd
+  // consistently — the deep card and the board card vote identically).
+  // __ltfInd = the 15m view (expert factors' ltf — fresher wins; pass-2
+  // tape/SMC read the same 15m series).
+  attachSuperCtx(ctx, row, candles15 || null);
+  return ctx;
 }
 
 // (v6.3: the async buildCryptoCtx + buildIndexCtx duplicates were removed —
@@ -1406,10 +1470,20 @@ async function _computeBoard(mkt, deps, opts = {}) {
     // (the turnover-ranked T1 head). Fire-and-forget — this cycle
     // attaches the cached ctx, the refresh lands for the next board.
     _refreshStockOptionsCtx((tiered?.scan || INDIA_UNIVERSE)).catch(() => {});
-    for (const row of Object.values(tv)) {
-      const ctx = await buildIndiaStockCtx(row, regime);
-      if (ctx) { attachSuperCtx(ctx, row, null); contexts.push(ctx); }
-    }
+    // v21.13.0: pre-fetch the 15m Yahoo candles for the WHOLE scan set in
+    // bounded parallel waves (12 in flight — loadCandlesBounded, the same
+    // pattern the crypto desks use), then build every ctx from the map.
+    // The old sequential per-row await would have serialized 45-90 network
+    // fetches inside the board cycle; the 2-min TTL cache makes repeat
+    // cycles nearly free (crypto boards already run this pattern).
+    const _indiaRows = Object.values(tv);
+    const _candle15m = await loadCandlesBounded(
+      _indiaRows.map(r => r.symbol),
+      (s) => fetchYahooIntradayCandles(s, 'INDIA'),
+    );
+    const _built = await Promise.all(_indiaRows.map(row =>
+      buildIndiaStockCtx(row, regime, _candle15m.get(row.symbol)).catch(() => null)));
+    for (const ctx of _built) if (ctx) contexts.push(ctx);
     for (const r of indexCandleJobs) if (r.status === 'fulfilled' && r.value) contexts.push(r.value);
     if (tieredLive) {
       superMeta.universeSize = tiered.fullCount + 2;
@@ -1755,6 +1829,12 @@ async function _computeBoard(mkt, deps, opts = {}) {
     // injected — spot INR / futures USDT / India INR) + the PRE-super
     // AI score that ranks the candidate pool.
     const expert = expertScoreFactors({
+      // v21.13: SIDE-AWARE — grade FOR the committee's side so a coin whose
+      // expert lean is the OPPOSITE setup can no longer donate its
+      // opposite-side quality to this side's ranking score (the top-ranked
+      // cards were enriched for committee-vs-expert CONFLICT — the exact
+      // "opposite" ranking disease).
+      side: consensus.side,
       tv: ctx.__tv ? { ...ctx.__tv, ltp: ctx.ltp } : { ...ctx.ind, ltp: ctx.ltp },
       ltf: ctx.__ltfInd, regime, market: mkt, smc: ctx.__smc, structure: ctx.__structure,
     });
@@ -2057,7 +2137,11 @@ async function _computeBoard(mkt, deps, opts = {}) {
         rsi: c.ctx.ind?.rsi, adx: c.ctx.ind?.adx,
         atr: (mkt !== 'INDIA' ? _cxTape?.ltfInd?.atr : enr?.ltfInd?.atr) ?? c.ctx.ind?.atr,
         candles: mkt !== 'INDIA' ? _cxTape?.candles : enr?.candles,
-        regime, htf: c.ctx.ind, ltf: mkt !== 'INDIA' ? _cxTape?.ltfInd : enr?.ltfInd,
+        // v21.13: INDIA htf = the DAILY TV view (ctx.__dailyInd) — the seats
+        // vote 15m now, so ctx.ind is 15m; the MISALIGNED daily-vs-15m phase
+        // needs the REAL HTF (crypto desks unchanged: their ctx.ind IS 1h).
+        regime, htf: (mkt === 'INDIA' ? (c.ctx.__dailyInd ?? c.ctx.ind) : c.ctx.ind),
+        ltf: mkt !== 'INDIA' ? _cxTape?.ltfInd : enr?.ltfInd,
         ltfLabel: '15m', now: Date.now(),
       });
       plan2 = buildTradePlan(consensus2, c.ctx, mkt, {
@@ -2226,6 +2310,10 @@ async function _computeBoard(mkt, deps, opts = {}) {
     if (consensus2.dir !== 0) {
       // expert factors re-shape when the council flipped the side
       const expert = (c.expert && c.expert.side === consensus2.side) ? c.expert : expertScoreFactors({
+        // v21.13: SIDE-AWARE (same fix as pass-1) — a flipped/council-
+        // adjusted consensus must be graded FOR ITS OWN SIDE, never the
+        // coin's opposite-side expert lean.
+        side: consensus2.side,
         tv: c.ctx.__tv ? { ...c.ctx.__tv, ltp: c.ctx.ltp } : { ...c.ctx.ind, ltp: c.ctx.ltp },
         ltf: enr?.ltfInd ?? c.ctx.__ltfInd ?? null, regime, market: mkt, smc: c.ctx.__smc, structure: c.ctx.__structure,
       });
@@ -3022,7 +3110,9 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
       // LTF. The structure stop + 15m ATR now land on 15m swings.
       atr: (mkt !== 'INDIA' ? _cxTapeEnr?.ltfInd?.atr : ltfInd?.atr) ?? ctx.ind?.atr,
       candles: mkt !== 'INDIA' ? _cxTapeEnr?.candles : ltfCandles,
-      regime, htf: ctx.ind, ltf: mkt !== 'INDIA' ? _cxTapeEnr?.ltfInd : ltfInd,
+      // v21.13: INDIA htf = the DAILY TV view (same as the board site).
+      regime, htf: (mkt === 'INDIA' ? (ctx.__dailyInd ?? ctx.ind) : ctx.ind),
+      ltf: mkt !== 'INDIA' ? _cxTapeEnr?.ltfInd : ltfInd,
       ltfLabel: '15m', now: Date.now(),
     });
     quality = {
@@ -3218,6 +3308,8 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
   if (consensus.dir !== 0) {
     try {
       const expertD = expertScoreFactors({
+        // v21.13: SIDE-AWARE (deep path — same as the board).
+        side: consensus.side,
         tv: ctx.__tv ? { ...ctx.__tv, ltp: ctx.ltp } : { ...ctx.ind, ltp: ctx.ltp },
         ltf: ltfInd ?? ctx.__ltfInd ?? null, regime, market: mkt, smc: ctx.__smc, structure: ctx.__structure,
       });

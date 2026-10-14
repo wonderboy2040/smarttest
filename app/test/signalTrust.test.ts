@@ -180,7 +180,7 @@ describe('v12.4 applySignalTrustGuards — OB/OS hard guard', () => {
 });
 
 describe('v12.4 applySignalTrustGuards — flip cooldown (anti-whipsaw)', () => {
-  it('a side that JUST flipped (< 5m) is capped to WATCH + freshFlip flag', () => {
+  it('a side that JUST flipped (< hard window) is capped to WATCH + freshFlip flag', () => {
     remember('FUTURES', 'WLD', { side: 'LONG', confidence: 78, grade: 'STRONG' });
     vi.setSystemTime(T0 + 90_000); // flip 90s ago
     const out = applySignalTrustGuards({
@@ -194,7 +194,10 @@ describe('v12.4 applySignalTrustGuards — flip cooldown (anti-whipsaw)', () => 
     expect(out.summary).toContain('FLIP');
   });
 
-  it('5-10m after a flip: soft confidence haircut only, no grade cap', () => {
+  it('2-5m after a flip (v21.13 windows): soft confidence haircut only, no grade cap', () => {
+    // v21.13 retune: hard 5m→2m, soft 10m→5m (5min+60s-cache card purani
+    // side 6min tak dikhata tha reversal me). 7m ab CLEAN hai — soft
+    // window ke andar aane ke liye 4m use hota hai.
     remember('FUTURES', 'WLD', { side: 'LONG', confidence: 78, grade: 'STRONG' });
     vi.setSystemTime(T0 + 1000); // the SHORT first appears here (flip recorded)
     applySignalTrustGuards({
@@ -202,7 +205,7 @@ describe('v12.4 applySignalTrustGuards — flip cooldown (anti-whipsaw)', () => 
       consensus: consensusOf({ side: 'SHORT', dir: -1, confidence: 80, grade: 'STRONG' }),
       ctx: { ltp: 0.43, ind: { rsi: 50 } },
     });
-    vi.setSystemTime(T0 + 7 * 60_000); // 7m after the flip
+    vi.setSystemTime(T0 + 4 * 60_000); // 4m after the flip — inside the soft window
     const out = applySignalTrustGuards({
       market: 'FUTURES', symbol: 'WLD',
       consensus: consensusOf({ side: 'SHORT', dir: -1, confidence: 80, grade: 'STRONG' }),

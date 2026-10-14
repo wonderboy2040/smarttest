@@ -120,14 +120,17 @@ describe('SPOT desk: STRONG 80+ SHORT card → trade direction', () => {
     expect(j.entries.at(-1)!.status).toBe('FILLED');
   });
 
-  it('PAPER: clicked SHORT while the fresh consensus flipped LONG → practice STILL opens SHORT (requested side, honest note)', async () => {
+  it('PAPER: clicked SHORT while the fresh consensus flipped LONG → v21.13 REALIGNS to the fresh side (never against the engine)', async () => {
+    // v9.0.2-v21.12 me trade STALE clicked side pe khulta tha (engine ki
+    // fresh view ke AGAINST — the "opposite" track-record amplifier).
+    // v21.13: the engine's CURRENT view hi practice hota hai.
     const out = await executeSignal({
       symbol: 'BTC', side: 'SHORT', mode: 'paper',
       getFreshSignal: async () => ({ ...SPOT_LONG }),
     });
     expect(out.ok).toBe(true);
-    expect(out.position!.side).toBe('SHORT'); // ← the exact user symptom, locked
-    expect(out.fitted).toMatch(/FLIPPED/i);
+    expect(out.position!.side).toBe('LONG'); // ← REALIGNED to fresh consensus LONG
+    expect(out.fitted).toMatch(/REALIGNED to fresh consensus LONG/i);
   });
 
   it('LIVE: a STRONG SHORT signal sends a SELL order to CoinDCX and books a SHORT position', async () => {
@@ -224,14 +227,16 @@ describe('SPOT desk: STRONG 80+ LONG card → trade direction (mirror)', () => {
     expect(j.entries.at(-1)!.status).toBe('FILLED');
   });
 
-  it('PAPER: clicked LONG while the fresh consensus flipped SHORT → practice STILL opens LONG (requested side, honest note)', async () => {
+  it('PAPER: clicked LONG while the fresh consensus flipped SHORT → v21.13 REALIGNS to the fresh side (mirror)', async () => {
+    // v21.13 mirror: never open a practice trade AGAINST the engine's
+    // current view (stale-flipped card). Fresh side wins.
     const out = await executeSignal({
       symbol: 'BTC', side: 'LONG', mode: 'paper',
       getFreshSignal: async () => ({ ...SPOT_SHORT }),
     });
     expect(out.ok).toBe(true);
-    expect(out.position!.side).toBe('LONG'); // ← the mirror user symptom, locked
-    expect(out.fitted).toMatch(/FLIPPED/i);
+    expect(out.position!.side).toBe('SHORT'); // ← REALIGNED to fresh consensus SHORT
+    expect(out.fitted).toMatch(/REALIGNED to fresh consensus SHORT/i);
   });
 
   it('LIVE: a STRONG LONG signal sends a BUY order to CoinDCX and books a LONG position', async () => {

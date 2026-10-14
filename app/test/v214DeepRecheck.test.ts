@@ -277,11 +277,15 @@ describe('v21.4.1 [B5] — sub-cent prices survive rounding (SHIB/PEPE class)', 
     expect(closed).toBeTruthy();
     expect(closed.status).toBe('SL_HIT');
     expect(closed.exitPrice).toBeGreaterThan(0);   // OLD: +(0.00016).toFixed(2) = 0 → fake full-qty loss
-    expect(closed.exitPrice).toBeCloseTo(0.00016, 8); // SL level pe close (designed)
+    // v21.13 SL GAP-THROUGH PARITY (paperTrading [H3] jaisa): fill at the
+    // TRADED price (0.000159 — the tick that fired, gapped through the
+    // 0.00016 stop) — not the trigger level. Honest worst-side market fill.
+    expect(closed.exitPrice).toBeCloseTo(0.000159, 8);
     // OLD bug ka asli damage: exitPrice 0 → pnl = qty × (0 − entry) = −16,600 fake wipeout.
-    // FIX: honest 1R loss = 1e8 × (0.00016 − 0.000166) = −600
-    expect(closed.pnl).toBeCloseTo(-600, 0);
-    expect(closed.rMultiple).toBeCloseTo(-1.0, 2); // exactly −1R — an SL, not a wipeout
+    // FIX: honest loss = 1e8 × (0.000159 − 0.000166) = −700 (worse than
+    // trigger-level −600 — that IS the gap-through honesty, [H3] parity).
+    expect(closed.pnl).toBeCloseTo(-700, 0);
+    expect(closed.rMultiple).toBeCloseTo(-700 / 600, 2); // −1.17R — an honest gapped SL, not a wipeout
   });
 });
 
@@ -303,9 +307,11 @@ describe('v21.4.1 [B7] — evaluateTracked reads per-desk (market-qualified) quo
     const futRow = [...rec.open, ...rec.history].find(r => r.symbol === 'BTC2' && r.market === 'FUTURES');
     const cxRow = [...rec.open, ...rec.history].find(r => r.symbol === 'BTC2' && r.market === 'CRYPTO');
     expect(futRow.status).toBe('SL_HIT');        // USDT domain fired — NOT the fake T2_HIT
-    expect(futRow.exitPrice).toBe(103000);         // the futures SL, not an INR-domain print
+    // v21.13 gap-through parity: fill at the TRADED USDT price (102,000 —
+    // the tick that gapped through the 103,000 stop), not the trigger level.
+    expect(futRow.exitPrice).toBe(102000);
     expect(cxRow.status).toBe('SL_HIT');          // crypto row apne INR price pe (8.5M ≤ 8.55M)
-    expect(cxRow.exitPrice).toBe(8550000);
+    expect(cxRow.exitPrice).toBe(8500000);        // v21.13: traded INR price (8.5M), not the 8.55M level
   });
 
   it('legacy callers (no qualified map) still work via the plain-key fallback', () => {

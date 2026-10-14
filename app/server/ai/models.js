@@ -294,10 +294,29 @@ function momentumQuant(ctx) {
   const pts = [];
   let score = 0, conf = 45;
 
+  // v21.13 REGIME-AWARE CONTRARIAN TAILS: RSI>75 pe blanket −0.9
+  // strong-trend days pe board ko vertical tops par SHORT kar deta tha
+  // — the "momentum capture nahi hota" complaint (fade + price continues
+  // = "opposite"). ADX >= 25 (strong trend) → continuation ±0.4 (NEVER
+  // fade a trending extreme); ADX < 25 → the old contrarian fade ±0.9
+  // (range/chop me exhaustion fade is the right trade).
+  // ADX shape normalize: TV rows = NUMBER, candle paths = OBJECT
+  // ({adx, plusDI, minusDI}) — same trap v21.4.1 [A1] fixed elsewhere.
+  const _adxObj = i.adx && typeof i.adx === 'object' ? i.adx : null;
+  const adxN = _adxObj ? (typeof _adxObj.adx === 'number' && isFinite(_adxObj.adx) ? _adxObj.adx : null) : (typeof i.adx === 'number' && isFinite(i.adx) ? i.adx : null);
+  const strongTrend = adxN != null && adxN >= 25;
+  const trendNote = adxN != null ? ` ADX ${Math.round(adxN)}` : '';
+
   const rsi = i.rsi;
   if (rsi != null) {
-    if (rsi > 75) { score -= 0.9; pts.push(`RSI ${r1(rsi)} overbought — exhaustion risk`); }
-    else if (rsi < 25) { score += 0.9; pts.push(`RSI ${r1(rsi)} oversold — bounce fuel`); }
+    if (rsi > 75) {
+      if (strongTrend) { score += 0.4; pts.push(`RSI ${r1(rsi)} overbought but${trendNote} strong trend — continuation, no fade`); }
+      else { score -= 0.9; pts.push(`RSI ${r1(rsi)} overbought — exhaustion risk`); }
+    }
+    else if (rsi < 25) {
+      if (strongTrend) { score -= 0.4; pts.push(`RSI ${r1(rsi)} oversold but${trendNote} strong trend — continuation, no bounce-bet`); }
+      else { score += 0.9; pts.push(`RSI ${r1(rsi)} oversold — bounce fuel`); }
+    }
     else if (rsi > 55) { score += 1.0; pts.push(`RSI ${r1(rsi)} bullish zone`); }
     else if (rsi < 45) { score -= 1.0; pts.push(`RSI ${r1(rsi)} bearish zone`); }
     else pts.push(`RSI ${r1(rsi)} neutral`);
@@ -305,8 +324,13 @@ function momentumQuant(ctx) {
   const m = i.macd;
   if (m && m.hist != null) {
     const h = m.hist / Math.max(1e-9, Math.abs(ctx.ltp || 1)) * 10000; // bps of price
-    if (m.hist > 0 && m.histSlope > 0) { score += 1.1; pts.push('MACD histogram positive & rising'); }
-    else if (m.hist < 0 && m.histSlope < 0) { score -= 1.1; pts.push('MACD histogram negative & falling'); }
+    // v21.13 NULL-SLOPE HONESTY: histSlope null (TV snapshot — a snapshot
+    // cannot know the previous bar). hist-sign still votes (reduced weight
+    // 0.8/−0.8) — the old code fabricated histSlope=hist so "rising" was a
+    // disguised hist-sign vote; now the label is honest and the true-slope
+    // branches (candle paths) keep their full ±1.1.
+    if (m.hist > 0 && (m.histSlope == null || m.histSlope > 0)) { score += m.histSlope == null ? 0.8 : 1.1; pts.push(m.histSlope == null ? 'MACD histogram positive (slope unknown)' : 'MACD histogram positive & rising'); }
+    else if (m.hist < 0 && (m.histSlope == null || m.histSlope < 0)) { score -= m.histSlope == null ? 0.8 : 1.1; pts.push(m.histSlope == null ? 'MACD histogram negative (slope unknown)' : 'MACD histogram negative & falling'); }
     else if (m.histSlope > 0) { score += 0.4; pts.push('MACD turning up'); }
     else if (m.histSlope < 0) { score -= 0.4; pts.push('MACD turning down'); }
     if (Math.abs(h) > 120) conf -= 8; // extreme extension

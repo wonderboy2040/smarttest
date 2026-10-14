@@ -171,12 +171,15 @@ describe('India gauntlet — gates', () => {
     expect(out.fitted).toMatch(/practice plan @ live price/i);
   });
 
-  it('v9.0.2: PAPER on a side-flip (fresh SHORT, clicked LONG) opens the requested side as practice', async () => {
+  it('v21.13: PAPER on a side-flip (fresh SHORT, clicked LONG) REALIGNS to the fresh side', async () => {
+    // v9.0.2 opened the STALE clicked side (engine ke fresh view ke
+    // against) — v21.13 me engine's CURRENT view hi practice hota hai
+    // (crypto path ke saath parity).
     const flip = { ...STRONG_IN(), side: 'SHORT' };
     const out = await executeIndiaSignal({ symbol: 'RELIANCE', side: 'LONG', mode: 'paper', getFreshIndiaSignal: async () => flip });
     expect(out.ok).toBe(true);
-    expect(out.position!.side).toBe('LONG');
-    expect(out.fitted).toMatch(/fresh consensus FLIPPED: SHORT/i);
+    expect(out.position!.side).toBe('SHORT'); // REALIGNED to fresh consensus
+    expect(out.fitted).toMatch(/REALIGNED to fresh consensus SHORT/i);
   });
 
   it('risk auto-fit: an over-cap paper stop is fitted, never bounced (v6.4 policy, India too)', async () => {

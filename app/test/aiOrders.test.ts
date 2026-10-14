@@ -378,16 +378,19 @@ describe('PAPER practice-plan synthesis (v9.0.2 — paper always starts)', () =>
     expect(j.entries.at(-1)!.signal!.grade).toBe('NEUTRAL'); // honesty journaled
   });
 
-  it('v9.0.2: paper on a SIDE-FLIP (fresh SHORT, clicked LONG) opens the requested side as practice', async () => {
-    // The #1 real-world blocker: the board card was LONG at scan time,
-    // the fresh re-run says SHORT → old gate hard-rejected the click.
+  it('v21.13: paper on a SIDE-FLIP (fresh SHORT, clicked LONG) REALIGNS to the fresh side', async () => {
+    // The #1 real-world blocker was the v6.12 hard reject; v9.0.2 opened
+    // the STALE clicked side (engine's fresh view ke AGAINST — the
+    // "opposite" track-record amplifier: 60s-cached card LONG, fresh
+    // consensus SHORT, trade LONG → SL → journal engine ko blame).
+    // v21.13: the engine's CURRENT view hi practice hota hai.
     const out = await executeSignal({
       symbol: 'BTC', mode: 'paper', side: 'LONG',
       getFreshSignal: async () => ({ ...STRONG, side: 'SHORT' }),
     });
     expect(out.ok).toBe(true);
-    expect(out.position!.side).toBe('LONG');
-    expect(out.fitted).toMatch(/fresh consensus FLIPPED: SHORT/i);
+    expect(out.position!.side).toBe('SHORT'); // REALIGNED to fresh consensus
+    expect(out.fitted).toMatch(/REALIGNED to fresh consensus SHORT/i);
   });
 
   it('v9.0.2: paper below the ACTION floor (WATCH grade, matching side) opens with a floor-relaxed note', async () => {

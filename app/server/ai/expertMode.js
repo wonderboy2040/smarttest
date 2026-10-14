@@ -23,7 +23,7 @@
 import { fetchBinanceKlines } from './data.js';
 
 const ML_SERVICE_BASE = () =>
-  String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+  String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8100') // v21.13: 8000 Laya's port hai — ml-service 8100 pe (v21.11 fix ka missed spot).replace(/\/+$/, '');
 
 const ML_HEADERS = () => ({
   'Content-Type': 'application/json',

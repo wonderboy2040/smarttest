@@ -108,6 +108,22 @@ function fallingWithPullbacks(n = 90) {
   return out;
 }
 
+// v21.13 COHERENCE: production me Yahoo 15m ka last close == live ltp
+// (same symbol, same tape). Synthetic fixtures alag price pe khatam hote
+// the (series 1247 vs TV row ltp 1258) — candle-derived levels (prev-bar
+// high/low, S/R) fictional +ve/-ve fires karte the. Scale the served
+// series so its final close lands exactly on the live ltp.
+function cohereSeries(candles, ltp) {
+  const last = candles[candles.length - 1]?.close;
+  if (!(last > 0) || !(ltp > 0)) return candles;
+  const k = ltp / last;
+  return candles.map(c => ({
+    ...c,
+    open: +(c.open * k).toFixed(2), high: +(c.high * k).toFixed(2),
+    low: +(c.low * k).toFixed(2), close: +(c.close * k).toFixed(2),
+  }));
+}
+
 function yahooChartReply(candles) {
   const ts = candles.map(c => Math.floor(c.time / 1000));
   const quote = {
@@ -137,7 +153,7 @@ vi.mock('../server/ai/data.js', () => ({
 vi.stubGlobal('fetch', vi.fn(async (url) => {
   const u = String(url);
   if (u.includes('RELIANCE.NS') && u.includes('interval=15m')) {
-    if (tapeSeries) return yahooChartReply(tapeSeries);
+    if (tapeSeries) return yahooChartReply(cohereSeries(tapeSeries, BEARISH_DAILY.ltp));
   }
   throw new Error('offline (test)');
 }));

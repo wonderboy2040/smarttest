@@ -68,11 +68,12 @@ describe('v9.4 watch-set priority — paper trades always get quotes', () => {
     expect(watchSetForTests().get('ITC')).toBe('INDIA');
   });
 
-  it('MAX_WATCH_NSE is 34 — room for paper + scan + a tracked tail', async () => {
-    // read the live module constant through the implementation note:
-    // 34 = 10 paper (max open) + 5 scan + 19 tracked headroom.
+  it('MAX_WATCH_NSE is 56 (v21.13: 34→56 vs MAX_PER_DAY 80) — room for paper + scan + a tracked tail', async () => {
+    // v21.13: 34 → 56 — MAX_PER_DAY (80) ke against cap mismatch tha;
+    // busy days me late tracked rows quotes se starve hote the.
+    // 56 = 10 paper (max open) + 5 scan + 41 tracked headroom.
     const src = await import('node:fs').then((fs) =>
       fs.readFileSync('server/intraday/stream.js', 'utf8'));
-    expect(src).toMatch(/MAX_WATCH_NSE\s*=\s*34/);
+    expect(src).toMatch(/MAX_WATCH_NSE\s*=\s*56/);
   });
 });

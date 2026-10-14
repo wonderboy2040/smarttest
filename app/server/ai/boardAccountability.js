@@ -33,8 +33,22 @@
 //   • Flag: AI_BOARD_ACCOUNTABILITY=off disables (default on).
 // ============================================================
 import { recordSignals } from '../intraday/trackRecord.js';
+// v21.13: dynamic committee counts — the legacy hardcoded "10-model"
+// string survived every committee expansion (13 → 16 + 4 mesh shadow).
+import { committeeInfo } from './committee.js';
 
 const ENABLED = String(process.env.AI_BOARD_ACCOUNTABILITY || '').toLowerCase() !== 'off';
+
+// v21.13: build the row's pipeline label from the LIVE committee counts
+// (16 voting + 4 mesh shadow today — never a stale hardcoded number).
+function _committeeLabel() {
+  try {
+    const ci = committeeInfo();
+    return `AI-BOARD ensemble (${ci.voting}-model committee${ci.shadow > 0 ? ` + ${ci.shadow} mesh shadow` : ''})`;
+  } catch {
+    return 'AI-BOARD ensemble';
+  }
+}
 
 // The watcher's quote routing: INDIA → Groww INR, CRYPTO → CoinDCX INR
 // spot. v21.3.0: FUTURES → CoinDCX USDT perp RT (+Binance-fut fallback),
@@ -101,7 +115,7 @@ export function mapBoardSignalToTracked(s, mkt) {
     confidence: Math.round(Number(s.confidence) || 0),
     // Legacy rows surface these in TrackRecordPanel history; board rows
     // identify their pipeline so a user can tell scanner vs board rows.
-    aiModel: 'AI-BOARD ensemble (10-model consensus)',
+    aiModel: _committeeLabel(), // v21.13: dynamic — live committee counts, never a stale hardcoded number
     aiNote: String(s.summary || s.aiNote || '').slice(0, 90),
     counterTrend: !!(s.quality?.regime?.counterTrend),
     trendStrength: String(s.superIntel?.tier || s.entryQuality?.band || ''),

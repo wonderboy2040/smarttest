@@ -328,8 +328,17 @@ export async function loadLtfCandles(base, market) {
  * factor is graded FOR that side (a coin in an uptrend with a squeeze
  * scores its breakout readiness, not its short-side risk).
  */
-export function expertScoreFactors({ tv, ltf, regime, market, smc = null, structure = null }) {
+export function expertScoreFactors({ tv, ltf, regime, market, smc = null, structure = null, side = null }) {
   if (!tv && !ltf) return null;
+  // v21.13 SIDE-AWARE GRADING: `side` ('LONG'|'SHORT') — when a caller
+  // (board/deep consensus blend) passes its OWN side, the factors are
+  // graded FOR that side. Side-blind recompute pehle top-ranked cards ko
+  // committee-vs-expert CONFLICT coins se bharta tha (coin ka expert lean
+  // SHORT, committee card LONG — SHORT setup ki quality LONG card ke
+  // aiScore me blend — the "opposite" ranking disease). The expert's
+  // INDEPENDENT lean is still surfaced: `lean` + `leanConflict`.
+  const reqSideRaw = String(side || '').toUpperCase();
+  const reqSide = reqSideRaw === 'LONG' || reqSideRaw === 'SHORT' ? reqSideRaw : null;
   const ind = { ...(tv || {}), ...(ltf || {}) }; // LTF wins conflicts (fresher)
   const ltp = num(ind.ltp ?? ind.usdPrice) || num(tv?.usdPrice);
   if (!(ltp > 0)) return null;
@@ -454,7 +463,9 @@ export function expertScoreFactors({ tv, ltf, regime, market, smc = null, struct
 
   // --- SIDE: weighted majority of trend/momentum (+smc if provided) ---
   const longLean = (trend - 50) * EXPERT_WEIGHTS.trend + (momentum - 50) * EXPERT_WEIGHTS.momentum;
-  const side = longLean >= 0 ? 'LONG' : 'SHORT';
+  const lean = longLean >= 0 ? 'LONG' : 'SHORT'; // the expert's own lean (always surfaced)
+  side = reqSide ?? lean; // REASSIGN the destructured param — caller's side wins; honest fallback = own lean
+  const leanConflict = reqSide != null && lean !== reqSide;
 
   // SMC factor — injected by the caller via smcVote (candles needed).
   const smv = smc && typeof smc === 'object' ? smc : null;
@@ -496,7 +507,10 @@ export function expertScoreFactors({ tv, ltf, regime, market, smc = null, struct
     { key: 'rr', label: 'R:R Quality', value: Math.round(sideRr), weight: EXPERT_WEIGHTS.rr },
   ];
 
-  return { side, score, factors, ltp, atr, atrPctLtp, ema20: num(ind.ema20), rsi };
+  return { side, score, factors, ltp, atr, atrPctLtp, ema20: num(ind.ema20), rsi,
+    // v21.13: the expert's independent lean + conflict flag (payload-only;
+    // callers/UI can show "expert lean SHORT vs graded LONG").
+    lean, leanConflict: leanConflict === true, gradedFor: reqSide ?? 'auto', };
 }
 
 // Adaptive price precision — DOGE @ ₹15.40 needs different decimals

@@ -54,8 +54,14 @@ export const OB_RSI = 70;          // LONG suppressed at/above
 export const OS_RSI = 30;          // SHORT suppressed at/below
 export const OB_RSI_EXTREME = 78;  // harsher confidence cut
 export const OS_RSI_EXTREME = 22;
-export const FLIP_COOLDOWN_MS = 5 * 60_000;   // fresh flip → WATCH cap
-export const FLIP_SOFT_MS = 10 * 60_000;      // fresh-ish flip → conf haircut
+// v21.13 TUNING: 5min/10min + the 60s board cache meant the card kept
+// showing the OLD side for up to 6 minutes into a genuine reversal (the
+// "late on reversals" half of the opposite-direction complaint). 2min
+// hard / 5min soft keeps the anti-whipsaw floor while flipping fast
+// enough to matter intraday (tape-MTF + strict-agreement already guard
+// the quality side).
+export const FLIP_COOLDOWN_MS = 2 * 60_000;   // fresh flip → WATCH cap (was 5min)
+export const FLIP_SOFT_MS = 5 * 60_000;      // fresh-ish flip → conf haircut (was 10min)
 export const FLIP_SOFT_CONF_PENALTY = 8;
 export const OB_OS_CONF_CAP = 50;             // conf floor when OB/OS tripped
 export const OB_OS_EXTREME_CONF_CAP = 42;
@@ -277,7 +283,16 @@ export function applySignalTrustGuards({ market, symbol, consensus, ctx, ltf } =
       side,
       ltp: ctx?.ltp ?? ltf?.ltp,
       ema20: ltf?.ema20 ?? ctx?.ind?.ema20,
-      vwap: ltf?.vwap,
+      // v21.13 SESSION-VWAP ANCHOR FIX (India): pehle ltf.vwap (candle
+      // series ka MONTH-anchored VWAP) padha jata tha — production me
+      // trending days pe extension ko massively overstate karta tha
+      // (session-mean pe entry ko "4×ATR chase" declare kar ke GOOD
+      // entries suppress — the tape seat ka documented note yahi kehta
+      // hai: "the month-anchored candle VWAP is not a session anchor").
+      // India ka intraday anchor = TV row ka SESSION VWAP (ctx.__tv.vwap).
+      vwap: String(market || '').toUpperCase() === 'INDIA'
+        ? (ctx?.__tv?.vwap ?? ltf?.vwap)
+        : ltf?.vwap,
       atr: ltf?.atr ?? ctx?.ind?.atr,
       rsi,
       candles: ctx?.candles,

@@ -125,7 +125,7 @@ describe('v21.4.1 [C1] — watcher market-qualified quote map (byMarket)', () =>
     const futRow = [...rec.open, ...rec.history].find(r => r.symbol === 'SOL' && r.market === 'FUTURES');
     const cxRow = [...rec.open, ...rec.history].find(r => r.symbol === 'SOL' && r.market === 'CRYPTO');
     expect(futRow.status).toBe('SL_HIT');   // 241 ≤ 243 USDT — right domain
-    expect(futRow.exitPrice).toBe(243);
+    expect(futRow.exitPrice).toBe(241);     // v21.13 gap-through parity: TRADED price (241), not the 243 level
     expect(cxRow.status).toBe('OPEN');       // 20000 > 19500 INR — untouched
     flushTrackRecordState();
   });

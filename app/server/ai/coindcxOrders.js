@@ -552,9 +552,12 @@ export async function executeSignal(opts) {
   // PAPER/NOTIFY practice fallback: the FRESH consensus can be FLAT/planless,
   // can have DECAYED below the ACTION floor, or can have FLIPPED side versus
   // the card the user clicked (board cached vs fresh re-run race — the direct
-  // cause of "paper trading start hi nhi ho raha"). Practice mode synthesizes
-  // a plan at the live price for the requested side; the journal records the
-  // honest fresh grade. LIVE never enters this branch (full gauntlet below).
+  // cause of "paper trading start hi nhi ho raha"). Practice mode (v21.13):
+  // a FLIPPED fresh consensus REALIGNS the trade to the engine's current
+  // side (never trades against the fresh view); a FLAT/planless view
+  // synthesizes a plan at the live price for the requested side. The
+  // journal records the honest fresh grade. LIVE never enters this branch
+  // (full gauntlet below).
   let effectiveSignal = signal;
   let synthNote = null;
   // v12.7 (recheck R1-#9): an ABSENT side no longer silently defaults
@@ -567,14 +570,22 @@ export async function executeSignal(opts) {
   const sideConflict = signal.side !== 'FLAT' && signal.side !== reqSide;
   const belowFloor = signal.grade !== 'STRONG' && signal.grade !== 'ACTION';
   if (wantMode !== 'live' && (sideConflict || signal.side === 'FLAT' || !signal.plan)) {
+    // v21.13 FLIP REALIGN: sideConflict me pehle trade STALE clicked side
+    // pe khulta tha — engine ki FRESH view ke against entry (the "opposite"
+    // track-record amplifier: card 60s-cached LONG, fresh consensus SHORT,
+    // trade LONG → SL → journal engine ko blame karta tha). Ab fresh
+    // DIRECTIONAL consensus ki side hi practice hoti hai (fresh plan
+    // available → wahi; FLAT/no-plan → user ki requested side pe synth —
+    // a direction-less fresh view never mints a side).
+    const openSide = sideConflict ? signal.side : reqSide;
     const synthPlan = buildTradePlan(
-      { side: reqSide, dir: reqSide === 'LONG' ? 1 : -1 },
+      { side: openSide, dir: openSide === 'LONG' ? 1 : -1 },
       { ltp: signal.ltp, ind: {} }, 'CRYPTO',
     );
     if (synthPlan && signal.ltp > 0) {
-      effectiveSignal = { ...signal, side: reqSide, plan: synthPlan };
+      effectiveSignal = { ...signal, side: openSide, plan: synthPlan };
       synthNote = sideConflict
-        ? `practice plan @ live price (fresh consensus FLIPPED: ${signal.side} ${signal.confidence}%)`
+        ? `REALIGNED to fresh consensus ${signal.side} ${signal.confidence}% (clicked card was stale-flipped; engine's current view hi practice hota hai)`
         : `practice plan @ live price (fresh consensus: ${signal.side} ${signal.confidence}%)`;
     }
   }
@@ -604,7 +615,11 @@ export async function executeSignal(opts) {
     } // else: leave the plan as-is — the gate rejects with the honest reason
   }
   const verdict = evaluateExecutionGate(effectiveSignal, {
-    side: side || effectiveSignal.side, gates,
+    // v21.13: PAPER/NOTIFY practice the REALIGNED trade side se gate hota
+    // hai (fresh view pe realign, phir chase/UCV/grade vetoes guard karte
+    // hain). LIVE keeps the STRICT requested-vs-fresh match — the
+    // no-auto-flip veto is LIVE-only by design (kabhi silent flip nahi).
+    side: wantMode === 'live' ? (side || effectiveSignal.side) : (effectiveSignal.side || side), gates,
     requireStrong: wantMode === 'live',
     maxAgeMs: wantMode === 'live' ? 90_000 : 600_000,
     maxRiskPct: cfg.maxRiskPct || 5,

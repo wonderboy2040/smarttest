@@ -324,7 +324,12 @@ export function evaluateTracked(quotes, events, mktQuotes = null) {
     const hitT2 = isLong ? price >= row.target2 : price <= row.target2;
 
     if (row.status === 'OPEN') {
-      if (hitSL) { _closeRow(row, row.stopLoss, 'SL_HIT', events); continue; }
+      // v21.13 SL GAP-THROUGH PARITY (paperTrading v20.9.1 [H3] jaisa):
+      // fill at the TRADED price, not the trigger level — a tick that
+      // gapped straight through the stop gets the honest worst-side fill
+      // the market order would actually receive. hitSL already guarantees
+      // price is at/beyond the stop, so this is always worse-or-equal.
+      if (hitSL) { _closeRow(row, price, 'SL_HIT', events); continue; }
       if (hitT2) { row.t1Hit = true; _closeRow(row, row.target2, 'T2_HIT', events); continue; }
       if (hitT1) {
         row.t1Hit = true; row.status = 'PARTIAL';

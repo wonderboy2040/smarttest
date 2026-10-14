@@ -100,12 +100,20 @@ OHLCV_STORE_PATH = STORE_DIR / "ohlcv.parquet"
 META_ENSEMBLE_PATH = MODEL_DIR / "meta_ensemble.pkl"
 META_FEATURE_COLS_PATH = MODEL_DIR / "meta_feature_cols.pkl"
 
-# The 14-model registry the meta-learner was trained on (order is
-# the feature contract — keep in sync with server/ai/models.js).
+# The voting registry the meta-learner consumes (order is the feature
+# contract — keep in sync with server/ai/models.js). A previously-trained
+# pkl on the OLD 14-id contract is detected as stale by
+# load_meta_ensemble() (cols mismatch) → graceful weighted fallback until
+# the retrain scheduler produces a new pkl on THIS contract (self-healing).
+# v21.13: FULL 16-seat voting roster sync — pehle 14 ids the (structure /
+# macross / tape-mtf missing → their live votes were silently zero-filled,
+# skewing META's confidence calibration). The list now matches the Node
+# committee 1:1 (models.js MODELS + master-switch tape-mtf w1.6).
+# Legacy 'tape' removed — superseded by 'tape-mtf' (IntradayTapeMTF w1.6).
 META_MODEL_IDS = [
     "trend", "momentum", "volatility", "volume", "pattern", "sr",
-    "options", "regime", "smc", "tape", "aicouncil",
-    "sentiment", "instflow", "fundamentals",
+    "options", "regime", "smc", "structure", "macross", "tape-mtf",
+    "aicouncil", "sentiment", "instflow", "fundamentals",
 ]
 
 # Direction label deadband: |fwd return| <= this → FLAT

@@ -91,6 +91,20 @@ function falling15mWithPullbacks(n = 90) {
   return out;
 }
 
+// v21.13 COHERENCE: production me Yahoo 15m ka last close == live ltp.
+// Synthetic fixtures alag price pe khatam hote the — candle-derived levels
+// (prev-bar high/low) fictional fires karte the. Scale to the live ltp.
+function cohereSeries(candles, ltp) {
+  const last = candles[candles.length - 1]?.close;
+  if (!(last > 0) || !(ltp > 0)) return candles;
+  const k = ltp / last;
+  return candles.map(c => ({
+    ...c,
+    open: +(c.open * k).toFixed(2), high: +(c.high * k).toFixed(2),
+    low: +(c.low * k).toFixed(2), close: +(c.close * k).toFixed(2),
+  }));
+}
+
 function yahooChartReply(candles) {
   const ts = candles.map(c => Math.floor(c.time / 1000));
   const quote = {
@@ -121,7 +135,7 @@ vi.mock('../server/ai/data.js', () => ({
 vi.stubGlobal('fetch', vi.fn(async (url) => {
   const u = String(url);
   if (u.includes('RELIANCE.NS') && u.includes('interval=15m')) {
-    if (serve15m) return yahooChartReply(serve15m);
+    if (serve15m) return yahooChartReply(cohereSeries(serve15m, 1258)); // v21.13 coherence (series end == live ltp)
   }
   if (u.includes('RELIANCE.NS') && u.includes('interval=5m')) {
     if (serve5m) return yahooChartReply(serve5m);
