@@ -129,7 +129,10 @@ describe('buildExpertBlueprint — the complete trade plan', () => {
     expect(p.targets.t3).toBeCloseTo(ltp + 3 * r, 1);
     expect(p.entryZone[0]).toBeLessThan(ltp);
     expect(p.entryZone[1]).toBeGreaterThan(ltp);
-    expect(p.rewardRisk).toBe(2);
+    // v21.13.x (B4): RR derived from the ACTUAL T1 ladder — T1 = entry+1R
+    // → RR 1.0 (pehle hardcoded 2 tha jabki T1 sirf 1R door hai; winProb
+    // ka P(NEED) edge-math ~2× optimistic padh raha tha)
+    expect(p.rewardRisk).toBeCloseTo(1, 5);
   });
 
   it('SHORT: mirrored levels (stop above, targets below)', () => {

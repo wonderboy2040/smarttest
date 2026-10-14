@@ -32,7 +32,10 @@ async function _probe() {
     return {
       reachable: true,
       latencyMs: Date.now() - t0,
-      detail: j?.ok === true ? 'ok' : `ok-ish (${JSON.stringify(j).slice(0, 120)})`,
+      // v21.13.x recheck (M7): Python /health returns {"status":"ok"}
+      // (j.ok kabhi nahi tha) — the detail was permanently "ok-ish (...)".
+      // Dono shapes accept: {ok:true} ya {status:'ok'}.
+      detail: (j?.ok === true || j?.status === 'ok') ? 'ok' : `ok-ish (${JSON.stringify(j).slice(0, 120)})`,
       version: j?.version || null,
       checkedAt: Date.now(),
     };

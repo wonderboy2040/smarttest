@@ -27,7 +27,10 @@ import { FUTURES_UNIVERSE, futuresPairFor, fetchFuturesPrices, fetchFuturesCandl
 // kar raha tha jab real USDINR ~89 ho (v20.2 ne baaki sab sites fix kiye the,
 // ye sync-branch chhoot gaya tha).
 import { usdInrFallback } from './lib/usdinr.js';
-import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfConfluenceEnabled, tapeVote, meshModelsEnabled, structurePro, maCrossFromCandles } from './models.js';
+// v21.13.x recheck (B1): maCrossFromCandles import removed — it was a
+// dead import since v21.13 (the deep-path MACROSS revival calls the
+// registered seat fn, not this helper directly).
+import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfConfluenceEnabled, tapeVote, meshModelsEnabled, structurePro } from './models.js';
 // v21.3.0 (Issue-5): Laya + Jev dual-AI confirmation on board signals
 import { confirmBoardSignals as _confirmBoardSignals, boardAiConfirmActive as _boardAiConfirmActive } from './boardAiConfirm.js';
 
@@ -622,6 +625,100 @@ async function buildIndiaStockCtx(row, regime, preloadedCandles = null) {
   // tape/SMC read the same 15m series).
   attachSuperCtx(ctx, row, candles15 || null);
   return ctx;
+}
+
+// v21.13.x DEEP-RECHECK FIX (B3): INDEX contexts (NIFTY/BANKNIFTY — aur
+// deep dives pe FINNIFTY/SENSEX) pehle SIRF daily 6mo candles pe bante
+// the — ind = DAILY indicators, plan DAILY ATR geometry pe anchored, aur
+// pass-1 revival kabhi fire hi nahi hota tha (ctx.__ltfInd undefined).
+// Wo exactly wahi disease-class hai jo v21.13 ne stocks ke liye fix kiya
+// (daily RSI SHORT-zone vs 15m rally). Ab index ctx bhi the SAME
+// 15m→1h chain use karta hai: committee 1H view pe vote karti hai
+// (15m series resampled), __dailyInd = the REAL daily HTF reference,
+// __ltfInd = the 15m view (pass-1 revival fires — SMC/structure revival
+// + pattern/sr/volume/volatility second votes, stocks ki tarah).
+// Yahoo 15m down → honest daily fallback (pehle jaisa, koi penalty nahi).
+// (exported for the regression suite — the v2113x index-chain locks.)
+export async function buildIndiaIndexCtx(idx, regime, optionsCtx = null) {
+  // contract guard: INDEX tickers only (YF_TICKER keys — NIFTY/BANKNIFTY/
+  // FINNIFTY/SENSEX/INDIAVIX). An unknown STOCK symbol must NOT land here
+  // (it would get isIndex:true — wrong semantics); it keeps the honest
+  // "No data" answer exactly as before.
+  if (!YF_TICKER[idx]) return null;
+  const [candles15, daily] = await Promise.all([
+    fetchYahooIntradayCandles(idx, 'INDIA').catch(() => null),
+    fetchYahooCandles(idx, '6mo'),
+  ]);
+  const has15 = Array.isArray(candles15) && candles15.length >= 30;
+  if (!has15 && !daily) return null;
+  const dailyCi = Array.isArray(daily) ? computeIndicatorsFromCandles(daily) : null;
+  const dailyInd = dailyCi ? {
+    ...dailyCi, recommend: null,
+    high52w: Math.max(...daily.map(c => c.high)),
+    low52w: Math.min(...daily.map(c => c.low)),
+  } : null;
+  // the 1H committee view (stocks ki exact mirror)
+  let ind = dailyInd;
+  let h1Candles = null;
+  if (has15) {
+    const h1 = resampleCandles(candles15, 60);
+    h1Candles = (Array.isArray(h1) && h1.length >= 30) ? h1 : null;
+    const ci = h1Candles ? computeIndicatorsFromCandles(h1Candles) : null;
+    if (ci) {
+      ind = {
+        ...(dailyInd || {}), ...ci,
+        // HTF fields that must SURVIVE the 1h override (stock mirror):
+        high52w: dailyInd?.high52w ?? null,
+        low52w: dailyInd?.low52w ?? null,
+        relVolume: dailyInd?.relVolume ?? (ci.avgVolume20 > 0 ? +(ci.volume / ci.avgVolume20).toFixed(2) : null),
+        // SESSION VWAP (stock mirror: the series VWAP is NOT a session
+        // anchor — indexes carry no TV row, so today's 15m bars se the
+        // honest session anchor; zero-volume index bars → null abstain)
+        vwap: sessionVwapFromIntraday(candles15),
+      };
+    }
+  }
+  if (!ind) return null;
+  const ltp = has15 ? Number(candles15[candles15.length - 1].close) : Number(ind.ltp);
+  if (!(ltp > 0)) return null;
+  // honest day-change: aaj ke 15m bars ka open→last (freshest), warna
+  // daily last-vs-prev close, warna 0 (pehle hamesha 0 tha)
+  let changePct = 0;
+  if (has15) {
+    const lastDay = new Date(candles15[candles15.length - 1].time).toISOString().slice(0, 10);
+    const todays = candles15.filter(c => new Date(c.time).toISOString().slice(0, 10) === lastDay);
+    if (todays.length >= 2 && todays[0].open > 0) {
+      changePct = +(((todays[todays.length - 1].close / todays[0].open) - 1) * 100).toFixed(2);
+    }
+  } else if (Array.isArray(daily) && daily.length >= 2 && daily[daily.length - 2].close > 0) {
+    changePct = +(((daily[daily.length - 1].close / daily[daily.length - 2].close) - 1) * 100).toFixed(2);
+  }
+  const ctx = {
+    market: 'INDIA', symbol: idx, ltp, changePct,
+    isIndex: true, volume: 0,
+    ind, candles: h1Candles || (has15 ? candles15 : daily) || null,
+    __dailyInd: dailyInd, options: optionsCtx, regime,
+  };
+  // __tv = null (no TV scanner row for indexes — the chase guard + tape
+  // VWAP already handle a null row honestly); __ltfInd = the 15m view.
+  attachSuperCtx(ctx, null, has15 ? candles15 : null);
+  return ctx;
+}
+
+// SESSION VWAP from today's intraday bars (UTC-date grouping is safe for
+// NSE hours — no midnight crossing). Zero-volume series (Yahoo ^NSEI) →
+// null (honest abstain — NEVER the month-anchored series VWAP).
+function sessionVwapFromIntraday(candles) {
+  if (!Array.isArray(candles) || !candles.length) return null;
+  const lastDay = new Date(candles[candles.length - 1].time).toISOString().slice(0, 10);
+  let pv = 0, vv = 0;
+  for (const c of candles) {
+    if (new Date(c.time).toISOString().slice(0, 10) !== lastDay) continue;
+    const v = Number(c.volume) || 0;
+    pv += ((c.high + c.low + c.close) / 3) * v;
+    vv += v;
+  }
+  return vv > 0 ? +(pv / vv).toFixed(2) : null;
 }
 
 // (v6.3: the async buildCryptoCtx + buildIndexCtx duplicates were removed —
@@ -1451,16 +1548,11 @@ async function _computeBoard(mkt, deps, opts = {}) {
         ? fetchTVIndiaBatchChunked(tiered.scan)
         : fetchTVIndiaBatch(_legacyScan)).catch(() => ({})),
       Promise.allSettled(['NIFTY', 'BANKNIFTY'].map(async (idx) => {
-        const candles = await fetchYahooCandles(idx, '6mo');
-        if (!candles) return null;
-        const ci = computeIndicatorsFromCandles(candles);
-        if (!ci) return null;
-        return {
-          market: 'INDIA', symbol: idx, ltp: ci.ltp, changePct: 0,
-          isIndex: true, volume: 0,
-          ind: { ...ci, recommend: null, high52w: Math.max(...candles.map(c => c.high)), low52w: Math.min(...candles.map(c => c.low)) },
-          candles, options: opts.indexOptions?.[idx] ?? _idxOpts?.[idx] ?? null, regime,
-        };
+        // v21.13.x recheck fix: index contexts ab the SAME 15m→1h chain
+        // use karte hain as stocks (buildIndiaIndexCtx) — pehle yahan
+        // SIRF daily 6mo candles se ind banta tha (the last daily-
+        // resolution path feeding intraday index signals).
+        return buildIndiaIndexCtx(idx, regime, opts.indexOptions?.[idx] ?? _idxOpts?.[idx] ?? null);
       })),
     ]);
     // Feed the fresh rows into the hot engine — promoted names join
@@ -1530,10 +1622,29 @@ async function _computeBoard(mkt, deps, opts = {}) {
       if (universe.some(b => !futMap.get(b)?.last)) {
         const metRows = await fetchMetalsPrices().catch(() => null);
         for (const r of (Array.isArray(metRows) ? metRows : [])) if (!futMap.get(r.base)?.last) futMap.set(r.base, r);
-        if (metRows?.length) superMeta.priceSource = futMap.size > metRows.length ? 'coindcx-fut + binance-fut-metals' : 'binance-fut-usdt (metals fapi)';
-        else if (futMap.size > 0) superMeta.priceSource = 'coindcx-fut-usdt (metals partial)';
+      }
+      // v21.13.x recheck (P1): label derived from the ACTUAL serving rows'
+      // `source` fields — pehle fetchFuturesPrices ka internal Binance
+      // fallback (source 'binance-fut') bhi 'coindcx-fut-usdt (metals)'
+      // bol raha tha (live-verified mislabel: CoinDCX 403-dark pe bhi
+      // label CoinDCX). Honest labels = jo serve ho, wahi bole.
+      // Sourceless rows = the CoinDCX futures RT leg (the v11.3 contract:
+      // RT rows carry NO source marker; only fallback legs do) — they
+      // count as 'coindcx-fut-rt', never silently 'mixed'.
+      const _srcCounts = new Map();
+      for (const b of universe) {
+        const row = futMap.get(b);
+        if (!row) continue;
+        const s = row.source || 'coindcx-fut-rt';
+        _srcCounts.set(s, (_srcCounts.get(s) || 0) + 1);
+      }
+      const _srcs = [..._srcCounts.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0]);
+      if (_srcs.length === 1) {
+        superMeta.priceSource = `${_srcs[0]} (metals)`;
+      } else if (_srcs.length > 1) {
+        superMeta.priceSource = `${_srcs.join(' + ')} (metals)`;
       } else {
-        superMeta.priceSource = 'coindcx-fut-usdt (metals)';
+        superMeta.priceSource = futMap.size > 0 ? 'mixed (metals)' : 'unavailable';
       }
     } else if (futMap.size === 0 || universe.some(b => !futMap.has(b))) {
       const { map } = await binancePriceMap(universe, true).catch(() => ({ map: new Map() }));
@@ -2079,7 +2190,28 @@ async function _computeBoard(mkt, deps, opts = {}) {
           // v10.8: bull/bear debate cases — the PM verdict's evidence trail
           ...(council.debate ? { debate: { bull: council.debate.bull?.[c.ctx.symbol]?.case ?? null, bear: council.debate.bear?.[c.ctx.symbol]?.case ?? null } } : {}) };
         aiConf = av.conf ?? verdict.confidence ?? null;
+      } else {
+        // v21.13.x recheck (C1): the 16th voting seat never SILENTLY
+        // vanishes from the roster — an unparseable verdict = structural
+        // abstain (options/fundamentals ki tarah na:true), roster 16
+        // stable rehta hai (the user-visible committee).
+        votes.push({
+          id: 'aicouncil', name: 'AI Council (LLM)', role: MODELS.find(m => m.id === 'aicouncil').role,
+          weight: MODELS.find(m => m.id === 'aicouncil').weight * (_ad?.aicouncil?.mul ?? 1),
+          dir: 0, conf: 0, na: true,
+          reasons: ['AI Council verdict unparseable — structural abstain'],
+        });
       }
+    } else {
+      // v21.13.x recheck (C1): offline council = honest structural
+      // abstain, NOT a missing seat (pehle the seat silently vanished —
+      // the committee roster was environment-dependent 15/16).
+      votes.push({
+        id: 'aicouncil', name: 'AI Council (LLM)', role: MODELS.find(m => m.id === 'aicouncil').role,
+        weight: MODELS.find(m => m.id === 'aicouncil').weight * (_ad?.aicouncil?.mul ?? 1),
+        dir: 0, conf: 0, na: true,
+        reasons: ['AI Council offline (no provider verdict) — structural abstain'],
+      });
     }
     // v20.9.4 FIX (H2 — meta-ensemble ab PRODUCTION me wired):
     // aggregateVotesWithMeta v10.5 se defined tha par board/deep KABHI call
@@ -2874,21 +3006,11 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
       // the IntradayTape read — same as the board's attachSuperCtx).
       if (ctx) ctx.__tv = tv[sym];
     } else {
-      // Index fallback (NIFTY/BANKNIFTY or unknown symbol → Yahoo daily candles).
-      ctx = await (async () => {
-        const candles = await fetchYahooCandles(sym, '6mo');
-        if (!candles) return null;
-        const ci = computeIndicatorsFromCandles(candles);
-        if (!ci) return null;
-        // v11.8: index deep dives get the SAME real option-chain ctx the
-        // board attaches (5-min TTL cache; nse/bse chains only) unless the
-        // caller passed its own (the options-desk flavor).
-        return {
-          market: 'INDIA', symbol: sym, ltp: ci.ltp, changePct: 0, isIndex: true, volume: 0,
-          ind: { ...ci, recommend: null, high52w: Math.max(...candles.map(c => c.high)), low52w: Math.min(...candles.map(c => c.low)) },
-          candles, options: opts?.optionsCtx ?? _indexOptionsSnapshot()?.[sym] ?? null, regime,
-        };
-      })();
+      // Index fallback (NIFTY/BANKNIFTY/FINNIFTY/SENSEX or unknown symbol)
+      // → v21.13.x recheck: the SAME 15m→1h chain as the board (pehle
+      // yahan bhi SIRF daily candles bante the — board ≠ deep card).
+      // opts.optionsCtx preference preserved (the options-desk flavor).
+      ctx = await buildIndiaIndexCtx(sym, regime, opts?.optionsCtx ?? _indexOptionsSnapshot()?.[sym] ?? null).catch(() => null);
     }
     // accuracy-plan Phase 2.2: a deep dive on an F&O STOCK gets the same
     // per-stock option ctx the board attaches (cached snapshot; the deep
@@ -2963,12 +3085,17 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
   // LTF candles: 15m (India) / 1h (crypto) — SMC + MTF + structure
   // stop + edge stats. Tries the ctx candles first (crypto deep path
   // already fetched CoinDCX 1h), then the Yahoo intraday fallback.
-  // v11.8: INDIA index contexts carry DAILY candles (the board's 6mo
-  // daily series) — those must NEVER pass as the "15m" LTF (the tape
-  // vote, SMC revival and edge replay would all read the wrong
-  // timeframe). Index deep dives always fetch the real 15m series.
-  const _ctxCandlesAreDaily = !!(ctx.isIndex && mkt === 'INDIA');
-  let ltfCandles = !_ctxCandlesAreDaily && Array.isArray(ctx.candles) && ctx.candles.length >= 60 ? ctx.candles : null;
+  // v21.13.x DEEP-RECHECK FIX: post-v21.13 the INDIA ctx.candles is the
+  // 1H COMMITTEE series (stocks AND indexes — buildIndiaStockCtx /
+  // buildIndiaIndexCtx) — that must NEVER pass as the "15m" LTF here:
+  // the tape vote, SMC/macross revival, quality verdict ka ltf
+  // (ltfLabel '15m') sab 1h padh rahe the while the BOARD card's tape
+  // seat reads the real 15m series → deep card ≠ board card (the exact
+  // "board ne LONG bola, deep SHORT nikala" disease). INDIA deep dives
+  // now ALWAYS read the real 15m series (2-min TTL cache — the board
+  // already warmed it). Crypto/futures keep the ctx 1h candles (their
+  // LTF convention).
+  let ltfCandles = mkt !== 'INDIA' && Array.isArray(ctx.candles) && ctx.candles.length >= 60 ? ctx.candles : null;
   let ltfInd = null;
   // v10.5: the deep path's MTF agreement (caps STRONG on conflict)
   let _deepMtfAgreement = null;
@@ -3086,7 +3213,26 @@ async function _computeDeepSignal(sym, mkt, deps, opts, cacheKey) {
         id: 'aicouncil', name: 'AI Council (LLM)', role: MODELS.find(m => m.id === 'aicouncil').role,
         weight: MODELS.find(m => m.id === 'aicouncil').weight * (_ad?.aicouncil?.mul ?? 1), ...av,
       });
+    } else {
+      // v21.13.x recheck (C1): unparseable verdict → structural abstain
+      const _ad = adaptiveMultipliers(_ledgerModelStats());
+      votes.push({
+        id: 'aicouncil', name: 'AI Council (LLM)', role: MODELS.find(m => m.id === 'aicouncil').role,
+        weight: MODELS.find(m => m.id === 'aicouncil').weight * (_ad?.aicouncil?.mul ?? 1),
+        dir: 0, conf: 0, na: true,
+        reasons: ['AI Council verdict unparseable — structural abstain'],
+      });
     }
+  } else {
+    // v21.13.x recheck (C1): offline council → honest structural abstain
+    // (the seat never silently vanishes from the deep roster either)
+    const _ad = adaptiveMultipliers(_ledgerModelStats());
+    votes.push({
+      id: 'aicouncil', name: 'AI Council (LLM)', role: MODELS.find(m => m.id === 'aicouncil').role,
+      weight: MODELS.find(m => m.id === 'aicouncil').weight * (_ad?.aicouncil?.mul ?? 1),
+      dir: 0, conf: 0, na: true,
+      reasons: ['AI Council offline (no provider verdict) — structural abstain'],
+    });
   }
   // v20.9.4 [H2 — meta-ensemble wiring]: deep FINAL aggregation bhi
   // meta-aware (board final jaisa hi — see the board site comment). Deep

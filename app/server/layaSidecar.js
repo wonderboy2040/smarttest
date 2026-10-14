@@ -634,6 +634,13 @@ export function createLayaSidecar(opts = {}) {
     if (st.shuttingDown || st.child) return null;
     if (_exeMissing()) {
       st.phase = 'gave-up';
+      st.nextRestartAt = 0; // pending restart cancel — koi war nahi
+      // v21.13.x recheck (L3): tickTimer clear — baaki gave-up paths
+      // (foreign squatter :836 / adopt-window expiry :907) timer clear
+      // karte hain, ye path chhoota tha (ek 1s no-op interval supervisor
+      // lifetime tak tick karti reh jaati thi).
+      try { deps.clearIntervalFn(st.tickTimer); } catch { /* noop */ }
+      st.tickTimer = null;
       journal({ ev: 'laya-giveup', reason: 'exe-not-found', exe: _exePath() });
       log(`[laya] laya-serve nahi mila (${_exePath()}) — LAYA_HOME check karo (dir C:\\laya-env\\Scripts\\laya-serve.exe hona chahiye) ya LAYA_SERVE_CMD set karo. Sidecar band; site normal chalegi.`);
       return null;

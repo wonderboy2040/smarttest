@@ -463,13 +463,18 @@ function _bnFutSig(bases) {
     ? [...new Set(bases.map(b => String(b || '').toUpperCase()).filter(Boolean))].sort().join(',')
     : '';
 }
-/** v12.7: Binance fapi `symbols` query param — URL-encoded JSON array of
- * BASEUSDT symbols, capped at 100 (the documented limit). Null when the
- * caller wants the full book. */
-function _bnFutSymbolsParam(sig) {
+/** v21.13.x recheck (P2): per-symbol request URLs — fapi IGNORES the
+ * ?symbols= JSON-array param (live-verified: full ~793-row ~1.1MB book
+ * comes back anyway) so the v12.7 filter was silently defeated and a
+ * CoinDCX-dark episode re-pulled the whale every 2s poll. Single
+ * `symbol=` params work: ~20 tiny rows, LOWER total weight (N×1 vs 40).
+ * Null when the caller wants the full book. */
+function _bnFutSymbolUrls(sig) {
   if (!sig) return null;
   const symbols = sig.split(',').map(b => `${b}USDT`).slice(0, 100);
-  return symbols.length > 0 ? `?symbols=${encodeURIComponent(JSON.stringify(symbols))}` : null;
+  return symbols.length > 0
+    ? symbols.map(s => `${BINANCE_FUT_URL}?symbol=${encodeURIComponent(s)}`)
+    : null;
 }
 async function _binanceFutBook(bases) {
   const now = _nowFn();
@@ -480,18 +485,32 @@ async function _binanceFutBook(bases) {
   const inflight = { sig, p: null };
   inflight.p = (async () => {
     const f = _bnFutFetchImpl || globalThis.fetch;
-    const symParam = _bnFutSymbolsParam(sig);
-    const r = await f(symParam ? `${BINANCE_FUT_URL}${symParam}` : BINANCE_FUT_URL, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!r.ok) throw new Error(`binance fut HTTP ${r.status}`);
-    const j = await r.json();
-    if (!Array.isArray(j)) throw new Error('binance fut: bad payload');
+    const urls = _bnFutSymbolUrls(sig);
+    let j = null;
+    if (urls) {
+      // per-symbol fan-out (each row ~600B — total ~2-20KB); a failed
+      // symbol is skipped honestly, zero rows = the legacy full-book leg
+      const settled = await Promise.allSettled(urls.map(async (u) => {
+        const r = await f(u, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!r.ok) throw new Error(`binance fut HTTP ${r.status}`);
+        return r.json();
+      }));
+      j = settled.filter(s => s.status === 'fulfilled').map(s => s.value).filter(Boolean);
+      if (!Array.isArray(j) || j.length === 0) j = null; // fall to the full-book leg
+    }
+    // v21.13.x recheck (P2b): the row extraction is retried against the
+    // full book when the per-symbol leg resolves but yields ZERO valid
+    // bases (fapi answers invalid symbols with {"code":-1121} OBJECTS —
+    // non-empty j, no rows). One shared extractor, two legs.
+    const wanted = sig ? new Set(sig.split(',')) : null;
     const byBase = new Map();
-    for (const x of j) {
+    for (const x of (j || [])) {
       if (!x || typeof x.symbol !== 'string' || !x.symbol.endsWith('USDT')) continue;
       const base = x.symbol.slice(0, -4);
+      if (wanted && !wanted.has(base)) continue; // belt-and-braces: only what we asked
       const last = parseFloat(x.lastPrice);
       if (!base || !(last > 0)) continue;
       byBase.set(base, {
@@ -501,6 +520,34 @@ async function _binanceFutBook(bases) {
         low: parseFloat(x.lowPrice) || 0,
         volume: parseFloat(x.volume) || 0,
       });
+    }
+    // v21.13.x recheck (P2b): the full-book leg runs whenever ZERO valid
+    // bases were extracted — per-symbol all-rejected (j null), per-symbol
+    // resolving as error objects ({"code":-1121}: non-empty j, no rows),
+    // ya the no-sig full-book caller (urls null, j null). One condition,
+    // every path covered.
+    if (byBase.size === 0) {
+      const r = await f(BINANCE_FUT_URL, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!r.ok) throw new Error(`binance fut HTTP ${r.status}`);
+      j = await r.json();
+      if (!Array.isArray(j)) j = null;
+      for (const x of (j || [])) {
+        if (!x || typeof x.symbol !== 'string' || !x.symbol.endsWith('USDT')) continue;
+        const base = x.symbol.slice(0, -4);
+        if (wanted && !wanted.has(base)) continue;
+        const last = parseFloat(x.lastPrice);
+        if (!base || !(last > 0)) continue;
+        byBase.set(base, {
+          last,
+          changePct: parseFloat(x.priceChangePercent) || 0,
+          high: parseFloat(x.highPrice) || 0,
+          low: parseFloat(x.lowPrice) || 0,
+          volume: parseFloat(x.volume) || 0,
+        });
+      }
     }
     if (byBase.size === 0) throw new Error('binance fut: empty');
     _bnFut = { at: _nowFn(), sig, byBase };

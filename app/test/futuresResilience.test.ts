@@ -81,13 +81,28 @@ describe('futures.js — v11.3 fetchFuturesPrices resilience chain', () => {
     expect(btc.mark).toBeCloseTo(76_099.9, 6);
   });
 
-  it('leg 3 — REST dead + book empty + Binance reachable: same-domain synth rows (source binance-fut) + the v12.7 ?symbols= universe filter', async () => {
-    let fapiUrl = '';
+  it('leg 3 — REST dead + book empty + Binance reachable: same-domain synth rows (source binance-fut) + the per-symbol universe filter', async () => {
+    const fapiUrls: string[] = [];
     routeFetch(url => (url.startsWith(BINANCE_FUT)
-      ? (() => { fapiUrl = url; return { ok: true, status: 200, json: async () => ([
-        { symbol: 'BTCUSDT', lastPrice: '61000.5', priceChangePercent: '1.1', highPrice: '61500', lowPrice: '60200', volume: '21000.5', markPrice: '60999.1' },
-        { symbol: 'ETHUSDT', lastPrice: '3120.75', priceChangePercent: '-0.4', highPrice: '3150', lowPrice: '3080', volume: '15000.2' },
-      ]) }; })()
+      ? (() => {
+        fapiUrls.push(url);
+        // v21.13.x (P2): the REAL fapi ?symbol= contract — a SINGLE
+        // ticker object per request (the ?symbols= JSON-array param was
+        // IGNORED by fapi — live-verified — so the v12.7 filter was
+        // silently defeated and every dark episode pulled the full
+        // ~793-symbol ~1.1MB book)
+        const sym = /symbol=([A-Z0-9]+)/.exec(url)?.[1] || '';
+        const anchor = sym === 'BTCUSDT' ? 61_000.5 : sym === 'ETHUSDT' ? 3_120.75 : 100;
+        return {
+          ok: true, status: 200,
+          json: async () => ({
+            symbol: sym, lastPrice: String(anchor),
+            priceChangePercent: sym === 'BTCUSDT' ? '1.1' : '-0.4',
+            highPrice: String(anchor * 1.008), lowPrice: String(anchor * 0.992),
+            volume: '21000.5', markPrice: String(anchor),
+          }),
+        };
+      })()
       : restDead()));
     const rows = await fetchFuturesPrices();
     const btc = rows.find(r => r.pair === 'B-BTC_USDT')!;
@@ -95,15 +110,18 @@ describe('futures.js — v11.3 fetchFuturesPrices resilience chain', () => {
     expect(btc.source).toBe('binance-fut');
     expect(btc.changePct).toBeCloseTo(1.1, 6);
     expect(rows.find(r => r.pair === 'B-ETH_USDT')!.last).toBeCloseTo(3_120.75, 6);
-    // v12.7 BANDWIDTH LOCK: the dark-fallback fapi leg must request ONLY the
-    // board's universe (FUTURES_UNIVERSE) via Binance's ?symbols= JSON-array
-    // param — never the full ~500-symbol 1-2MB book.
-    expect(fapiUrl.startsWith(`${BINANCE_FUT}?symbols=`)).toBe(true);
-    const symbols = JSON.parse(decodeURIComponent(fapiUrl.slice(`${BINANCE_FUT}?symbols=`.length)));
-    expect(Array.isArray(symbols)).toBe(true);
-    expect(symbols).toContain('BTCUSDT');
-    expect(symbols).toContain('ETHUSDT');
-    expect(symbols.length).toBeLessThanOrEqual(20); // the static universe, never the ~500-symbol book
+    // v21.13.x BANDWIDTH LOCK: the dark-fallback fapi leg must issue
+    // PER-SYMBOL ?symbol= requests for the board's universe only —
+    // never the full ~793-symbol 1-2MB book.
+    expect(fapiUrls.length).toBeGreaterThan(0);
+    for (const u of fapiUrls) {
+      expect(u.startsWith(`${BINANCE_FUT}?symbol=`)).toBe(true);
+    }
+    const syms = fapiUrls.map(u => u.slice(`${BINANCE_FUT}?symbol=`.length)).sort();
+    expect(syms).toContain('BTCUSDT');
+    expect(syms).toContain('ETHUSDT');
+    expect(new Set(syms).size).toBe(syms.length);            // no duplicates
+    expect(syms.length).toBeLessThanOrEqual(20);              // the static universe, never the ~793-symbol book
   });
 
   it('leg 3′ — Bybit linear serves when Binance fapi is dark (source bybit-fut)', async () => {
@@ -126,9 +144,13 @@ describe('futures.js — v11.3 fetchFuturesPrices resilience chain', () => {
       return restDead();
     });
     await expect(fetchFuturesPrices()).rejects.toThrow(); // empty book → all legs dead → throw
-    expect(fapiHits).toBe(1);
+    // v21.13.x (P2): one round = the per-symbol fan-out (universe size)
+    // + the full-book leg (empty per-symbol → fall-through) — counted as
+    // a ROUND, not a single hit. The contract: the round count freezes.
+    const afterFirstRound = fapiHits;
+    expect(afterFirstRound).toBeGreaterThan(0);
     await expect(fetchFuturesPrices()).rejects.toThrow();
-    expect(fapiHits).toBe(1); // held off — no 2s hammer while CoinDCX is dark
+    expect(fapiHits).toBe(afterFirstRound); // held off — no 2s hammer while CoinDCX is dark
   });
 
   it('leg 4 — everything dead but the cache is <3 min old: deep-stale serve beats a dead board', async () => {

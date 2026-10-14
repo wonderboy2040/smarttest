@@ -2,7 +2,9 @@
 ml-service/tests/test_meta_ensemble.py — v10.5 META-ENSEMBLE (Upgrade 4)
 
 Locks the Python side of the stacked meta-learner:
-  1. Feature contract: 14 models x (dir, conf) + regime flag = 29, in order
+  1. Feature contract: 16 models x (dir, conf) + regime flag = 33, in order
+     (v21.13.x recheck M3: the 16-seat roster sync — structure / macross /
+     tape-mtf proxies + the legacy 'tape' key retired)
   2. Direction labels: deadband boundaries + horizon alignment
   3. resample_ohlcv: OHLCV aggregation correctness (the MTF helper)
   4. load_meta_ensemble: missing pkl → (None, None) — the WEIGHTED FALLBACK
@@ -35,19 +37,22 @@ from pipeline.features import resample_ohlcv  # noqa: E402
 # ------------------------------------------------------------------
 def test_feature_contract_shape():
     names = meta_feature_names()
-    assert len(names) == 29
+    assert len(names) == 33
     assert names[0] == "trend__dir" and names[1] == "trend__conf"
     assert names[-1] == "regime_risk_flag"
-    # the 14 model ids are the contract order
+    # the 16 model ids are the contract order
     for i, mid in enumerate(META_MODEL_IDS):
         assert names[i * 2] == f"{mid}__dir"
         assert names[i * 2 + 1] == f"{mid}__conf"
+    # v21.13.x: the new seats are IN the contract, the legacy tape is OUT
+    assert "tape-mtf__dir" in names and "structure__dir" in names and "macross__dir" in names
+    assert not any(n.startswith("tape__") for n in names)
 
 
 def test_votes_to_feature_vector_order_and_clamps():
     votes = {"trend": (1, 80), "momentum": (-1, 60)}
     vec = votes_to_feature_vector(votes, 0.5)
-    assert len(vec) == 29
+    assert len(vec) == 33
     assert vec[0] == 1 and vec[1] == 80           # trend
     assert vec[2] == -1 and vec[3] == 60           # momentum
     assert vec[4] == 0 and vec[5] == 0            # volatility (absent → abstain)
@@ -63,12 +68,27 @@ def test_votes_to_feature_vector_order_and_clamps():
 def test_simulate_model_votes_shape():
     row = {"rsi": 70.0, "sma_cross": 0.01, "bb_pct_b": 0.8, "stoch_k": 60, "stoch_d": 50,
            "dist_52w_high": -0.01, "dist_52w_low": 0.5, "ret_5": 0.01, "roc_10": 0.02,
-           "obv": 1000.0, "obv_slope": 50.0}
+           "obv": 1000.0, "obv_slope": 50.0,
+           # v21.13.x M2: the new seats' inputs (a realistic trending row)
+           "ema10": 105.0, "ema20": 103.0, "ema50": 100.0, "trend_strength": 1.5,
+           "acceleration": 0.002}
     votes = simulate_model_votes(row)
     assert set(votes.keys()) == set(META_MODEL_IDS)
     for d, c in votes.values():
         assert d in (-1, 0, 1)
         assert 0 <= c <= 100
+    # v21.13.x M2: the 3 new seats have LIVE proxies (not constant 0) —
+    # a trending row (ema stack up + fresh sma cross + aligned momentum)
+    # must produce non-abstain LONG votes from all three.
+    assert votes["macross"][0] == 1
+    assert votes["structure"][0] == 1
+    assert votes["tape-mtf"][0] == 1
+    assert votes["tape-mtf"][1] >= 50
+    # a choppy/flat row → the new seats abstain honestly
+    flat = simulate_model_votes({"rsi": 50.0})
+    assert flat["macross"] == (0, 0)
+    assert flat["structure"] == (0, 0)
+    assert flat["tape-mtf"] == (0, 0)
 
 
 # ------------------------------------------------------------------
@@ -192,7 +212,7 @@ def test_load_missing_pkl_is_none(_clean_artifacts):
 def test_train_then_predict_roundtrip(_clean_artifacts):
     out = train_meta_ensemble(_synthetic_df())
     assert out.get("status") == "trained", out
-    assert out["features"] == 29
+    assert out["features"] == 33
     assert (_clean_artifacts / "meta_ensemble.pkl").exists()
     # predict works with the fresh artifact
     clf, cols = load_meta_ensemble()

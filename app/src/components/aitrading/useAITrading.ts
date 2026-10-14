@@ -121,8 +121,15 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
   // resurrected the just-closed position as OPEN for up to 45s). Only
   // the LATEST request's response applies.
   const posSeqRef = useRef(0);
+  // v21.13.x recheck (P3): boards request sequence guard — loadPositions
+  // ka exact pattern. The 30s interval can overlap a slow poll (30s abort
+  // timeout) ya rescan (90s); a LATE older response overwriting a NEWER
+  // board = a brief stale flash (re-ranked cards snap back). Sirf the
+  // LATEST loadBoards call applies its responses.
+  const boardsSeqRef = useRef(0);
 
   const loadBoards = useCallback(async (opts?: { rescan?: boolean }) => {
+    const seq = ++boardsSeqRef.current;
     // v12.5 RESCAN: ?rescan=1 → server-side noCache — a FULL fresh
     // universe scan (single-flight on the server). Cold scans are
     // heavier than the 60s-cache read — the timeout widens so a slow
@@ -156,6 +163,7 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
           return r.json().catch(() => null);
         }).catch(() => null)
         .then(j => {
+          if (seq !== boardsSeqRef.current) return; // stale response — a newer loadBoards already landed
           if (j === 'KEEP') return; // 304 revalidation — board unchanged, healthy
           if (j) { setter(j); markOk(); markMkt(m, false); _notifyNewStrongs(m, j); }
           else markMkt(m, true); // v21.4.1 [D3]: fetch/parse fail — sirf YE desk error me
@@ -166,6 +174,7 @@ export function useAITrading(active: boolean, scope?: { markets?: Array<'INDIA' 
     if (markets.includes('GLOBALFUTURES')) jobs.push(boardJob('GLOBALFUTURES', setGlobalFut as (b: unknown) => void));
     if (markets.includes('METALS')) jobs.push(boardJob('METALS', setMetals as (b: unknown) => void));
     await Promise.allSettled(jobs);
+    if (seq !== boardsSeqRef.current) return; // stale call — the newer load owns the flags
     setBoardError(!anyOk); // v7.0.2: every requested board failed
     setLoading(false);
   }, [markets.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps

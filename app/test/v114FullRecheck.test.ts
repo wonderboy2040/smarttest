@@ -190,7 +190,11 @@ describe('v11.4 · trackRecord PARTIAL rows', () => {
     expect(ev).toBeFalsy();                                   // old code closed at SL (full loss)
     const be = events.find(e => e.type === 'BE_TRAIL_EXIT');
     expect(be).toBeTruthy();
-    expect(be.price).toBe(100);                               // breakeven floor
+    // v21.13.x (B2): the BE trail fills at the TRADED price (worst-side)
+    // — a tick gapping THROUGH breakeven (94 < entry 100) books the
+    // runner at the honest market-order fill (paperTrading [H3] parity),
+    // not a fake breakeven. Pehle exact-entry 100 fill hota tha.
+    expect(be.price).toBe(94);                                // worst-side fill (tick 94 < entry 100)
     const rec = track.getTrackRecord(1);
     expect(rec.openCount).toBe(0);
   });

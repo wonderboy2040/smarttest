@@ -76,7 +76,7 @@ class PortfolioRequest(BaseModel):
 
 
 class MetaEnsembleRequest(BaseModel):
-    """14-model vote wire format from the Node ensemble (Upgrade 4).
+    """16-model vote wire format from the Node ensemble (Upgrade 4, v21.13 16-seat roster).
     votes: [{id, dir (-1|0|1), conf (0-100), weight?}] — unknown ids
     are ignored, missing ids vote (0,0). regime: 'RISK_ON'|'NEUTRAL'|
     'RISK_OFF'|'GOLDILOCKS'|... maps to the risk flag feature."""
@@ -316,8 +316,9 @@ async def providers():
 # ============================================================
 # META-ENSEMBLE COMBINATION (Upgrade 4)
 # ------------------------------------------------------------
-# The Node ensemble (server/ai/ensemble.js) POSTs its 14 raw votes
-# here when AI_ENABLE_META_ENSEMBLE=true. Response shape (the
+# The Node ensemble (server/ai/ensemble.js) POSTs its 16 raw votes
+# here when the meta flag is ON (default ON since v21.13.x — explicit
+# AI_ENABLE_META_ENSEMBLE=false/0/off/no disables). Response shape (the
 # contract the Node side validates before using):
 #   { ok, side, confidence, agreement, grade, source: "meta"|"weighted" }
 # EVERY failure mode (pkl missing, feature mismatch, predict
@@ -330,13 +331,33 @@ async def meta_ensemble(req: MetaEnsembleRequest):
     from models.train_signal import predict_meta_direction
 
     votes = [v for v in (req.votes or []) if isinstance(v, dict) and v.get("id")]
-    # weighted fallback (mirrors ensemble.js aggregateVotes math)
-    bull = sum((v.get("weight") or 1.0) * (v.get("conf") or 0) / 100.0
+    # weighted fallback (mirrors ensemble.js aggregateVotes math).
+    # v21.13.x recheck (M6): weight-0 SHADOW seats are excluded from the
+    # voting denominator (Node-side contract — meshModels.js gating forces
+    # weight 0 on shadow seats; `or 1.0` was silently counting them as
+    # full votes in this echo, overstating `agreement`).
+    def _w(v):
+        try:
+            w = float(v.get("weight") or 0.0)
+        except (TypeError, ValueError):
+            w = 0.0
+        return w if w > 0 else 0.0
+
+    def _vote_weight(v):
+        # a missing weight = a plain committee vote (weight 1); an explicit
+        # 0 = shadow — not counted
+        return 1.0 if v.get("weight") is None else _w(v)
+
+    bull = sum(_vote_weight(v) * (v.get("conf") or 0) / 100.0
                for v in votes if (v.get("dir") or 0) > 0)
-    bear = sum((v.get("weight") or 1.0) * (v.get("conf") or 0) / 100.0
+    bear = sum(_vote_weight(v) * (v.get("conf") or 0) / 100.0
                for v in votes if (v.get("dir") or 0) < 0)
-    voting = sum((v.get("weight") or 1.0) for v in votes if (v.get("dir") or 0) != 0 and (v.get("conf") or 0) > 0)
-    side = "LONG" if bull >= bear else "SHORT" if bull > 0 or bear > 0 else "FLAT"
+    voting = sum(_vote_weight(v) for v in votes if (v.get("dir") or 0) != 0 and (v.get("conf") or 0) > 0)
+    # v21.13.x (B6): tie rule mirrors Node exactly — bull>bear LONG,
+    # bear>bull SHORT, EXACT TIE → FLAT (pehle `bull >= bear` free-LONG
+    # bias tha; Node kabhi meta-side disagree accept nahi karta, par
+    # echo honest hona chahiye).
+    side = "LONG" if bull > bear else "SHORT" if bear > bull else "FLAT"
     if voting <= 0 or (bull == 0 and bear == 0):
         side = "FLAT"
     agreement = (max(bull, bear) / voting) if voting > 0 else 0.0

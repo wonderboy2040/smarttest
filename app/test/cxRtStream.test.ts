@@ -163,12 +163,15 @@ describe('cxRtStream — USDT perp domain (FUT_ keys, 2s direct CoinDCX)', () =>
         return { ok: false, status: 403, json: async () => ({}) }; // WAF block
       }
       if (url.includes('fapi.binance.com')) {
+        // v21.13.x (P2): the REAL fapi ?symbol= contract — a single
+        // ticker OBJECT per request (fapi ignores ?symbols= arrays)
+        const sym = /symbol=([A-Z0-9]+)/.exec(url)?.[1] || '';
+        const row = sym === 'BTCUSDT'
+          ? { symbol: 'BTCUSDT', lastPrice: '61000.5', priceChangePercent: '1.1', highPrice: '61500', lowPrice: '60200', volume: '21000.5' }
+          : { symbol: 'ETHUSDT', lastPrice: '3120.75', priceChangePercent: '-0.4', highPrice: '3150', lowPrice: '3080', volume: '15000.2' };
         return {
           ok: true, status: 200,
-          json: async () => ([
-            { symbol: 'BTCUSDT', lastPrice: '61000.5', priceChangePercent: '1.1', highPrice: '61500', lowPrice: '60200', volume: '21000.5' },
-            { symbol: 'ETHUSDT', lastPrice: '3120.75', priceChangePercent: '-0.4', highPrice: '3150', lowPrice: '3080', volume: '15000.2' },
-          ]),
+          json: async () => (sym ? row : [row]), // no-sig full-book caller keeps the array shape
         };
       }
       return null;
@@ -716,16 +719,18 @@ describe('cxRtStream — v10.15 BINANCE FUTURES WS ACCELERATOR (the tier between
   });
 
   it('both CoinDCX AND Binance WS dark → the Binance REST 5s path still takes over (tier below)', async () => {
-    let fapiUrl = '';
+    const fapiUrls: string[] = [];
     routeFetch(url => {
       if (url.includes('current_prices/futures/rt') && !url.includes('margin_currency')) {
         return { ok: false, status: 403, json: async () => ({}) };
       }
       if (url.includes('fapi.binance.com')) {
-        fapiUrl = url;
-        return { ok: true, status: 200, json: async () => ([
-          { symbol: 'BTCUSDT', lastPrice: '62000.25', priceChangePercent: '0.9', highPrice: '62500', lowPrice: '61500', volume: '9000' },
-        ]) };
+        // v21.13.x (P2): per-symbol single-object contract
+        const sym = /symbol=([A-Z0-9]+)/.exec(url)?.[1] || '';
+        fapiUrls.push(url);
+        return { ok: true, status: 200, json: async () => (sym
+          ? { symbol: sym, lastPrice: '62000.25', priceChangePercent: '0.9', highPrice: '62500', lowPrice: '61500', volume: '9000' }
+          : [{ symbol: 'BTCUSDT', lastPrice: '62000.25', priceChangePercent: '0.9', highPrice: '62500', lowPrice: '61500', volume: '9000' }]) };
       }
       return null;
     });
@@ -740,13 +745,14 @@ describe('cxRtStream — v10.15 BINANCE FUTURES WS ACCELERATOR (the tier between
     await vi.waitFor(() => expect(sockets.length).toBe(1));
     await vi.waitFor(() => expect(getTick('FUT_BTC')?.source).toBe('binance-fut-rt'), { timeout: 15_000 });
     expect(getTick('FUT_BTC')!.price).toBeCloseTo(62000.25, 6);
-    // v12.7 BANDWIDTH LOCK: the REST fallback requested ONLY the missing
-    // subscribed bases via Binance's ?symbols= param — never the full
-    // ~500-symbol 1-2MB book (the outage-mode whale).
-    expect(fapiUrl).toContain('?symbols=');
-    const symbols = JSON.parse(decodeURIComponent(fapiUrl.slice(fapiUrl.indexOf('?symbols=') + '?symbols='.length)));
-    expect(symbols).toContain('BTCUSDT');
-    expect(symbols.length).toBeLessThanOrEqual(100);
+    // v21.13.x BANDWIDTH LOCK (P2): the REST fallback requested ONLY the
+    // missing subscribed bases via per-symbol ?symbol= requests — never
+    // the full ~793-symbol ~1.1MB book (the outage-mode whale; fapi
+    // ignores the old ?symbols= JSON-array param — live-verified).
+    expect(fapiUrls.length).toBeGreaterThan(0);
+    for (const u of fapiUrls) expect(u).toContain('?symbol=');
+    expect(fapiUrls.some(u => u.includes('symbol=BTCUSDT'))).toBe(true); // the missing base requested
+    expect(fapiUrls.length).toBeLessThanOrEqual(100);
   }, 25_000);
 
   it('the cx socket recovers → the accelerator STANDS DOWN (hot-standby closes; CoinDCX owns the key again)', async () => {

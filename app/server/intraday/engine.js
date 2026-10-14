@@ -578,9 +578,19 @@ export function analyzeIntradayFromScanner(symbol, tv, groww, opts = {}) {
   }
 
   const longR = scoreSide('LONG'), shortR = scoreSide('SHORT');
+  // v21.13.x recheck (B5): exact-score ties no longer break LONG (the
+  // ensemble's v12.7 tie→FLAT fix ka engine mirror — a free LONG bias on
+  // a coin-flip setup). A tie is a NO-EDGE read: keep the deterministic
+  // LONG/SHORT shape downstream contracts expect, but demote below the
+  // routes pool floor (70) so the tie can never become an entry.
+  const _tieScore = longR.score === shortR.score;
   const direction = longR.score >= shortR.score ? 'LONG' : 'SHORT';
   let quantConfidence = Math.max(longR.score, shortR.score);
   const reasons = direction === 'LONG' ? longR.reasons : shortR.reasons;
+  if (_tieScore) {
+    quantConfidence = Math.min(quantConfidence, 69);
+    reasons.push('⚖️ TIE — dono sides barabar score, koi directional edge nahi');
+  }
 
   // ---------- MARKET REGIME PENALTY (NIFTY/VIX gating) ----------
   // v4: counter-regime -10 (was -6), VIX-HIGH -6 (was -3)

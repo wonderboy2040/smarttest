@@ -347,7 +347,18 @@ export function evaluateTracked(quotes, events, mktQuotes = null) {
       // first so a gap UP still books the win.
       if (hitT2) { _closeRow(row, row.target2, 'T2_HIT', events); continue; }
       const hitTrail = isLong ? price <= row.entry : price >= row.entry;
-      if (hitTrail) { _closeRow(row, row.entry, 'BE_TRAIL_EXIT', events); continue; }
+      // v21.13.x recheck (B2): BE_TRAIL_EXIT fills at the TRADED price
+      // (worst-side), not exactly at entry — a tick that gaps THROUGH
+      // breakeven books the runner at the honest fill the market order
+      // would receive (paperTrading v20.9.1 [H3] ka exact mirror; SL_HIT
+      // ne v21.13 me yahi fix liya tha — accounting ab dono engines me
+      // identical hai, gap-downs-through-entry score as small losses,
+      // not fake breakevens).
+      if (hitTrail) {
+        const beFill = isLong ? Math.min(price, row.entry) : Math.max(price, row.entry);
+        _closeRow(row, beFill, 'BE_TRAIL_EXIT', events);
+        continue;
+      }
     }
 
     // EOD square-off for anything still open — NSE ONLY (crypto/futures/

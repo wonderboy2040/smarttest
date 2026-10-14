@@ -934,7 +934,7 @@ export function createSupervisor(opts = {}) {
     if (state.started || state.shuttingDown) return;
     state.started = true;
     log('============================================================');
-    log(' SMARTAI v20.0.1 ANTI-FREEZE SUPERVISOR (v19.2 engine)');
+    log(' SMARTAI v21.13 ANTI-FREEZE SUPERVISOR (code-upgrade guard · Laya sidecar · auto-build)');
     log(`  child : ${deps.nodeExe} server${path.sep}index.js (SMARTAI_SUPERVISED=1)`);
     log(`  probe : /api/ping har ${Math.round(knobs.probeMs / 1000)}s (timeout ${Math.round(knobs.timeoutMs / 1000)}s, fails ${knobs.fails}, grace ${Math.round(knobs.graceMs / 1000)}s)`);
     log('  hang  : FREEZE = force-kill + restart | crash = backoff restart');

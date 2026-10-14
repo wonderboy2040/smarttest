@@ -464,21 +464,45 @@ function _rowsFromRtPayload(j, map) {
 /** v11.3 leg 3 — Binance fapi / Bybit linear 24h ticker book →
  *  CoinDCX-shaped rows. Same USDT-perp domain (zero projection risk);
  *  source: 'binance-fut' / 'bybit-fut'.
- *  v12.7 BANDWIDTH: `bases` (optional array) adds Binance's ?symbols=
- *  JSON-array filter so a dark-CoinDCX board fetch pulls ~12 rows
- *  (~5KB) instead of the full ~500-symbol 1-2MB book — the
- *  dark-fallback leg's payload drops ~99% and the request weight
- *  falls with it. No bases = full book (legacy callers/tests). */
+ *  v21.13.x BANDWIDTH (P2 recheck): `bases` (optional array) now issues
+ *  PER-SYMBOL `?symbol=` requests (fapi ignores the ?symbols= JSON-array
+ *  param — live-verified) so a dark-CoinDCX board fetch pulls ~20 tiny
+ *  rows (~2KB total) instead of the full ~793-symbol ~1.1MB book.
+ *  No bases = full book (legacy callers/discovery). */
 async function _binanceFutRows(bases) {
-  const symParam = Array.isArray(bases) && bases.length > 0
-    ? (() => {
-        const symbols = [...new Set(bases.map(b => String(b || '').toUpperCase()).filter(Boolean))]
-          .map(b => `${b}USDT`).slice(0, 100);
-        return symbols.length > 0 ? `?symbols=${encodeURIComponent(JSON.stringify(symbols))}` : null;
-      })()
-    : null;
+  // v21.13.x recheck (P2): fapi /fapi/v1/ticker/24hr IGNORES the
+  // ?symbols=["A","B"] JSON-array param (live-verified: a 12-symbol
+  // request returns the FULL ~793-row ~1.1MB book — single symbol= works)
+  // — the v12.7 bandwidth optimization was silently defeated and a
+  // CoinDCX-dark episode re-pulled the whale every 2s poll. Per-symbol
+  // `symbol=` requests instead: ~20 tiny rows (~2KB total) + LOWER total
+  // request weight (N×1 vs 40 for the full book). No bases → full book
+  // (legacy callers/discovery).
+  if (Array.isArray(bases) && bases.length > 0) {
+    const symbols = [...new Set(bases.map(b => String(b || '').toUpperCase()).filter(Boolean))]
+      .map(b => `${b}USDT`).slice(0, 100);
+    if (symbols.length > 0) {
+      const settled = await Promise.allSettled(symbols.map(async (sym) => {
+        const r = await fetch(`https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${encodeURIComponent(sym)}`, {
+          headers: { 'User-Agent': UA },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!ok(r)) throw new Error(`fapi ${sym} HTTP ${r?.status}`);
+        return r.json();
+      }));
+      const raw = settled.filter(s => s.status === 'fulfilled').map(s => s.value).filter(Boolean);
+      const rows = _rowsFromBinanceFut(raw, 'binance-fut');
+      if (rows.length > 0) return rows;
+      // v21.13.x recheck (P2b): 0 rows → FALL THROUGH to the full-book +
+      // Bybit legs, NEVER an early null — a geo-blocked fapi (451 India)
+      // per-symbol fan-out must not kill the Bybit rescue leg (the exact
+      // leg-3′ scenario: CoinDCX dark + Binance dark → Bybit serves).
+      // Per-symbol weight (N×1) is cheap; the negative cache upstream
+      // still caps the retry cadence.
+    }
+  }
   try {
-    const r = await fetch(symParam ? `https://fapi.binance.com/fapi/v1/ticker/24hr${symParam}` : 'https://fapi.binance.com/fapi/v1/ticker/24hr', {
+    const r = await fetch('https://fapi.binance.com/fapi/v1/ticker/24hr', {
       headers: { 'User-Agent': UA },
       signal: AbortSignal.timeout(8000),
     });

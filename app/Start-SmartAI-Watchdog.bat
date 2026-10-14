@@ -3,7 +3,7 @@ REM v20.9.0: UTF-8 console (Hindi text readable on default OEM codepages)
 chcp 65001 >nul
 setlocal enableextensions
 REM ============================================================
-REM SmartAI PRO v21.12.0 - ANTI-FREEZE WATCHDOG (recommended launcher)
+REM SmartAI PRO v21.13.1 - ANTI-FREEZE WATCHDOG (recommended launcher)
 REM
 REM KYA HAI: ye SUPERVISOR hai. Server ko child banake chalata hai
 REM aur har 20s /api/ping probe karta hai APNE event-loop se.
@@ -44,7 +44,7 @@ REM USE: double-click karo, window khuli/minimized rakho.
 REM      startai.exe iske SAATH mat chalao (port 8080 clash).
 REM      Band karna = Ctrl+C ya window close.
 REM ============================================================
-title SmartAI PRO v21.12.0 - Anti-Freeze Watchdog
+title SmartAI PRO v21.13.1 - Anti-Freeze Watchdog
 cd /d "%~dp0"
 
 set "NODE_EXE="
@@ -62,7 +62,7 @@ if not defined NODE_EXE (
 )
 
 echo ============================================================
-echo  SMARTAI PRO v21.12.0 - ANTI-FREEZE SUPERVISOR
+echo  SMARTAI PRO v21.13.1 - ANTI-FREEZE SUPERVISOR
 echo  Laya   : local AI sidecar (LAYA_AUTOSTART=1 hone par)
 echo  Site   : localhost:8080
 echo  Engine : %NODE_EXE%

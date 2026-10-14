@@ -87,15 +87,21 @@ OHLCV_STORE_PATH = STORE_DIR / "ohlcv.parquet"
 # ============================================================
 # META-ENSEMBLE STACKING (Upgrade 4)
 # ------------------------------------------------------------
-# A trained meta-learner (LightGBM) that combines the 14 model
+# A trained meta-learner (LightGBM) that combines the 16 model
 # votes {dir, conf} instead of the fixed weighted-average.
-#   - 14 models x 2 features (dir, conf) = 28 features
-#   - + 1 market-regime flag = 29 features
+#   - 16 models x 2 features (dir, conf) = 32 features
+#   - + 1 market-regime flag = 33 features
 #   - label: forward-return direction (UP / DOWN / FLAT)
-# Enabled via AI_ENABLE_META_ENSEMBLE=true. The Node ensemble
-# consumes it through POST /meta-ensemble (see orchestrator.py)
-# and ALWAYS falls back to the weighted average when the pkl is
-# missing, stale or shape-mismatched — never crashes.
+# v21.13.x recheck (M1): default ON — the Node master accuracy switch
+# (AI_ACCURACY_SUITE) is typo-proof default-ON since v21.12, but the
+# Python flag still defaulted OFF, so a bare `uvicorn app.main:app`
+# left /meta-ensemble answering `source:"weighted"` forever while the
+# Node banner honestly said "META ARMED". Node semantics mirrored:
+# unset/empty/garbage → ON; ONLY an explicit false/0/off/no disables.
+# Enabled via AI_ENABLE_META_ENSEMBLE (explicit false/0/off/no → off).
+# The Node ensemble consumes it through POST /meta-ensemble (see
+# orchestrator.py) and ALWAYS falls back to the weighted average when
+# the pkl is missing, stale or shape-mismatched — never crashes.
 # ============================================================
 META_ENSEMBLE_PATH = MODEL_DIR / "meta_ensemble.pkl"
 META_FEATURE_COLS_PATH = MODEL_DIR / "meta_feature_cols.pkl"
@@ -124,5 +130,8 @@ META_DIR_HORIZON_DAYS = 10
 
 
 def meta_ensemble_enabled() -> bool:
-    """AI_ENABLE_META_ENSEMBLE flag (accepts true/1/on/yes)."""
-    return os.getenv("AI_ENABLE_META_ENSEMBLE", "").strip().lower() in ("true", "1", "on", "yes")
+    """AI_ENABLE_META_ENSEMBLE flag — Node master-switch semantics
+    (v21.13.x M1): unset/empty/garbage → True (default ON); ONLY an
+    explicit false/0/off/no disables it (typo-proof, same as Node's
+    AI_ACCURACY_SUITE)."""
+    return os.getenv("AI_ENABLE_META_ENSEMBLE", "").strip().lower() not in ("false", "0", "off", "no")

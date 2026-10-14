@@ -598,7 +598,11 @@ export function buildExpertBlueprint({ side, ltp, atr, score, market, ema20 = nu
     entryZone: [pR(zoneLo), pR(zoneHi)],
     stopLoss: slR,
     targets: { t1: t1R, t2: t2R, t3: t3R },
-    rewardRisk: 2,
+    // v21.13.x recheck (B4): RR derived from the ACTUAL rounded T1 ladder
+    // (pehle hardcoded 2 tha jabki T1 = 1.0×risk — winProb ka P(NEED)
+    // edge-math ~2× optimistic padh raha tha). T2-based blended RR bhi
+    // nahi — P(NEED) T1 reach ka probability maangta hai.
+    rewardRisk: r2(Math.abs(t1R - entryR) / Math.max(1e-9, Math.abs(entryR - slR))),
     slDistPct,
     leverage,
     maxSaneLeverage: sane,
