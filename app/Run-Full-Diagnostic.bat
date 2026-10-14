@@ -7,7 +7,7 @@ REM   A. Environment & Files (env keys, deps, dist, data)
 REM   B. Code Integrity (syntax, versions, API wiring)
 REM   C. Live Runtime (server, health, 4-market signal boards,
 REM      expert picks, Bot-Lab AI, websocket feeds)
-REM   D. LAYA Local Model (live ping + trading-signals par effect)
+REM   D. AI Confirm Layer — Jev (live status + trading-signals par effect)
 REM
 REM Server band ho to ye khud start karke check karta hai
 REM (diagnostic ke baad band kar deta hai — watchdog apna chalega).

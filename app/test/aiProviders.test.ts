@@ -1,60 +1,51 @@
 // ============================================================
-// test/aiProviders.test.ts — v21.2.0 (dual-provider plan Step-2)
+// test/aiProviders.test.ts — v21.14.0 (Laya removal)
 // ------------------------------------------------------------
 // Provider registry contract:
-//   • buildProviders: key/enable flags ke hisaab se jev/laya null
-//     ya instance; cache path provider-wise (jev_cache vs laya_cache)
-//   • aiModeConfig: AI_PRIMARY / AI_SHADOW / AI_CONSENSUS_ON_DOWN
-//     (invalid values safe defaults pe girti hain)
+//   • buildProviders: TYPESAFE_API_KEY ke hisaab se jev null ya
+//     instance; cache path jev_cache.jsonl (v21.14: laya removed —
+//     LAYA_* env vars are never read, laya key is never set)
+//   • aiModeConfig: AI_SHADOW / AI_CONSENSUS_ON_DOWN
+//     (invalid values safe defaults pe girti hain; primary always jev)
 //   • providerHealth: instance absent = configured:false; breaker
 //     open = reachable:false
-//   • layaPing: not enabled = SKIPPED (honest); PASS on good answer
 // ============================================================
 import { describe, it, expect, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { buildProviders, aiModeConfig, providerHealth, layaPing } from '../server/bots/aiProviders.js';
+import { buildProviders, aiModeConfig, providerHealth } from '../server/bots/aiProviders.js';
 
 let tmpDir = '';
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aiprov-'));
 });
 
-describe('v21.2.0 buildProviders — registry rules', () => {
-  it('no keys at all → both null (honest emptiness)', () => {
+describe('v21.14 buildProviders — registry rules (Laya removed)', () => {
+  it('no keys at all → jev null (honest emptiness), no laya key ever', () => {
     const p = buildProviders({}, { stateDir: tmpDir });
     expect(p.jev).toBeNull();
-    expect(p.laya).toBeNull();
+    expect('laya' in p).toBe(false);
   });
 
-  it('TYPESAFE_API_KEY only → jev instance, laya null', () => {
+  it('TYPESAFE_API_KEY only → jev instance', () => {
     const p = buildProviders({ TYPESAFE_API_KEY: 'k' }, { stateDir: tmpDir });
     expect(p.jev).toBeTruthy();
     expect(typeof p.jev).toBe('function');
-    expect(p.laya).toBeNull();
+    expect('laya' in p).toBe(false);
   });
 
-  it('LAYA_ENABLED=1 + LAYA_API_KEY → laya instance (url/model from providerConfig)', () => {
-    const p = buildProviders({ LAYA_ENABLED: '1', LAYA_API_KEY: 'lk' }, { stateDir: tmpDir });
-    expect(p.laya).toBeTruthy();
-    const cfg = (p.laya as any).config();
-    expect(cfg.url).toBe('http://127.0.0.1:8000/v1/systemone');
-    expect(cfg.model).toBe(''); // field-omit default (T2 compat)
-    expect(cfg.threshold).toBe(0.30);
-    expect(cfg.timeoutMs).toBe(1500);
+  it('v21.14: legacy LAYA_* env vars are IGNORED (provider never built)', () => {
+    const p = buildProviders({ LAYA_ENABLED: '1', LAYA_API_KEY: 'lk', LAYA_BASE_URL: 'http://127.0.0.1:8000' }, { stateDir: tmpDir });
+    expect(p.jev).toBeNull();
+    expect('laya' in p).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, 'laya_cache.jsonl'))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, 'laya_autolink.json'))).toBe(false);
   });
 
-  it('LAYA_ENABLED unset/0 (ya key absent) → laya null — opt-in only', () => {
-    expect(buildProviders({ LAYA_API_KEY: 'lk' }, { stateDir: tmpDir }).laya).toBeNull();
-    expect(buildProviders({ LAYA_ENABLED: '0', LAYA_API_KEY: 'lk' }, { stateDir: tmpDir }).laya).toBeNull();
-    expect(buildProviders({ LAYA_ENABLED: '1' }, { stateDir: tmpDir }).laya).toBeNull();
-  });
-
-  it('cache files are provider-wise: jev_cache.jsonl vs laya_cache.jsonl', () => {
-    const p = buildProviders({ TYPESAFE_API_KEY: 'k', LAYA_ENABLED: '1', LAYA_API_KEY: 'lk' }, { stateDir: tmpDir });
+  it('cache file is jev_cache.jsonl (provider-wise naming kept)', () => {
+    const p = buildProviders({ TYPESAFE_API_KEY: 'k' }, { stateDir: tmpDir });
     expect((p.jev as any).config().cachePath).toBe(path.join(tmpDir, 'jev_cache.jsonl'));
-    expect((p.laya as any).config().cachePath).toBe(path.join(tmpDir, 'laya_cache.jsonl'));
   });
 
   it('JEV env overrides flow through the registry (JEV_BASE_URL / JEV_MODEL / JEV_THRESHOLD)', () => {
@@ -71,19 +62,19 @@ describe('v21.2.0 buildProviders — registry rules', () => {
   });
 });
 
-describe('v21.2.0 aiModeConfig — mode flags (safe defaults)', () => {
-  it('defaults: primary=laya, shadow=off, onDown=wait', () => {
+describe('v21.14 aiModeConfig — mode flags (safe defaults)', () => {
+  it('defaults: primary=jev (always), shadow=off, onDown=wait', () => {
     const c = aiModeConfig({});
-    expect(c).toEqual({ primary: 'laya', shadow: 'off', onDown: 'wait' });
+    expect(c).toEqual({ primary: 'jev', shadow: 'off', onDown: 'wait' });
   });
 
-  it('AI_PRIMARY=jev respected; invalid → laya', () => {
-    expect(aiModeConfig({ AI_PRIMARY: 'jev' }).primary).toBe('jev');
-    expect(aiModeConfig({ AI_PRIMARY: 'gpt' }).primary).toBe('laya');
+  it('v21.14: AI_PRIMARY is always jev (legacy laya value ignored)', () => {
+    expect(aiModeConfig({ AI_PRIMARY: 'laya' }).primary).toBe('jev');
+    expect(aiModeConfig({ AI_PRIMARY: 'gpt' }).primary).toBe('jev');
   });
 
-  it('AI_SHADOW laya|jev respected; anything else → off', () => {
-    expect(aiModeConfig({ AI_SHADOW: 'laya' }).shadow).toBe('laya');
+  it('AI_SHADOW jev respected; anything else (incl legacy laya) → off', () => {
+    expect(aiModeConfig({ AI_SHADOW: 'laya' }).shadow).toBe('off');
     expect(aiModeConfig({ AI_SHADOW: 'jev' }).shadow).toBe('jev');
     expect(aiModeConfig({ AI_SHADOW: 'both' }).shadow).toBe('off');
   });
@@ -94,18 +85,18 @@ describe('v21.2.0 aiModeConfig — mode flags (safe defaults)', () => {
   });
 });
 
-describe('v21.2.0 providerHealth — honest per-provider block', () => {
-  it('absent providers → configured:false, reachable:false', () => {
-    const h = providerHealth({ jev: null, laya: null });
+describe('v21.14 providerHealth — honest per-provider block', () => {
+  it('absent provider → configured:false, reachable:false', () => {
+    const h = providerHealth({ jev: null });
     expect(h.jev.configured).toBe(false);
     expect(h.jev.reachable).toBe(false);
-    expect(h.laya.configured).toBe(false);
+    expect('laya' in h).toBe(false);
   });
 
   it('configured provider (breaker closed) → configured+reachable; breaker open → NOT reachable', async () => {
     const { createJev } = await import('../server/bots/jevEngine.js');
     const ok = createJev({ apiKey: 'k', cachePath: path.join(tmpDir, 'ok.jsonl') });
-    const h1 = providerHealth({ jev: ok, laya: null });
+    const h1 = providerHealth({ jev: ok });
     expect(h1.jev.configured).toBe(true);
     expect(h1.jev.reachable).toBe(true);
     expect(h1.jev.breakerOpen).toBe(false);
@@ -117,36 +108,8 @@ describe('v21.2.0 providerHealth — honest per-provider block', () => {
     (down as any).__breakerFail();
     (down as any).__breakerFail();
     (down as any).__breakerFail(); // 4 consecutive = default threshold
-    const h2 = providerHealth({ jev: down, laya: null });
+    const h2 = providerHealth({ jev: down });
     expect(h2.jev.breakerOpen).toBe(true);
     expect(h2.jev.reachable).toBe(false);
-  });
-});
-
-describe('v21.2.0 layaPing — smoke honesty', () => {
-  it('SKIPPED when LAYA_ENABLED/key absent (never a fake pass)', async () => {
-    const r = await layaPing({ env: {} });
-    expect(r.status).toBe('SKIPPED');
-  });
-
-  it('PASS on a well-formed Laya answer; hits the LAYA_BASE_URL endpoint', async () => {
-    const seen = [];
-    const r = await layaPing({
-      env: { LAYA_ENABLED: '1', LAYA_API_KEY: 'lk', LAYA_BASE_URL: 'http://127.0.0.1:8000' },
-      fetchImpl: async (u) => {
-        seen.push(String(u));
-        return {
-          ok: true, status: 200,
-          json: async () => ({
-            answers: { action: { choice: 'enter_long', confidence: 0.7, probabilities: { enter_long: 0.6, wait: 0.4 } } },
-            usage: { input_tokens: 10, output_tokens: 2 },
-          }),
-        };
-      },
-    });
-    expect(r.status).toBe('PASS');
-    expect(r.name).toBe('laya_ping');
-    expect(r.choice).toBe('enter_long');
-    expect(seen[0]).toBe('http://127.0.0.1:8000/v1/systemone');
   });
 });

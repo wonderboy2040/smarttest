@@ -21,10 +21,9 @@ interface HealthSnap {
     staleSources?: string[];
     ws?: Record<string, WsFeedEntry>;
   };
-  // v21.2.0 (dual-provider): AI providers health — Bot Lab ka jev/laya.
+  // AI providers health — Bot Lab ka jev. (v21.14: Laya removed.)
   ai?: {
     jev?: { configured?: boolean; reachable?: boolean; breakerOpen?: boolean; p95?: number | null; rejects?: number };
-    laya?: { configured?: boolean; reachable?: boolean; breakerOpen?: boolean; p95?: number | null; rejects?: number };
   };
   kills?: {
     aiDesk?: { enabled?: boolean };
@@ -93,14 +92,13 @@ export const OpsHealthStrip = memo(function OpsHealthStrip() {
   const botPause = snap.kills?.botLab?.globalPause === true || snap.bots?.globalPause === true;
   const anyKill = aiKill || execLvl > 0 || botPause;
 
-  // ---- AI providers (v21.2.0 dual-provider) ----
-  // Chip: "AI: L ✓ · J ✓" — configured+healthy green, breaker-open red,
+  // ---- AI providers (v21.14: jev-only) ----
+  // Chip: "AI: J ✓" — configured+healthy green, breaker-open red,
   // not-configured grey (dim). Bot Lab ke selected-arm providers hi
-  // alerting ke liye healthMonitor me hain; ye chip dono dikhata hai.
+  // alerting ke liye healthMonitor me hain; ye chip provider dikhata hai.
   const aiJev = snap.ai?.jev;
-  const aiLaya = snap.ai?.laya;
-  const anyAi = !!(aiJev?.configured || aiLaya?.configured);
-  const aiBreaker = !!(aiJev?.breakerOpen || aiLaya?.breakerOpen);
+  const anyAi = !!aiJev?.configured;
+  const aiBreaker = !!aiJev?.breakerOpen;
   const provLabel = (p: { configured?: boolean; breakerOpen?: boolean } | undefined, short: string) =>
     !p?.configured ? `${short} –` : p.breakerOpen ? `${short} ⚠` : `${short} ✓`;
 
@@ -141,10 +139,10 @@ export const OpsHealthStrip = memo(function OpsHealthStrip() {
         'kills')}
       {anyAi && chip(
         aiBreaker ? 'bad' : 'ok',
-        `AI: ${provLabel(aiLaya, 'L')} · ${provLabel(aiJev, 'J')}`,
+        `AI: ${provLabel(aiJev, 'J')}`,
         aiBreaker
-          ? `AI provider BREAKER OPEN — Laya: ${aiLaya?.breakerOpen ? 'DOWN' : aiLaya?.configured ? 'ok' : 'n/a'} · Jev: ${aiJev?.breakerOpen ? 'DOWN' : aiJev?.configured ? 'ok' : 'n/a'} — auto-arm failover / single-arm WAIT active hai`
-          : `Bot Lab AI providers — Laya: ${aiLaya?.configured ? (aiLaya?.reachable ? 'reachable' : 'unreachable') : 'not configured (local laya-serve)'} · Jev: ${aiJev?.configured ? (aiJev?.reachable ? 'reachable' : 'unreachable') : 'not configured (TYPESAFE_API_KEY)'}`,
+          ? `AI provider BREAKER OPEN — Jev: ${aiJev?.breakerOpen ? 'DOWN' : aiJev?.configured ? 'ok' : 'n/a'} — AI arms WAIT mode me hain`
+          : `Bot Lab AI provider — Jev: ${aiJev?.configured ? (aiJev?.reachable ? 'reachable' : 'unreachable') : 'not configured (TYPESAFE_API_KEY)'}`,
         'ai',
       )}
       {snap.bots?.mode && chip(snap.bots.globalPause ? 'warn' : 'dim', `BOTS ${String(snap.bots.mode).toUpperCase()}`, `Bot Lab mode: ${snap.bots.mode}${snap.bots.globalPause ? ' · GLOBAL PAUSE' : ''}`, 'bots')}

@@ -23,7 +23,7 @@
 import { fetchBinanceKlines } from './data.js';
 
 const ML_SERVICE_BASE = () =>
-  // v21.13: 8000 Laya's port hai — ml-service 8100 pe (v21.11 fix ka missed spot)
+  // ml-service 8100 pe (v21.11 port fix; 8000 historical Laya port tha — v21.14 me removed)
   // v21.13.x recheck (M5): the .replace() was swallowed inside the comment
   // (a trailing slash in ML_SERVICE_URL produced //expert/analyze) —
   // ab genuinely applied.

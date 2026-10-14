@@ -71,34 +71,23 @@
 - [ ] **Go-live gate (v21.1.0 naya)**: LIVE mode on karne se PEHLI paper stats
   (100+ trades, +expectancy, DD limit) — `StrategyHealthPanel` me LIVE LOCKED/UNLOCKED chip
 
-## E2. Dual AI provider — Jev + Laya (v21.2.0 NAYA — laptop pe manual)
+## E2. AI provider — Jev cloud (v21.14: Laya REMOVED)
 
-- [ ] **R0-a Laya install** (PowerShell, repo ke bahar): venv + `pip install
-  "laya[serve]==<pinned>"` + `LAYA_DEVICE=cpu LAYA_PRELOAD=1 LAYA_MODELS=english
-  LAYA_HOST=127.0.0.1 LAYA_PORT=8000 LAYA_API_KEY=<32+ random> laya-serve`
-- [ ] **R0-b `node scripts/laya-ping.mjs`** → `VERDICT: PASS` + latency
-  (CPU p95 < 1s target; pehli call preload se slow aa sakti hai — 2nd run dekho)
-- [ ] **T1 model compat**: `LAYA_MODEL=jev-latest` karke laya-ping → 422 aaye
-  to model name Laya supported nahi → `LAYA_MODEL=` (omit) pe wapas aao
-- [ ] **T2 model omit**: default (`LAYA_MODEL=` khaali) → ping PASS
-- [ ] **T3 score criteria shape**: 422 aaye to jevPrompt criteria ko array-form
-  check karo (Laya har level ko description chahta hai) — sandbox me verify
-  nahi ho saka (laya-serve sandbox me nahi), YE TUMHARE LAPTOP PE HOGA
-- [ ] `.env` me `LAYA_ENABLED=1` + wahi key → Bot Lab me LAYA option ENABLED
-  + OpsHealthStrip `AI: L ✓`
-- [ ] **Arm switch live**: dropdown se `LAYA` / `AUTO` / (dono keys ho to)
-  `BOTH (consensus)` — bina restart, state persist ho
-- [ ] **409 check**: sirf ek provider ke saath `BOTH (consensus)` chunna →
-  UI me disabled + direct API pe 409 `provider_unavailable`
-- [ ] **Auto-failover drill**: arm=AUTO + primary chalu → primary ka process
-  band karo (laya-serve kill) → agle decisions `failover(...)` reason ke saath
-  dusre provider se (events stream me dikhta hai); OpsHealthStrip AI chip red
-- [ ] **Shadow week setup (R3)**: `AI_SHADOW=<non-primary>` + arm=gated →
-  decision events me `ai.<provider>.shadow=true` entries — `npm run calibrate`
-  me per-ARM table aana chahiye
-- [ ] **Rollback drill**: `LAYA_ENABLED=0` → Laya arms gated pe degrade
-  (arm_fallback event file me) — jev arm unaffected
-
+- [ ] **R0 Jev key**: [typesafe.ai](https://typesafe.ai) se TYPESAFE_API_KEY
+  → `app\.env` me daalo → restart → Bot Lab me JEV option ENABLED +
+  OpsHealthStrip `AI: J ✓`
+- [ ] **Arm switch live**: dropdown se `JEV` / `AUTO` — bina restart, state persist
+- [ ] **409 check**: key ke bina `JEV` chunna → UI me disabled + direct API pe
+  409 `provider_unavailable {provider: "jev"}`
+- [ ] **Provider-down drill**: arm=JEV/AUTO + TYPESAFE endpoint band →
+  decisions honest WAIT mode me (provider_down reason events stream me);
+  OpsHealthStrip AI chip red; rules/gated arms unaffected
+- [ ] **Board AI-confirm**: `AI_BOARD_CONFIRM=auto` + key → top board signals
+  `🤖 AI ✓/✗/○ (Jev ...)` chip ke saath (tooltip me direction + conviction)
+- [ ] **v21.14 NOTE**: Laya local AI model PERMANENTLY REMOVED — purane
+  LAYA_* .env lines ab ignore hote hain (safe to delete); laya/consensus
+  arms removed; legacy bot-state arm=laya/consensus tick pe jev/gated pe
+  arm_fallback event ke saath map ho jate hain
 ## F. Restart persistence
 
 - [ ] Server restart → open positions, ledger, bot state wapas aaye —

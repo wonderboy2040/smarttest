@@ -1,16 +1,13 @@
 // ============================================================
-// server/ai/boardAiConfirm.js — v21.3.0 (Issue-5)
+// server/ai/boardAiConfirm.js — v21.14.0 (Issue-5 lineage)
 // ------------------------------------------------------------
-// LAYA + JEV ko SUPERINTELLIGENCE SIGNAL BOARD se combine karta hai.
-//
-// THE GAP (v21.2.0 tak): Jev/Laya dual-provider sirf Bot Lab me tha —
-// board signals ke paas sirf local Ollama council tha. User ka ask:
-// "LAYA ko Superintelligence Signal Board inke sath combine karke
-// Higher accuracy ka Trade Signals mile Long or Short".
+// JEV (TypeSafe cloud) ko SUPERINTELLIGENCE SIGNAL BOARD se combine
+// karta hai. (v21.14: Laya local provider permanently removed — ab
+// sirf jev hi confirm layer ka provider hai.)
 //
 // THE LAYER (non-invasive, additive):
 //   • Board compute ke final phase me (UCV ke baad, rank se pehle) top-N
-//     STRONG/ACTION 75+ signals dono providers ko jaate hain:
+//     STRONG/ACTION 75+ signals provider ko jaate hain:
 //       snap.proposed = enter_long | enter_short (signal side)
 //       criteria     = { enter_long, enter_short, wait }
 //   • Verdict per provider (jevEngine.decide ka honest output):
@@ -18,20 +15,20 @@
 //       DISAGREE  — provider ne ULTA side chuna (decide 'disagreed_side')
 //       NEUTRAL   — wait / below-threshold / error / breaker (abstain)
 //   • Board effects (NEVER flips side / sizing / SL — ground rules):
-//       both AGREE  → aiScore +3 (CONFIRMED stamp)
-//       any DISAGREE→ aiScore −8 + STRONG→ACTION demote (CONFLICT)
-//       else        → NEUTRAL stamp only
+//       AGREE      → aiScore +3 (CONFIRMED stamp)
+//       DISAGREE   → aiScore −8 + STRONG→ACTION demote (CONFLICT)
+//       else       → NEUTRAL stamp only
 //   • CONFLICT signals TOP-5 me entry nahi le sakte.
 //
-// COST CONTROL: per-provider cache payload-key pe (bucketed LTP — 0.25%
+// COST CONTROL: provider cache payload-key pe (bucketed LTP — 0.25%
 // granularity, isliye 60s board cycles mostly CACHE HIT), + 5-min per
 // (symbol, side) memo, + single-flight, + soft 4.5s deadline (unresolved
 // verdicts agle cycle me stamp hote hain — council "warming" pattern).
 //
-// v21.5.0 (LAYA FAST) — SWRV (stale-while-revalidate): memo expire hone
-// par bhi board cycle ko block NAHI karte — 2×TTL (10 min) tak ka purana
-// verdict turant stamp hota hai (0-latency) aur fresh verdict background
-// me aata hai (agle cycle ke liye). Confirm layer sirf score ± karta hai
+// v21.5.0 SWRV (stale-while-revalidate): memo expire hone par bhi board
+// cycle ko block NAHI karte — 2×TTL (10 min) tak ka purana verdict
+// turant stamp hota hai (0-latency) aur fresh verdict background me
+// aata hai (agle cycle ke liye). Confirm layer sirf score ± karta hai
 // isliye 5-min-stale verdict acceptable hai; AI_CONFIRM_SWRV=0 se off.
 //
 // SAFETY: AI kabhi side/sizing/SL nahi badalta — sirf score/grade
@@ -73,17 +70,15 @@ function _getProviders() {
   try {
     _providers = buildProviders(process.env, { stateDir: STATE_DIR });
   } catch {
-    _providers = { jev: null, laya: null };
+    _providers = { jev: null };
   }
   _providersAt = Date.now();
   return _providers;
 }
 
-/** v21.9.0 (laya auto-link): 10-min memo TURANT flush — jab layaAutoLink
- *  ek naya validated Laya provider link kare (ya user RECONNECT dabaye),
- *  Signal Board ka AI-confirm layer agsi board cycle se naye provider
- *  ke saath chalta hai (10 min wait nahi). Safe: sirf memo reset, koi
- *  in-flight decision disturb nahi hota. */
+/** Provider registry flush — memo reset (koi in-flight decision disturb
+ *  nahi hota). Config change ke baad agle board cycle naye provider
+ *  instance ke saath chalta hai. */
 export function boardAiConfirmRefresh() {
   _providers = null;
   _providersAt = 0;
@@ -93,13 +88,13 @@ export function boardAiConfirmRefresh() {
 export function boardAiConfirmActive() {
   if (MODE === 'off') return false;
   const p = _getProviders();
-  return !!(p.jev || p.laya);
+  return !!p.jev;
 }
 
 /** Health surface for /api/health + OpsHealthStrip. */
 export function boardAiConfirmStatus() {
   const p = _getProviders();
-  const configured = ['jev', 'laya'].filter((n) => p[n]);
+  const configured = ['jev'].filter((n) => p[n]);
   return {
     mode: MODE,
     active: MODE !== 'off' && configured.length > 0,
@@ -165,22 +160,19 @@ const CONFIRM_PROMPT = {
 };
 
 // ------------------------------------------------------------
-// v21.11.0 — LAYA DECISION TRANSPARENCY
+// v21.11.0 — DECISION TRANSPARENCY (jev)
 // ------------------------------------------------------------
-// User report: "Superintelligence Board pe 🤖 AI ○ (Laya ○) — samaj
-// nahi aa raha Laya kya bol raha hai LONG/SHORT pe". Root cause: ye
-// layer provider ke FULL verdict (action/probs/confidence/note) ko
-// sirf 'AGREE'|'DISAGREE'|'NEUTRAL' 3-string me collapse karta tha —
-// direction kabhi wire tak pahunchti hi nahi thi. Ab har provider ka
+// User report tha ki board pe "🤖 AI ○" ka direction samaj nahi aata.
+// Root cause: ye layer provider ke FULL verdict (action/probs/confidence/
+// note) ko sirf 'AGREE'|'DISAGREE'|'NEUTRAL' 3-string me collapse karta
+// tha — direction kabhi wire tak nahi pahunchti thi. Ab provider ka
 // DECISION object (picked side + probs + note + latency) aiConfirm.detail
 // me travel karta hai:
-//   • AGREE    + picked LONG  → "Laya ✓ LONG"
-//   • DISAGREE + picked SHORT → "Laya ✗ SHORT 68%" (ulta side + conviction)
-//   • NEUTRAL  + picked SHORT → "Laya ○ SHORT-lean 29%" (below-threshold lean)
-//   • NEUTRAL  + note         → "Laya ○ slow / wait / breaker / down" (honest)
-// Legacy string fields (aiConfirm.jev / aiConfirm.laya) UNCHANGED —
-// saare existing consumers (precheck warning, TopPicks, ExpertPicks,
-// LiveExecuteModal, tests) byte-identical behavior.
+//   • AGREE    + picked LONG  → "Jev ✓ LONG"
+//   • DISAGREE + picked SHORT → "Jev ✗ SHORT 68%" (ulta side + conviction)
+//   • NEUTRAL  + picked SHORT → "Jev ○ SHORT-lean 29%" (below-threshold lean)
+//   • NEUTRAL  + note         → "Jev ○ slow / wait / breaker / down" (honest)
+// v21.14: Laya provider removed — detail ab sirf { jev } hai.
 // ------------------------------------------------------------
 
 /** Human-readable short reason for a NEUTRAL verdict (the ○ bucket). */
@@ -266,14 +258,14 @@ async function _confirmOneProvider(provider, sig, mkt) {
  * hai to stale copy turant + background refresh (next cycle fresh). */
 function _wireConfirm(sig, mkt, key) {
   const p = _getProviders();
-  const names = ['jev', 'laya'].filter((n) => p[n]);
+  const names = ['jev'].filter((n) => p[n]);
   const promise = (async () => {
     const parts = {};
     await Promise.allSettled(names.map(async (n) => {
       try {
         // per-provider deadline (decide has its own timeout; belt+braces)
-        // v21.11: race-ab resolution bhi decision object hai (reason
-        // 'slow') — UI "Laya ○ slow" dikhata hai, direction unknown honest
+        // race-ab resolution bhi decision object hai (reason 'slow') —
+        // UI "Jev ○ slow" dikhata hai, direction unknown honest
         const raced = await Promise.race([
           _confirmOneProvider(p[n], sig, mkt),
           new Promise((res) => { const t = setTimeout(() => res({ v: 'NEUTRAL', note: 'deadline' }), 5000); if (t.unref) t.unref(); }),
@@ -286,7 +278,7 @@ function _wireConfirm(sig, mkt, key) {
     let verdict = 'NEUTRAL';
     if (disagrees.length > 0) verdict = 'CONFLICT';
     else if (agrees.length === names.length && names.length > 0) verdict = 'CONFIRMED';
-    return { jev: parts.jev ?? null, laya: parts.laya ?? null, verdict, at: Date.now() };
+    return { jev: parts.jev ?? null, verdict, at: Date.now() };
   })();
   const entry = { at: Date.now(), promise, verdict: null };
   promise.then((v) => { entry.verdict = v; }).catch(() => { /* verdict stays null */ });
@@ -320,7 +312,7 @@ function _confirmSignal(sig, mkt) {
 }
 
 /**
- * Confirm the top signals of a board/picks payload with Jev + Laya.
+ * Confirm the top signals of a board/picks payload with Jev.
  * MUTATES: sets `sig.aiConfirm` and adjusts aiScore/grade per verdict.
  * Soft-deadline: unresolved signals stay unstamped this cycle (the memo
  * resolves in the background and stamps the NEXT cycle).
@@ -333,7 +325,7 @@ function _confirmSignal(sig, mkt) {
 export async function confirmBoardSignals(signals, mkt, opts = {}) {
   if (MODE === 'off') return null;
   const p = _getProviders();
-  const names = ['jev', 'laya'].filter((n) => p[n]);
+  const names = ['jev'].filter((n) => p[n]);
   if (names.length === 0) return null;
   const scoreOf = typeof opts.scoreOf === 'function'
     ? opts.scoreOf
@@ -357,16 +349,14 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
   const jobs = eligible.map(async (s) => {
     try {
       const c = await _confirmSignal(s, mkt);
-      // v21.11: legacy strings (jev/laya) UNCHANGED + full decision
-      // objects detail me — UI ab Laya ka picked side + conviction
-      // dikha sakta hai (kabhi ka direction-less '○' fix)
+      // legacy string (jev) + full decision object detail me — UI ab
+      // provider ka picked side + conviction dikha sakta hai
       s.aiConfirm = {
         jev: c.jev?.v ?? null,
-        laya: c.laya?.v ?? null,
         verdict: c.verdict,
         at: c.at,
         stale: !!c.stale,
-        detail: { jev: c.jev, laya: c.laya },
+        detail: { jev: c.jev },
       };
     } catch { /* never breaks the board */ }
   });
@@ -404,16 +394,16 @@ export async function confirmBoardSignals(signals, mkt, opts = {}) {
       if (String(s.grade || '').toUpperCase() === 'STRONG') {
         s.grade = 'ACTION';
         s.executable = false; // v21.4.1: demote ke baad kabhi executable nahi
-        s.summary = `${s.summary || ''} · AI-CONFLICT (Jev/Laya ulta)`;
-        // v21.11: summary me kaunsa provider kaunsi side pe ulta tha —
-        // user ko board text me hi direction dikhe
+        s.summary = `${s.summary || ''} · AI-CONFLICT (Jev ulta)`;
+        // summary me provider kaunsi side pe ulta tha — user ko board
+        // text me hi direction dikhe
         try {
-          const flipBits = ['jev', 'laya']
+          const flipBits = ['jev']
           .filter((n) => s.aiConfirm?.detail?.[n]?.v === 'DISAGREE')
           .map((n) => {
             const d = s.aiConfirm.detail[n];
             const p = d.picked === 'enter_short' ? d.pShort : d.picked === 'enter_long' ? d.pLong : null;
-            return `${n === 'laya' ? 'Laya' : 'Jev'} ${d.picked === 'enter_short' ? 'SHORT' : 'LONG'}${p != null ? ` ${Math.round(p * 100)}%` : ''}`;
+            return `Jev ${d.picked === 'enter_short' ? 'SHORT' : 'LONG'}${p != null ? ` ${Math.round(p * 100)}%` : ''}`;
           })
           .join(' + ');
         if (flipBits) s.summary = `${s.summary || ''} [${flipBits}]`;
@@ -456,6 +446,6 @@ export function __memoPeekForTests() {
   return _memo;
 }
 export function __setProvidersForTests(p) {
-  _providers = p || { jev: null, laya: null };
+  _providers = p || { jev: null };
   _providersAt = Date.now();
 }

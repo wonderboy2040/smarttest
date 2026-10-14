@@ -70,7 +70,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { disableQuickEditMode } from './ai/consoleGuard.js';
-import { createLayaSidecar } from './layaSidecar.js';
+// (v21.14: Laya sidecar removed — local AI model permanently retired)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const APP_ROOT = path.join(__dirname, '..');
@@ -214,20 +214,10 @@ export function createSupervisor(opts = {}) {
     if (knobs.logFilePath) _appendLog(text + '\n');
   }
 
-  // v21.4.0 LAYA SIDECAR (plan §3.2): supervisor-managed local AI —
-  // adopt/spawn/ready-poll/hang-detect/crash-restart/clean-shutdown.
-  // Inject-able via opts.layaSidecar (unit tests). Supervisor khud
-  // .env load NAHI karta (dotenv-free boot ground-rule) — sidecar LAYA_*
-  // keys apne mini-parser se app/.env me se padhta hai. HAR failure path
-  // non-fatal hai: Laya ka koi masla site ke boot/restart flow ko kabhi
-  // nahi chhedta (Laya band = AI layer kam, trading untouched).
-  const sidecar = opts.layaSidecar || createLayaSidecar({
-    env,
-    appRoot: deps.appRoot,
-    log: (line) => log(line),
-    journal: (entry) => journal(entry),
-    deps,
-  });
+  // (v21.14: Laya sidecar wiring removed — supervisor ab sirf site child
+  //  manage karta hai. Historical note: yahan supervisor-managed local
+  //  AI ka adopt/spawn/ready-poll/hang-detect/crash-restart hota tha;
+  //  Laya removal ke saath poora surface retire ho gaya.)
 
   // ---------------- child stdout relay + file log ----------------
   function _appendLog(line) {
@@ -934,7 +924,7 @@ export function createSupervisor(opts = {}) {
     if (state.started || state.shuttingDown) return;
     state.started = true;
     log('============================================================');
-    log(' SMARTAI v21.13 ANTI-FREEZE SUPERVISOR (code-upgrade guard · Laya sidecar · auto-build)');
+    log(' SMARTAI v21.14 ANTI-FREEZE SUPERVISOR (code-upgrade guard · auto-build)');
     log(`  child : ${deps.nodeExe} server${path.sep}index.js (SMARTAI_SUPERVISED=1)`);
     log(`  probe : /api/ping har ${Math.round(knobs.probeMs / 1000)}s (timeout ${Math.round(knobs.timeoutMs / 1000)}s, fails ${knobs.fails}, grace ${Math.round(knobs.graceMs / 1000)}s)`);
     log('  hang  : FREEZE = force-kill + restart | crash = backoff restart');
@@ -949,12 +939,6 @@ export function createSupervisor(opts = {}) {
     log('  ye window khuli rakho (minimize OK). Ctrl+C = clean band.');
     log('============================================================');
     _boot();
-    // v21.4.0: Laya sidecar PARALLEL me — site kabhi iska intezaar nahi
-    // karti (plan §3.1 ground-rule). Adopt-first: haath se chali hui Laya
-    // window double nahi hoti.
-    try {
-      Promise.resolve(sidecar.start()).catch(() => { /* never fatal */ });
-    } catch { /* never fatal */ }
     if (knobs.probesOn) {
       state.probeTimer = setInterval(() => {
         probeOnce().then((r) => { try { onProbeResult(r); } catch { /* never fatal */ } }).catch(() => { /* probe never fatal */ });
@@ -1015,9 +999,6 @@ export function createSupervisor(opts = {}) {
       state.child = null;
     }
     journal({ ev: 'watchdog-clean-shutdown', reason: 'supervisor-stop' });
-    // v21.4.0: OWNED Laya tree-kill (orphan nahi bachta); ADOPTED process
-    // chhod diya jata hai (user ne haath se chalaya tha). Never fatal.
-    try { await sidecar.stop(); } catch { /* never fatal */ }
     releaseLock();
     log('[watchdog] supervisor band. Site wapas laane ke liye Start-SmartAI-Watchdog.bat dobara chalao.');
   }
@@ -1026,7 +1007,7 @@ export function createSupervisor(opts = {}) {
     start,
     stop,
     _i: {
-      state, knobs, deps, sidecar,
+      state, knobs, deps,
       probeOnce, onProbeResult, startChild, _restartTick,
       _scheduleRestart, _onChildExit, forceKill, journal,
       _emitLine, _appendLog,

@@ -1,14 +1,12 @@
 // ============================================================
-// server/bots/deciders.js — Jev Bot Lab v20.8.0 → v21.2.0 dual-provider
+// server/bots/deciders.js — Jev Bot Lab v21.14.0
 // ------------------------------------------------------------
 // Plan §7.1: SAB ARMS, SAME CANDIDATES.
 //   rules    — har candidate lo (baseline)
 //   gated    — hand-written gates (CONTROL ARM — AI isi se compare hota
 //              hai; plan ground rule #3)
 //   jev      — Jev wahi candidates filter kare        (cloud)
-//   laya     — Laya wahi candidates filter kare        (local, $0)
-//   consensus— dono "take" bolein (same side) tabhi entry
-//   auto     — AI_PRIMARY provider; down/error pe dusra (failover)
+//   auto     — AI provider (jev); down/error pe honest WAIT
 // Deciders NEVER generate or mutate candidates — identical input
 // set is what makes the A/B meaningful (plan §7.1: "Alag
 // candidates = alag strategies, A/B bekar").
@@ -19,7 +17,9 @@
 //     depth)
 //   • error/timeout/exception = WAIT; 'rule' fallback sirf conscious
 //     config (jev arm, JEV_FALLBACK=rule)
-//   • shadow provider ka decision SIRF log hota hai — trade pe asar nahi
+// v21.14.0 (Laya removal): laya/consensus arms removed — legacy
+// state files botRunner availability-resolve se gated pe fall back
+// karte hain (arm_fallback event ke saath).
 // ============================================================
 
 /**
@@ -109,14 +109,11 @@ export function jevDecider({ jev, strategy, eventGuardCheck = null }) {
   };
 }
 
-// v21.2.0 (dual-provider): notes jo AUTO-FAILOVER trigger karte hain.
-// 4xx (http_422/400/401) is list me NAHI hain — bad request dusre
-// provider pe bhi waisa hi fail hoga; usse failover sirf latency
-// badhata. no_answer/no_probability bhi nahi — wo malformed-response
-// hai provider-down nahi.
-// v21.5.0: 'timeout' add — local Laya ab timeout pe honest `timeout`
-// note deta hai (retryOnTimeout=off default); failover turant Jev pe
-// chalna chahiye (network_error ka wait nahi).
+// v21.2.0: notes jo AUTO-FAILOVER trigger karte hain. 4xx
+// (http_422/400/401) is list me NAHI hain — bad request dusre
+// provider pe bhi waisa hi fail hoga. no_answer/no_probability bhi
+// nahi — wo malformed-response hai provider-down nahi. 'timeout'
+// included — failover turant hona chahiye (network_error ka wait nahi).
 const _FAILOVER_NOTES = new Set(['breaker_open', 'network_error', 'provider_unavailable', 'timeout']);
 const _isFailoverNote = (note) => !!note
   && (_FAILOVER_NOTES.has(note) || /^http_5\d\d$/.test(String(note)));
@@ -131,36 +128,26 @@ const _pack = (v) => ({
 });
 
 /**
- * v21.2.0 — THE DUAL-PROVIDER DECIDER (plan §3.1 / Step-3).
+ * v21.14 — AI DECIDER (jev provider, plan §3.1 lineage).
  *
- *   mode='laya'|'jev'  : single provider approve/veto
- *   mode='auto'        : primary call; failover-note (breaker/network/5xx)
- *                         pe dusra provider — dono down to WAIT
- *   mode='consensus'   : dono se poocha jaata hai; TAKE sirf jab dono
- *                        proposed side approve karein. Ek provider down
- *                        ho to `onDown`: 'wait' (default, safe) ya
- *                        'single' (bacha hua provider decide kare).
- *
- * `shadow` ('laya'|'jev'|'off'): jo provider is decision me already
- * call NAHI hua, uski ek aur call hoti hai jiska result SIRF verdict.ai
- * me log hota hai — action par ZERO asar (R3 shadow-weeks isipe chalte
- * hain: agreement % + outcome-by-agreement analysis).
+ *   mode='jev'  : single provider approve/veto
+ *   mode='auto' : jev call; provider down/error pe honest WAIT
+ *                 (v21.14: failover target tha Laya — removed; auto
+ *                 ab jev-only hai, note me failover intent dikhta hai)
  *
  * Verdict: { action:'take'|'wait', reason, arm:mode,
- *            ai:{ laya:{...}|null, jev:{...}|null },
+ *            ai:{ jev:{...}|null },
  *            jev: <deciding provider ka compat block> }
  */
-export function aiDecider({ providers, mode, primary = 'laya', shadow = 'off', onDown = 'wait', strategy, eventGuardCheck = null }) {
+export function aiDecider({ providers, mode, primary: _primary = 'jev', shadow: _shadow = 'off', onDown: _onDown = 'wait', strategy, eventGuardCheck = null }) {
   const P = providers || {};
   return async (candidate, row) => {
     try {
       const { snap, prompt } = _snapPrompt(strategy, candidate, row, eventGuardCheck);
-      const ai = { laya: null, jev: null };
-      const called = new Set();
+      const ai = { jev: null };
       const call = async (name) => {
         const inst = P[name];
         if (!inst) return { action: 'wait', note: 'provider_unavailable', cached: false, latencyMs: 0 };
-        called.add(name);
         try { return await inst(snap, prompt); }
         catch (e) {
           // provider exception = WAIT, kabhi crash nahi (plan: koi bhi
@@ -176,74 +163,26 @@ export function aiDecider({ providers, mode, primary = 'laya', shadow = 'off', o
       let reason = null;
       let deciderProvider = null;
 
-      if (mode === 'consensus') {
-        const [vl, vj] = await Promise.all([call('laya'), call('jev')]);
-        ai.laya = _pack(vl); ai.jev = _pack(vj);
-        const downL = _isFailoverNote(vl.note), downJ = _isFailoverNote(vj.note);
-        if (downL || downJ) {
-          // ek provider down: AI_CONSENSUS_ON_DOWN policy
-          if (onDown === 'single' && !(downL && downJ)) {
-            const v = downL ? vj : vl;
-            deciderProvider = downL ? 'jev' : 'laya';
-            action = approves(v) ? 'take' : 'wait';
-            reason = `consensus_degraded_single(${deciderProvider})${v.note ? `: ${v.note}` : ''}`;
-          } else {
-            action = 'wait';
-            reason = `consensus_provider_down(${downL ? 'laya' : 'jev'}) — AI_CONSENSUS_ON_DOWN=${onDown}`;
-          }
-        } else if (approves(vl) && approves(vj)) {
-          action = 'take';
-          reason = 'consensus_both_take';
-          deciderProvider = primary === 'jev' ? 'jev' : 'laya';
-        } else {
+      if (mode === 'auto') {
+        const v = await call('jev');
+        ai.jev = _pack(v);
+        deciderProvider = 'jev';
+        if (!approves(v) && _isFailoverNote(v.note)) {
+          // v21.14: koi failover target nahi bacha — honest provider-down
+          // WAIT (failover intent reason me)
           action = 'wait';
-          const sideFlip = [vl, vj].some((v) => v?.action && v.action !== 'wait' && v.action !== snap.proposed);
-          if (sideFlip) reason = 'consensus_disagreed_side';
-          else {
-            const first = approves(vl) ? { name: 'jev', v: vj } : { name: 'laya', v: vl };
-            reason = `consensus_veto(${first.name}${first.v?.note ? `: ${first.v.note}` : ''})`;
-          }
-          deciderProvider = primary === 'jev' ? 'jev' : 'laya';
-        }
-      } else if (mode === 'auto') {
-        const prim = primary === 'jev' ? 'jev' : 'laya';
-        const sec = prim === 'jev' ? 'laya' : 'jev';
-        const v = await call(prim);
-        ai[prim] = _pack(v);
-        if (!approves(v) && _isFailoverNote(v.note) && P[sec]) {
-          const v2 = await call(sec);
-          ai[sec] = _pack(v2);
-          deciderProvider = sec;
-          action = approves(v2) ? 'take' : 'wait';
-          reason = `failover(${prim}->${sec})${v2.note ? `: ${v2.note}` : `: ${v2.action || 'wait'}`}`;
+          reason = `provider_down(jev): ${v.note} — auto failover v21.14 me retired (single-provider)`;
         } else {
-          deciderProvider = prim;
           action = approves(v) ? 'take' : 'wait';
           reason = v.note || (approves(v) ? null : (v.action || 'wait'));
         }
       } else {
-        // single-provider mode: 'laya' | 'jev'
+        // single-provider mode: 'jev'
         const v = await call(mode);
         ai[mode] = _pack(v);
         deciderProvider = mode;
         action = approves(v) ? 'take' : 'wait';
         reason = v.note || (approves(v) ? null : (v.action || 'wait'));
-      }
-
-      // ---- shadow call (dual-provider plan §3.2) ----
-      // Sirf us provider pe jo is decision me abhi call NAHI hua, aur jo
-      // configured hai. Result SIRF log (verdict.ai[name].shadow=true) —
-      // action pe asar nahi. Awaited + bounded by provider timeout taaki
-      // decision event me THEEK jagah dikhe (event-ordering races nahi).
-      if (shadow === 'laya' || shadow === 'jev') {
-        if (!called.has(shadow) && P[shadow]) {
-          try {
-            const vs = await P[shadow](snap, prompt);
-            ai[shadow] = { ..._pack(vs), shadow: true };
-          } catch {
-            ai[shadow] = { choice: null, probs: null, confidence: null, cached: false, latencyMs: null, note: 'shadow_error', shadow: true };
-          }
-        }
       }
 
       return {
@@ -258,40 +197,39 @@ export function aiDecider({ providers, mode, primary = 'laya', shadow = 'off', o
     } catch (e) {
       // koi bhi exception -> WAIT (plan ground rule: AI failure kabhi
       // trade nahi karta, aur kabhi crash bhi nahi karta)
-      return { action: 'wait', reason: `ai_decider_error: ${String(e?.message || e).slice(0, 120)}`, arm: mode, ai: { laya: null, jev: null }, jev: null };
+      return { action: 'wait', reason: `ai_decider_error: ${String(e?.message || e).slice(0, 120)}`, arm: mode, ai: { jev: null }, jev: null };
     }
   };
 }
 
 /**
- * Decider factory by arm name (plan §9 flow step 4: "Decider
- * (rules/gated/jev) config se"; v21.2.0: laya/consensus/auto bhi).
+ * Decider factory by arm name (plan §9 flow step 4).
  *
  * Provider missing ho to THROW — botRunner usse pakad ke arm_fallback
  * event ke saath gated pe girta hai (silent nahi), routes 409 dete hain.
+ * v21.14: laya/consensus arms REMOVED — legacy bot-state files me
+ * arm='laya'/'consensus' ho to botRunner availability-resolve pehle
+ * hi unhe gated/jev pe fall back kar deta hai.
  */
-export function makeDecider({ arm, strategy, jev = null, providers = null, primary = 'laya', shadow = 'off', onDown = 'wait', eventGuardCheck = null }) {
+export function makeDecider({ arm, strategy, jev = null, providers = null, primary = 'jev', shadow = 'off', onDown = 'wait', eventGuardCheck = null }) {
   if (arm === 'rules') return rulesDecider();
   if (arm === 'gated') return gatedDecider(strategy, { eventGuardCheck });
   if (arm === 'jev') {
     const inst = providers?.jev || jev;
     if (!inst) throw new Error('deciders: jev arm needs a jev instance');
-    // v21.2.0 (dual-provider): jev arm ab bhi aiDecider se hota hai (ek hi
-    // code path) — shadow support + approves() side-flip defense (pehle
-    // jevDecider createJev par bharosa karta tha). Purana verdict contract
-    // (arm:'jev', jev.{choice,probs,cached,latencyMs}, take|wait) same.
-    const provs = { ...(providers || {}), jev: inst, laya: providers?.laya || null };
+    // jev arm aiDecider se hi hota hai (ek hi code path) — approves()
+    // side-flip defense. Purana verdict contract (arm:'jev',
+    // jev.{choice,probs,cached,latencyMs}, take|wait) same.
+    const provs = { ...(providers || {}), jev: inst };
     return aiDecider({ providers: provs, mode: 'jev', primary, shadow, onDown, strategy, eventGuardCheck });
   }
-  if (arm === 'laya' || arm === 'consensus' || arm === 'auto') {
-    const provs = providers || { jev: jev || null, laya: null };
-    if (arm === 'laya' && !provs.laya) throw new Error('deciders: laya arm needs a laya instance (LAYA_ENABLED=1 + LAYA_API_KEY)');
-    // consensus: DONO absent → throw (botRunner isse pakad ke gated karta hai).
-    // EK absent → allowed — aiDecider per-decision AI_CONSENSUS_ON_DOWN policy
-    // chalata hai (wait=har decision WAIT; single=bacha hua provider decide).
-    if (arm === 'consensus' && !(provs.jev || provs.laya)) throw new Error('deciders: consensus arm needs at least one AI provider');
-    if (arm === 'auto' && !(provs.jev || provs.laya)) throw new Error('deciders: auto arm needs at least one AI provider');
-    return aiDecider({ providers: provs, mode: arm, primary, shadow, onDown, strategy, eventGuardCheck });
+  if (arm === 'auto') {
+    const provs = providers || { jev: jev || null };
+    if (!provs.jev) throw new Error('deciders: auto arm needs a jev provider');
+    return aiDecider({ providers: provs, mode: 'auto', primary, shadow, onDown, strategy, eventGuardCheck });
   }
+  // v21.14: 'laya'/'consensus' retired — legacy persisted state
+  // botRunner resolve me handle hota hai; yahan pahunch gaya hai to
+  // unknown arm (upstream 400/409 paths se bhi filtered).
   throw new Error(`deciders: unknown arm '${arm}'`);
 }

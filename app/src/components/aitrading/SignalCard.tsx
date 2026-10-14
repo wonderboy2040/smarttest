@@ -27,21 +27,20 @@ import { ManualTradePrompt } from './ManualTradePrompt';
 import { liveInvalidationCheck } from './liveInvalidation';
 import type { AISignal, Side, SuperIntel, SignalVerification, UltrafastVerification } from './types';
 
-/** v21.3.0 (Issue-5): Jev/Laya dual-AI confirmation chip — the board
- *  signal's verdict from BOTH AI providers (cloud + local).
- *  v21.11.0 (Laya decision transparency): har provider ka bit ab apna
- *  DIRECTION dikhaata hai — "Laya ✓ LONG" / "Laya ✗ SHORT 68%" /
- *  "Laya ○ SHORT-lean 29%" / "Laya ○ slow" — pehle hollow ○ hi dikhta
- *  tha aur direction ka pata hi nahi chalta tha (user ka exact
- *  complaint). Legacy payloads (bina detail ke) purane ✓/✗/○ me
- *  render hote hain. */
+/** v21.3.0 (Issue-5) lineage: Jev AI confirmation chip — the board
+ *  signal's verdict from the AI provider (Jev cloud).
+ *  v21.11.0 (decision transparency): provider ka bit ab apna DIRECTION
+ *  dikhaata hai — "Jev ✓ LONG" / "Jev ✗ SHORT 68%" / "Jev ○ SHORT-lean
+ *  29%" / "Jev ○ slow" — pehle hollow ○ hi dikhta tha. Legacy payloads
+ *  (bina detail ke) purane ✓/✗/○ me render hote hain.
+ *  v21.14.0: Laya removed — jev-only. */
 function AiConfirmBadge({ v }: { v: NonNullable<AISignal['aiConfirm']> }) {
   const confirmed = v.verdict === 'CONFIRMED';
   const conflict = v.verdict === 'CONFLICT';
   const sideOf = (p?: string | null) => (p === 'enter_short' ? 'SHORT' : p === 'enter_long' ? 'LONG' : null);
   const pct = (x?: number | null) => (x != null && Number.isFinite(x) ? `${Math.round(x * 100)}%` : null);
   // one provider's bit: symbol + direction + conviction (jab available)
-  const bit = (key: 'jev' | 'laya', label: string): string | null => {
+  const bit = (key: 'jev', label: string): string | null => {
     const vs = v[key];
     if (!vs) return null;
     const d = v.detail?.[key];
@@ -66,12 +65,11 @@ function AiConfirmBadge({ v }: { v: NonNullable<AISignal['aiConfirm']> }) {
   };
   const bits = [
     bit('jev', 'Jev'),
-    bit('laya', 'Laya'),
   ].filter(Boolean).join(' · ');
-  // tooltip: per-provider ka full story — kya chuna, kitna conviction,
+  // tooltip: provider ka full story — kya chuna, kitna conviction,
   // kyu (note/reason) + board effect
-  const tipBits = (['jev', 'laya'] as const).map((key) => {
-    const label = key === 'laya' ? 'Laya (local)' : 'Jev (cloud)';
+  const tipBits = (['jev'] as const).map((key) => {
+    const label = 'Jev (cloud)';
     const vs = v[key];
     if (!vs) return null;
     const d = v.detail?.[key];
@@ -99,7 +97,7 @@ function AiConfirmBadge({ v }: { v: NonNullable<AISignal['aiConfirm']> }) {
   return (
     <span
       className={`px-1.5 py-0.5 rounded text-[9px] font-black border font-mono ${confirmed ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40' : conflict ? 'bg-red-500/15 text-red-300 border-red-500/40' : 'bg-slate-700/40 text-slate-300 border-slate-600/40'}`}
-      title={`Jev (cloud) + Laya (local) dual-AI decision — ${bits || 'no verdict'}\n\n${tipBits}\n\nBoard effect: ${confirmed ? 'dono ne ye side APPROVE kiya (+3 score)' : conflict ? 'koi provider ULTA side chuna (−8 score, STRONG→ACTION demote)' : 'abstain/wait — score untouched'}. AI kabhi side/size/SL nahi badalta — sirf confirm ya demote karta hai.`}
+      title={`Jev (cloud) AI decision — ${bits || 'no verdict'}\n\n${tipBits}\n\nBoard effect: ${confirmed ? 'provider ne ye side APPROVE kiya (+3 score)' : conflict ? 'provider ULTA side chuna (−8 score, STRONG→ACTION demote)' : 'abstain/wait — score untouched'}. AI kabhi side/size/SL nahi badalta — sirf confirm ya demote karta hai.`}
     >
       {confirmed ? `🤖 AI ✓ (${bits})` : conflict ? `🤖 AI ✗ (${bits})` : `🤖 AI ○ (${bits})`}
     </span>
@@ -1382,7 +1380,7 @@ export const SignalCard = memo(function SignalCard({ signal, busy, onExecute, on
                 chart ne direction verify ki ya nahi (CONFIRMED / PENDING /
                 REJECTED — the long-bola-par-short-gaya mismatch guard). */}
             {signal.ultrafast && <UltrafastBadge v={signal.ultrafast} side={signal.side} />}
-            {/* v21.3.0 (Issue-5): Jev/Laya dual-AI confirmation — CONFIRMED /
+            {/* v21.3.0 (Issue-5): AI confirmation — CONFIRMED /
                 CONFLICT / abstain, per-provider chips ke saath. */}
             {signal.aiConfirm && <AiConfirmBadge v={signal.aiConfirm} />}
             {(() => {

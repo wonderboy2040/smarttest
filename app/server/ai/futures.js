@@ -701,17 +701,17 @@ export async function futuresExecutePrecheck(opts) {
       gate('Side match', sideMatch, sideMatch ? `consensus ${signal.side}` : `board flipped: ${signal.side} vs requested ${side}`);
       if (signal.ucRejected) out.warnings.push('Ultrafast chart verification REJECTED this direction');
       // v21.11: CONFLICT warning me kaun ULTA side pe hai + uski conviction
-      // — pehle sirf "Jev/Laya AI CONFLICT" dikhta tha, direction ka pata
-      // nahi chalta tha (user ka exact complaint)
+      // — direction ka pata chalta hai (user ka exact complaint).
+      // v21.14: sirf jev provider.
       if (signal.aiConfirm?.verdict === 'CONFLICT') {
-        const flips = ['jev', 'laya']
+        const flips = ['jev']
           .filter((n) => signal.aiConfirm?.detail?.[n]?.v === 'DISAGREE')
           .map((n) => {
             const d = signal.aiConfirm.detail[n];
             const p = d.picked === 'enter_short' ? d.pShort : d.picked === 'enter_long' ? d.pLong : null;
-            return `${n === 'laya' ? 'Laya' : 'Jev'} ${d.picked === 'enter_short' ? 'SHORT' : 'LONG'}${p != null ? ` ${Math.round(p * 100)}%` : ''}`;
+            return `Jev ${d.picked === 'enter_short' ? 'SHORT' : 'LONG'}${p != null ? ` ${Math.round(p * 100)}%` : ''}`;
           });
-        out.warnings.push(`Jev/Laya AI CONFLICT on this signal${flips.length ? ` — ${flips.join(' + ')} ke side me (ULTA)` : ''}`);
+        out.warnings.push(`AI CONFLICT on this signal${flips.length ? ` — ${flips.join(' + ')} ke side me (ULTA)` : ''}`);
       }
     }
 

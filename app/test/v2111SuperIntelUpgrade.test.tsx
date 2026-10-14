@@ -7,7 +7,7 @@
 //    boardAiConfirm used to collapse the provider's FULL verdict
 //    (action/probs/confidence/note) into a 3-valued string — Laya ka
 //    directional read kabhi UI tak nahi pahunchta tha. Ab:
-//      • aiConfirm.detail.{jev,laya} = decision objects (picked side,
+//      • aiConfirm.detail.jev = decision object (picked side,
 //        pLong/pShort/pWait, confidence, latencyMs, honest reason)
 //      • badge: "Laya ✗ SHORT 68%" / "Laya ○ SHORT-lean 29%" /
 //        "Laya ○ slow" — direction + conviction visible
@@ -39,21 +39,21 @@ const {
 
 // ---------------- A) decision transparency (node side) ----------------
 
-const agreeLaya = async () => ({
+const agreeJev = async () => ({
   action: 'enter_long', probs: { enter_long: 0.71, enter_short: 0.18, wait: 0.11 },
   confidence: 0.74, latencyMs: 210, cached: false,
 });
-const oppositeLaya = async () => ({
+const oppositeJev = async () => ({
   action: 'wait', picked: 'enter_short', note: 'disagreed_side',
   probs: { enter_long: 0.2, enter_short: 0.68, wait: 0.12 },
   confidence: 0.71, latencyMs: 240, cached: false,
 });
-const leanLaya = async () => ({
+const leanJev = async () => ({
   action: 'wait', picked: 'enter_short', note: 'below_threshold(0.29)',
   probs: { enter_long: 0.24, enter_short: 0.29, wait: 0.47 },
   confidence: 0.31, latencyMs: 190, cached: false,
 });
-const slowLaya = async () => ({ action: 'wait', note: 'timeout', cached: false, latencyMs: 1500 });
+const slowJev = async () => ({ action: 'wait', note: 'timeout', cached: false, latencyMs: 1500 });
 
 const strongBoardSignal = (over = {}) => ({
   symbol: 'B-SOL_USDT', market: 'FUTURES', side: 'LONG', grade: 'STRONG',
@@ -63,7 +63,7 @@ const strongBoardSignal = (over = {}) => ({
   ...over,
 });
 
-describe('v21.11 A — Laya decision transparency (boardAiConfirm)', () => {
+describe('v21.11 A — decision transparency (boardAiConfirm; v21.14 jev-only)', () => {
   beforeEach(() => {
     __resetBoardAiConfirmForTests();
   });
@@ -112,42 +112,40 @@ describe('v21.11 A — Laya decision transparency (boardAiConfirm)', () => {
     expect(__toDecisionForTests(null, 'enter_long').v).toBe('NEUTRAL');
   });
 
-  it('wire shape: legacy strings UNCHANGED + detail objects stamped', async () => {
-    __setProvidersForTests({ jev: agreeLaya, laya: oppositeLaya });
+  it('wire shape: legacy string + detail objects stamped (jev-only, v21.14)', async () => {
+    __setProvidersForTests({ jev: oppositeJev });
     const s = strongBoardSignal();
     const meta = await confirmBoardSignals([s], 'FUTURES');
     expect(meta?.conflicted).toBe(1);
-    // legacy contract (v21.3 tests byte-identical)
-    expect(s.aiConfirm.jev).toBe('AGREE');
-    expect(s.aiConfirm.laya).toBe('DISAGREE');
+    // legacy contract
+    expect(s.aiConfirm.jev).toBe('DISAGREE');
     expect(s.aiConfirm.verdict).toBe('CONFLICT');
+    expect('laya' in s.aiConfirm).toBe(false);
     // v21.11 detail — direction + conviction on the wire
-    expect(s.aiConfirm.detail?.laya?.v).toBe('DISAGREE');
-    expect(s.aiConfirm.detail?.laya?.picked).toBe('enter_short');
-    expect(s.aiConfirm.detail?.laya?.pShort).toBeCloseTo(0.68, 5);
-    expect(s.aiConfirm.detail?.laya?.confidence).toBeCloseTo(0.71, 5);
-    expect(s.aiConfirm.detail?.jev?.picked).toBe('enter_long');
+    expect(s.aiConfirm.detail?.jev?.v).toBe('DISAGREE');
+    expect(s.aiConfirm.detail?.jev?.picked).toBe('enter_short');
+    expect(s.aiConfirm.detail?.jev?.pShort).toBeCloseTo(0.68, 5);
+    expect(s.aiConfirm.detail?.jev?.confidence).toBeCloseTo(0.71, 5);
   });
 
   it('CONFLICT: STRONG demote + summary me provider-side direction (flipBits)', async () => {
-    __setProvidersForTests({ jev: agreeLaya, laya: oppositeLaya });
+    __setProvidersForTests({ jev: oppositeJev });
     const s = strongBoardSignal();
     await confirmBoardSignals([s], 'FUTURES');
     expect(s.grade).toBe('ACTION');
     expect(s.executable).toBe(false);
     expect(s.summary).toContain('AI-CONFLICT');
-    expect(s.summary).toContain('Laya SHORT 68%');
+    expect(s.summary).toContain('Jev SHORT 68%');
   });
 
   it('NEUTRAL lean + slow reasons survive the wire (the ○ explanation)', async () => {
-    __setProvidersForTests({ jev: slowLaya, laya: leanLaya });
+    __setProvidersForTests({ jev: leanJev });
     const s = strongBoardSignal();
     await confirmBoardSignals([s], 'FUTURES');
     expect(s.aiConfirm.verdict).toBe('NEUTRAL');
     expect(s.aiConfirm.jev).toBe('NEUTRAL');
-    expect(s.aiConfirm.detail?.jev?.reason).toBe('timeout');
-    expect(s.aiConfirm.detail?.laya?.picked).toBe('enter_short');
-    expect(s.aiConfirm.detail?.laya?.reason).toBe('below-thr');
+    expect(s.aiConfirm.detail?.jev?.picked).toBe('enter_short');
+    expect(s.aiConfirm.detail?.jev?.reason).toBe('below-thr');
     // score untouched on NEUTRAL (v21.3 contract)
     expect(s.superIntel.aiScore).toBe(82);
   });
@@ -281,19 +279,19 @@ describe('v21.11 B — Superintelligence accuracy suite default ON', () => {
 describe('v21.11 A2 — AiConfirmBadge direction rendering', () => {
   it('aiConfirmText helpers: AGREE / ULTA / lean / reason lines', async () => {
     const { aiDecisionText, aiDirSummary } = await import('../src/components/aitrading/aiConfirmText');
-    expect(aiDecisionText('Laya', {
+    expect(aiDecisionText('Jev', {
       v: 'DISAGREE', picked: 'enter_short', pLong: 0.2, pShort: 0.68, pWait: 0.12,
       confidence: 0.71, note: 'disagreed_side', latencyMs: 240, cached: false, reason: 'ulta',
     })).toContain('ULTA — SHORT chuna (p 68%)');
-    expect(aiDecisionText('Laya', {
+    expect(aiDecisionText('Jev', {
       v: 'AGREE', picked: 'enter_long', pLong: 0.71, pShort: 0.18, pWait: 0.11,
       confidence: 0.74, note: null, latencyMs: 210, cached: false, reason: 'wait',
     })).toContain('LONG APPROVE (p 71%)');
-    expect(aiDecisionText('Laya', {
+    expect(aiDecisionText('Jev', {
       v: 'NEUTRAL', picked: 'enter_short', pLong: 0.24, pShort: 0.29, pWait: 0.47,
       confidence: 0.31, note: 'below_threshold(0.29)', latencyMs: 190, cached: false, reason: 'below-thr',
     })).toContain('SHORT ki taraf LEAN (p 29%)');
-    expect(aiDecisionText('Laya', {
+    expect(aiDecisionText('Jev', {
       v: 'NEUTRAL', picked: null, pLong: null, pShort: null, pWait: null,
       confidence: null, note: 'timeout', latencyMs: 1500, cached: false, reason: 'timeout',
     })).toContain('entry nahi li (reason: timeout)');
@@ -314,17 +312,15 @@ describe('v21.11 A2 — AiConfirmBadge direction rendering', () => {
       summary: 'test', aiNote: null, executable: true, generatedAt: Date.now(),
       aiConfirm: aiConfirm as never,
     });
-    // CONFLICT with direction detail
+    // CONFLICT with direction detail (v21.14: jev-only)
     render(<SignalCard signal={mk({
-      jev: 'AGREE', laya: 'DISAGREE', verdict: 'CONFLICT',
+      jev: 'DISAGREE', verdict: 'CONFLICT',
       detail: {
-        jev: { v: 'AGREE', picked: 'enter_long', pLong: 0.71, pShort: 0.18, pWait: 0.11, confidence: 0.74, note: null, latencyMs: 210, cached: false, reason: 'wait' },
-        laya: { v: 'DISAGREE', picked: 'enter_short', pLong: 0.2, pShort: 0.68, pWait: 0.12, confidence: 0.71, note: 'disagreed_side', latencyMs: 240, cached: false, reason: 'ulta' },
+        jev: { v: 'DISAGREE', picked: 'enter_short', pLong: 0.2, pShort: 0.68, pWait: 0.12, confidence: 0.71, note: 'disagreed_side', latencyMs: 240, cached: false, reason: 'ulta' },
       },
     })} />);
     const chip = screen.getByText(/🤖 AI ✗/);
-    expect(chip.textContent).toContain('Laya ✗ SHORT 68%');
-    expect(chip.textContent).toContain('Jev ✓ LONG');
+    expect(chip.textContent).toContain('Jev ✗ SHORT 68%');
     // tooltip me full directional story
     expect(chip.getAttribute('title')).toContain('ULTA — SHORT chuna');
     expect(chip.getAttribute('title')).toContain('probs LONG 20% / SHORT 68% / wait 12%');

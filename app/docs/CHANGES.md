@@ -1,5 +1,45 @@
 # Changelog
 
+## v21.14.0 — LAYA LOCAL AI MODEL PERMANENT REMOVAL (2026-10-14)
+
+**User ask: "full site codes se laya local ai model permanently remove cleanup karne se existing site ko kuch effect hota kya dekho — without effect ke remove kar sakte hai tho kardo"**
+
+### ANALYSIS (removal pehle VERIFY kiya — phir execute)
+- **Trading Signals kabhi break nahi hote**: AI-confirm layer purely additive hai — signals ka
+  generation (committee compute) AI layer se PEHLE hota hai; provider absent = `aiConfirm` payload
+  se omit, scores untouched, koi mutation nahi. CONFLICT/CONFIRMED sirf tab hota hai jab provider LIVE ho.
+- **Bot Lab kabhi nahi rukta**: `laya` arm → pehle se hi `arm_fallback` graceful path tha
+  (no_laya_instance → gated). Ab legacy laya/consensus arms tick pe honest events ke saath
+  jev/gated pe map hote hain.
+- **UI har layer pe graceful**: `signal.aiConfirm` absent = chip render hi nahi hota; BotsTab
+  dropdown ARMS_ALLOWED se render hota hai.
+- Laya AI confirm chain ka 2nd provider tha (Jev cloud pehla) — dono shared `jevEngine`
+  (createJev) pe chalte the. Jev flow byte-identical intact.
+
+### REMOVED (permanent)
+- `server/layaSidecar.js` (1008 lines — adopt/spawn/zombie-kill sidecar manager) + supervisor wiring
+- `server/bots/layaAutoLink.js` (263 lines — health-probe + key-ladder + hot-swap rescue) +
+  routes integration (laya-status/laya-relink endpoints, SSE layaAutoLink frames)
+- `start-laya.cmd`, `scripts/laya-ping.mjs`, `scripts/laya-autostart-check.mjs`
+- Watchdog bat ka Laya fallback block (v21.10 war-guard) — 10048 bind-war class ka poora surface khatam
+- Bot Lab `laya`/`consensus` arms (ARMS_ALLOWED ab rules|gated|jev|auto); aiModeConfig primary
+  hamesha `jev`; layaPing leg (smoke.js); providerHealth/healthMonitor laya blocks;
+  boardAiConfirm jev-only (wire shape me `laya` key clean absent); BotsTab Laya panel +
+  RECONNECT button + autolink chip; SignalCard/LiveExecuteModal/TopPicks/ExpertPicks/OpsHealthStrip
+  laya bits; full-diagnostic Section D (ab jev AI-confirm layer status)
+- `.env.example` (app + deploy): LAYA_* block replaced with jev-only AI PROVIDER section
+  (purane LAYA_* lines user ke .env me pade rehne par bhi IGNORE hote hain — safe)
+
+### KEPT (jev-only world)
+- `jevEngine.js` (createJev) — Jev cloud provider ka pura engine (cache/breaker/retry/FIFO
+  concurrency gate/usage stats) byte-identical
+- `boardAiConfirm.js` — AI confirm layer ab jev-only (SWRV memo + CONFIRMED/CONFLICT logic same)
+- `deciders.js` — rules/gated/jev/auto arms; auto failover retired (single provider — honest
+  provider_down WAIT)
+- Tests: layaSidecar/layaConflict/layaAutoLink suites deleted; layaFast → aiFast (FIFO/SWRV
+  locks jev-only); aiProviders/botlabAiDeciders/botlabDualArms/botlabJev/useBotsParse/
+  v2111/v213/v214 updated jev-only contracts ke saath
+
 ## v21.12.0 — MASTER ACCURACY SWITCH + META DEFAULT ON + CODE-UPGRADE GUARD (2026-10-14)
 
 **User report: "META ensemble ON karna ml-service deploy ke baad haa kardo aur Accuracy upgrade — 13 → 16-model committee (tape-MTF w1.6 + 3 naye seats) + 4 mesh shadow seats + 3× learning window sirf 13 models hi bata raha hai 16 models nhi site ek baar recheck karo aur issue fix karo"**

@@ -1,14 +1,15 @@
 // ============================================================
-// test/botlabDualArms.test.ts — v21.2.0 (dual-provider plan Steps 4+5)
+// test/botlabDualArms.test.ts — v21.14.0 (Laya removal)
 // ------------------------------------------------------------
 // BotRunner availability-resolve + routes contract:
-//   • arm=laya + Laya instance absent → arm_fallback event + gated
-//   • arm=consensus + ek absent → arm_note event, arm stays (onDown policy
-//     per-decision); dono absent → gated
-//   • arm=auto + dono absent → gated
-//   • status().ai shape {jev, laya} + purana `jev` field compat
+//   • arm=jev + instance absent → arm_fallback event + gated
+//   • v21.14 legacy arms: laya → jev (agar jev hai) warna gated;
+//     consensus → jev warna gated (event me honest reason)
+//   • arm=auto + jev absent → gated
+//   • status().ai shape {jev} + purana `jev` field compat
 //   • settle events me `arm` stamp (position meta se)
 //   • POST /api/bots/arm: valid arms, unavailable → 409, unknown → 400
+//     (legacy laya/consensus arms ab 400 unknown-arm)
 //   • GET /api/bots/ai/health shape
 // ============================================================
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -26,35 +27,56 @@ beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dualarm-')); });
 
 const ENV = { BOTS_MODE: 'PAPER', BOTS_ENABLED: 'orb_crypto_utc' };
 const mkJev = () => createJev({ apiKey: 'k', cachePath: path.join(dir, 'jev_cache.jsonl') });
-const mkLaya = () => createJev({ apiKey: 'lk', name: 'laya', model: '', url: 'http://127.0.0.1:8000/v1/systemone', cachePath: path.join(dir, 'laya_cache.jsonl') });
 
-describe('v21.2.0 BotRunner — availability-resolve (hamesha event-file me record)', () => {
-  it('arm=laya + no Laya instance → arm_fallback {from:laya,to:gated} + gated decider chalta hai', async () => {
-    saveBotState(dir, 'orb_crypto_utc', { arm: 'laya' });
-    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: null, laya: null } });
+describe('v21.14 BotRunner — availability-resolve (hamesha event-file me record)', () => {
+  it('arm=jev + no jev instance → arm_fallback {from:jev,to:gated} + gated decider chalta hai', async () => {
+    saveBotState(dir, 'orb_crypto_utc', { arm: 'jev' });
+    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: null } });
     await r.tick('orb_crypto_utc');
     const evs = readEvents(dir, 'orb_crypto_utc', 50);
     const fb = evs.find((e) => e.kind === 'arm_fallback');
     expect(fb).toBeTruthy();
+    expect(fb.from).toBe('jev');
+    expect(fb.to).toBe('gated');
+    expect(fb.reason).toBe('no_jev_instance');
+  });
+
+  it('v21.14: legacy arm=laya + jev present → mapped to jev (arm_fallback event, honest reason)', async () => {
+    saveBotState(dir, 'orb_crypto_utc', { arm: 'laya' });
+    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: mkJev() } });
+    await r.tick('orb_crypto_utc');
+    const fb = readEvents(dir, 'orb_crypto_utc', 50).find((e) => e.kind === 'arm_fallback');
+    expect(fb).toBeTruthy();
+    expect(fb.from).toBe('laya');
+    expect(fb.to).toBe('jev');
+    expect(fb.reason).toBe('laya_provider_removed_v21_14');
+  });
+
+  it('v21.14: legacy arm=laya + jev bhi absent → gated (reason honest)', async () => {
+    saveBotState(dir, 'orb_crypto_utc', { arm: 'laya' });
+    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: null } });
+    await r.tick('orb_crypto_utc');
+    const fb = readEvents(dir, 'orb_crypto_utc', 50).find((e) => e.kind === 'arm_fallback');
+    expect(fb).toBeTruthy();
     expect(fb.from).toBe('laya');
     expect(fb.to).toBe('gated');
-    expect(fb.reason).toBe('no_laya_instance');
+    expect(fb.reason).toBe('laya_provider_removed_no_jev');
   });
 
-  it('arm=consensus + sirf jev → arm_note (per-decision onDown policy), arm_fallback NAHI', async () => {
+  it('v21.14: legacy arm=consensus + jev present → mapped to jev (consensus_retired)', async () => {
     saveBotState(dir, 'orb_crypto_utc', { arm: 'consensus' });
-    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: mkJev(), laya: null } });
+    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: mkJev() } });
     await r.tick('orb_crypto_utc');
-    const evs = readEvents(dir, 'orb_crypto_utc', 50);
-    const note = evs.find((e) => e.kind === 'arm_note');
-    expect(note).toBeTruthy();
-    expect(note.note).toContain('laya provider absent');
-    expect(evs.find((e) => e.kind === 'arm_fallback')).toBeFalsy();
+    const fb = readEvents(dir, 'orb_crypto_utc', 50).find((e) => e.kind === 'arm_fallback');
+    expect(fb).toBeTruthy();
+    expect(fb.from).toBe('consensus');
+    expect(fb.to).toBe('jev');
+    expect(fb.reason).toBe('consensus_retired_single_provider');
   });
 
-  it('arm=consensus + dono absent → gated fallback', async () => {
+  it('v21.14: legacy arm=consensus + jev absent → gated (no_ai_providers)', async () => {
     saveBotState(dir, 'orb_crypto_utc', { arm: 'consensus' });
-    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: null, laya: null } });
+    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: null } });
     await r.tick('orb_crypto_utc');
     const fb = readEvents(dir, 'orb_crypto_utc', 50).find((e) => e.kind === 'arm_fallback');
     expect(fb).toBeTruthy();
@@ -63,36 +85,27 @@ describe('v21.2.0 BotRunner — availability-resolve (hamesha event-file me reco
     expect(fb.reason).toBe('no_ai_providers');
   });
 
-  it('arm=auto + dono absent → gated; primary absent (ek hai) → arm_note only', async () => {
+  it('arm=auto + jev absent → gated fallback', async () => {
     saveBotState(dir, 'orb_crypto_utc', { arm: 'auto' });
-    const r1 = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: null, laya: null } });
-    await r1.tick('orb_crypto_utc');
+    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: null } });
+    await r.tick('orb_crypto_utc');
     const fb = readEvents(dir, 'orb_crypto_utc', 50).find((e) => e.kind === 'arm_fallback');
     expect(fb.from).toBe('auto');
     expect(fb.to).toBe('gated');
-
-    // primary=laya (default) absent, jev present → arm_note, arm stays auto
-    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'dualarm2-'));
-    saveBotState(dir2, 'orb_crypto_utc', { arm: 'auto' });
-    const r2 = new BotRunner({ stateDir: dir2, env: { ...ENV }, ai: { jev: mkJev(), laya: null } });
-    await r2.tick('orb_crypto_utc');
-    const note = readEvents(dir2, 'orb_crypto_utc', 50).find((e) => e.kind === 'arm_note');
-    expect(note).toBeTruthy();
-    expect(note.note).toContain('failover to jev');
+    expect(fb.reason).toBe('no_ai_providers');
   });
 
-  it('status().ai = {jev, laya} per-provider stats; purana `jev` field back-compat', () => {
-    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: mkJev(), laya: mkLaya() } });
+  it('status().ai = {jev} per-provider stats; purana `jev` field back-compat; laya key absent', () => {
+    const r = new BotRunner({ stateDir: dir, env: { ...ENV }, ai: { jev: mkJev() } });
     const st = r.status();
     expect(st.ai).toBeTruthy();
     expect(st.ai.jev.name).toBe('jev');
     expect(st.ai.jev.hasKey).toBe(true);
-    expect(st.ai.laya.name).toBe('laya');
-    expect(st.ai.laya.url).toBe('127.0.0.1:8000');
+    expect('laya' in st.ai).toBe(false);
     // legacy compat field (UI purane consumers)
     expect(st.jev.name).toBe('jev');
-    // aiMode defaults surface
-    expect(st.aiMode).toEqual({ primary: 'laya', shadow: 'off', onDown: 'wait' });
+    // aiMode defaults surface (v21.14: primary always jev)
+    expect(st.aiMode).toEqual({ primary: 'jev', shadow: 'off', onDown: 'wait' });
   });
 
   it('purana `jev` ctor param ab bhi kaam karta hai (ai.jev pe map)', () => {
@@ -100,12 +113,11 @@ describe('v21.2.0 BotRunner — availability-resolve (hamesha event-file me reco
     const r = new BotRunner({ stateDir: dir, env: { ...ENV }, jev: j });
     expect(r.jev).toBe(j);
     expect(r.ai.jev).toBe(j);
-    expect(r.ai.laya).toBeNull();
     expect(r.status().ai.jev.hasKey).toBe(true);
   });
 });
 
-describe('v21.2.0 routes — arm route + AI health (REAL HTTP)', () => {
+describe('v21.14 routes — arm route + AI health (REAL HTTP)', () => {
   let server: Server | null = null;
   let base = '';
   afterEach(async () => {
@@ -137,29 +149,47 @@ describe('v21.2.0 routes — arm route + AI health (REAL HTTP)', () => {
     expect(j.arm).toBe('rules');
   });
 
-  it('arm=laya without provider → 409 provider_unavailable {provider:laya} + hint', async () => {
+  it('arm=jev without provider → 409 provider_unavailable {provider:jev} + hint', async () => {
     await boot({});
-    const r = await fetch(`${base}/api/bots/arm/orb_crypto_utc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ arm: 'laya' }) });
+    const r = await fetch(`${base}/api/bots/arm/orb_crypto_utc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ arm: 'jev' }) });
     expect(r.status).toBe(409);
     const j = await r.json();
     expect(j.error).toBe('provider_unavailable');
-    expect(j.provider).toBe('laya');
-    expect(String(j.hint)).toContain('LAYA_ENABLED');
+    expect(j.provider).toBe('jev');
+    expect(String(j.hint)).toContain('TYPESAFE_API_KEY');
   });
 
-  it('arm=consensus with sirf jev key → 409 (provider:laya); dono keys ke saath → 200', async () => {
-    await boot({ TYPESAFE_API_KEY: 'k' }); // jev only
-    const r1 = await fetch(`${base}/api/bots/arm/orb_crypto_utc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ arm: 'consensus' }) });
-    expect(r1.status).toBe(409);
-    expect((await r1.json()).provider).toBe('laya');
-
-    await boot({ TYPESAFE_API_KEY: 'k', LAYA_ENABLED: '1', LAYA_API_KEY: 'lk' });
+  it('v21.14: legacy laya/consensus arms → 400 unknown-arm (ARMS_ALLOWED me nahi)', async () => {
+    await boot({ TYPESAFE_API_KEY: 'k' });
+    const r1 = await fetch(`${base}/api/bots/arm/orb_crypto_utc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ arm: 'laya' }) });
+    expect(r1.status).toBe(400);
     const r2 = await fetch(`${base}/api/bots/arm/orb_crypto_utc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ arm: 'consensus' }) });
-    expect(r2.status).toBe(200);
-    expect((await r2.json()).arm).toBe('consensus');
+    expect(r2.status).toBe(400);
+    // error message me allowed arms listed
+    const j = await r1.json();
+    expect(String(j.error)).toContain('rules|gated|jev|auto');
   });
 
-  it('GET /api/bots/ai/health — per-provider block (configured flags honest)', async () => {
+  it('arm=auto with jev key → 200; without → 409', async () => {
+    await boot({});
+    const r1 = await fetch(`${base}/api/bots/arm/orb_crypto_utc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ arm: 'auto' }) });
+    expect(r1.status).toBe(409);
+
+    await boot({ TYPESAFE_API_KEY: 'k' });
+    const r2 = await fetch(`${base}/api/bots/arm/orb_crypto_utc`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ arm: 'auto' }) });
+    expect(r2.status).toBe(200);
+    expect((await r2.json()).arm).toBe('auto');
+  });
+
+  it('v21.14: legacy laya-status endpoint gone → 404', async () => {
+    await boot({ TYPESAFE_API_KEY: 'k' });
+    const r = await fetch(`${base}/api/bots/ai/laya-status`);
+    expect(r.status).toBe(404);
+    const r2 = await fetch(`${base}/api/bots/ai/laya-relink`, { method: 'POST' });
+    expect(r2.status).toBe(404);
+  });
+
+  it('GET /api/bots/ai/health — provider block (configured flags honest)', async () => {
     await boot({ TYPESAFE_API_KEY: 'k' });
     const r = await fetch(`${base}/api/bots/ai/health`);
     expect(r.status).toBe(200);
@@ -167,16 +197,17 @@ describe('v21.2.0 routes — arm route + AI health (REAL HTTP)', () => {
     expect(j.jev.configured).toBe(true);
     expect(j.jev.reachable).toBe(true);
     expect(j.jev.breakerOpen).toBe(false);
-    expect(j.laya.configured).toBe(false);
+    expect('laya' in j).toBe(false);
     expect(typeof j.at).toBe('string');
   });
 
   it('status endpoint me ai block (SSE/status consumers)', async () => {
-    await boot({ TYPESAFE_API_KEY: 'k', LAYA_ENABLED: '1', LAYA_API_KEY: 'lk' });
+    await boot({ TYPESAFE_API_KEY: 'k' });
     const r = await fetch(`${base}/api/bots/status`);
     const j = await r.json();
     expect(j.ai.jev.name).toBe('jev');
-    expect(j.ai.laya.name).toBe('laya');
-    expect(j.aiMode.primary).toBe('laya');
+    expect('laya' in j.ai).toBe(false);
+    expect(j.aiMode.primary).toBe('jev');
+    expect(j.layaAutoLink).toBeUndefined();
   });
 });

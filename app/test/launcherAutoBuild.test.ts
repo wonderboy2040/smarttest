@@ -415,12 +415,12 @@ describe('v20.8.3 frontend stale-build visibility', () => {
     const m = VERSION_TS.match(/APP_VERSION = '([^']+)'/);
     expect(m).toBeTruthy();
     expect(m![1]).toBe(PKG.version);
-    expect(PKG.version).toBe('21.13.1'); // v21.13.1 bump (full-site deep recheck — index 15m→1h chain, fapi per-symbol, honest labels, META default-ON, Python 16-seat proxies)
+    expect(PKG.version).toBe('21.14.0'); // v21.14.0 bump (Laya local AI model permanent removal — zero-impact jev-only AI pipeline)
   });
 
   it('Watchdog bat: v20.8.3 title + auto-build line', () => {
     const bat = readFileSync(path.join(APP_ROOT, 'Start-SmartAI-Watchdog.bat'), 'utf8');
-    expect(bat).toContain('v21.13.1');
+    expect(bat).toContain('v21.14.0');
     expect(bat).toContain('AUTO npm install');
   });
 

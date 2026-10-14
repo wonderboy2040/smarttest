@@ -1,12 +1,13 @@
 // ============================================================
 // src/components/aitrading/aiConfirmText.ts
 // ------------------------------------------------------------
-// v21.11.0 (Laya decision transparency) — shared text helpers for
-// the Jev/Laya dual-AI confirmation chips. Pehle har panel apna
-// copy-paste tooltip rakhta tha aur Laya ka directional read kahin
-// bhi surface nahi hota tha (sirf ✓/✗/○). Ab ek hi jagah:
+// v21.11.0 (decision transparency) — shared text helpers for the
+// Jev AI confirmation chips. Pehle har panel apna copy-paste tooltip
+// rakhta tha aur provider ka directional read kahin bhi surface nahi
+// hota tha (sirf ✓/✗/○). Ab ek hi jagah:
 //   • aiDirSummary()  — tooltip ke liye compact per-provider lines
 //   • aiDecisionText() — modal/panel rows ke liye one-liner per provider
+// v21.14.0: Laya provider removed — sirf jev.
 // Legacy payloads (bina aiConfirm.detail ke) ke liye aiDirSummary ''
 // return karta hai — purana tooltip text untouched rehta hai.
 // ============================================================
@@ -29,7 +30,7 @@ type DecisionLike = {
 type DecisionOrNull = DecisionLike | null | undefined;
 
 type ConfirmLike = {
-  detail?: { jev?: DecisionOrNull; laya?: DecisionOrNull } | null;
+  detail?: { jev?: DecisionOrNull } | null;
 } | null | undefined;
 
 const sideOf = (p?: string | null) => (p === 'enter_short' ? 'SHORT' : p === 'enter_long' ? 'LONG' : null);
@@ -39,9 +40,9 @@ const pOfPicked = (d: DecisionLike) =>
   d.picked === 'enter_short' ? d.pShort : d.picked === 'enter_long' ? d.pLong : null;
 
 /** One provider's decision as a compact human line:
- *  "Laya: ULTA — SHORT chuna (p 68%) · conf 71 · 240ms"
- *  "Laya: LONG ki taraf LEAN (p 29%) par threshold ke neeche"
- *  "Laya: entry nahi li (reason: slow)" */
+ *  "Jev: ULTA — SHORT chuna (p 68%) · conf 71 · 240ms"
+ *  "Jev: LONG ki taraf LEAN (p 29%) par threshold ke neeche"
+ *  "Jev: entry nahi li (reason: slow)" */
 export function aiDecisionText(name: string, d: DecisionOrNull): string {
   if (!d) return `${name}: decision unavailable`;
   const side = sideOf(d.picked);
@@ -62,16 +63,11 @@ export function aiDecisionText(name: string, d: DecisionOrNull): string {
   return `${name}: entry nahi li (reason: ${d.reason || 'wait'})`;
 }
 
-/** Tooltip suffix — ek line me dono providers ka decision (agar detail
+/** Tooltip suffix — ek line me provider ka decision (agar detail
  *  available hai). Empty string for legacy payloads. */
 export function aiDirSummary(aiConfirm: ConfirmLike): string {
   if (!aiConfirm?.detail) return '';
-  const lines = (['jev', 'laya'] as const)
-    .map((key) => {
-      const d = aiConfirm.detail?.[key];
-      if (!d) return null;
-      return aiDecisionText(key === 'laya' ? 'Laya' : 'Jev', d);
-    })
-    .filter(Boolean);
-  return lines.length ? `\n${lines.join('\n')}` : '';
+  const d = aiConfirm.detail?.jev;
+  if (!d) return '';
+  return `\n${aiDecisionText('Jev', d)}`;
 }

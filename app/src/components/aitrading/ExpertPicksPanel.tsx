@@ -51,10 +51,10 @@ export interface ExpertPick {
   winProb?: WinProbView | null;
   /** v12.0: perp positioning intel (FUTURES picks only). */
   perp?: PerpIntelWire | null;
-  /** v21.3.0 (Issue-7): Jev/Laya AI confirmation verdict (both AGREE →
+  /** v21.3.0 (Issue-7) lineage: Jev AI confirmation verdict (AGREE →
    *  CONFIRMED; koi ulta → CONFLICT). Present only when a provider
    *  is configured server-side. */
-  aiConfirm?: { jev: string | null; laya: string | null; verdict: string; at?: number; detail?: { jev?: { v: string; picked?: string | null; pLong?: number | null; pShort?: number | null; pWait?: number | null; confidence?: number | null; latencyMs?: number | null; reason?: string } | null; laya?: { v: string; picked?: string | null; pLong?: number | null; pShort?: number | null; pWait?: number | null; confidence?: number | null; latencyMs?: number | null; reason?: string } | null } | null } | null;
+  aiConfirm?: { jev: string | null; verdict: string; at?: number; detail?: { jev?: { v: string; picked?: string | null; pLong?: number | null; pShort?: number | null; pWait?: number | null; confidence?: number | null; latencyMs?: number | null; reason?: string } | null } | null } | null;
   /** v21.3.0: chop-filter stamp (ADX<15 — score capped below the 80 bar). */
   qualityFlags?: { chopRange?: boolean; [k: string]: unknown } | null;
 }
@@ -138,15 +138,15 @@ const ExpertPickCard = memo(function ExpertPickCard({ pick, market, onDeep, live
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-base font-black text-white tracking-wide">{pick.symbol}</span>
               <span className={`px-2 py-0.5 rounded-lg text-[10px] font-black border ${SIDE_STYLE[pick.side]}`}>{long ? '▲ LONG' : '▼ SHORT'}</span>
-              {/* v21.3.0 (Issue-7): Jev/Laya dual-AI confirmation + chop stamp —
+              {/* v21.3.0 (Issue-7): AI confirmation + chop stamp —
                   expert picks ab superintelligence layer se AI-verified. */}
               {pick.aiConfirm?.verdict === 'CONFIRMED' && (
                 <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-cyan-500/15 text-cyan-300 border border-cyan-500/40"
-                  title={`Jev (cloud) + Laya (local) dono ne ye side APPROVE kiya${aiDirSummary(pick.aiConfirm)}`}>🤖 AI ✓</span>
+                  title={`Jev (cloud) ne ye side APPROVE kiya${aiDirSummary(pick.aiConfirm)}`}>🤖 AI ✓</span>
               )}
               {pick.aiConfirm?.verdict === 'CONFLICT' && (
                 <span className="px-2 py-0.5 rounded-lg text-[10px] font-black bg-red-500/15 text-red-300 border border-red-500/40"
-                  title={`Jev/Laya me se koi provider ULTA side chuna — score −8, STRONG→ACTION demote${aiDirSummary(pick.aiConfirm)}`}>🤖 AI ✗</span>
+                  title={`Provider (Jev) ULTA side chuna — score −8, STRONG→ACTION demote${aiDirSummary(pick.aiConfirm)}`}>🤖 AI ✗</span>
               )}
               {pick.qualityFlags?.chopRange && (
                 <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/30"

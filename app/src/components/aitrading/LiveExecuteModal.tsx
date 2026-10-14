@@ -104,16 +104,16 @@ export function LiveExecuteModal({ signal, onPrecheck, onExecute, onClose }: Pro
               {signal.aiConfirm?.verdict === 'CONFIRMED' && <span className="text-cyan-300 font-bold"> · AI ✓</span>}
               {signal.aiConfirm?.verdict === 'CONFLICT' && <span className="text-red-300 font-bold"> · AI ✗</span>}
             </p>
-            {/* v21.11.0 (Laya decision transparency): live execute ke FINAL
-                pre-flight screen par Jev/Laya ka actual directional read —
-                "Laya: ULTA — SHORT chuna (p 68%)" jaisi lines. Pehle sirf
+            {/* v21.11.0 (decision transparency): live execute ke FINAL
+                pre-flight screen par Jev ka actual directional read —
+                "Jev: ULTA — SHORT chuna (p 68%)" jaisi lines. Pehle sirf
                 ✓/✗ dikhta tha, direction ka pata nahi chalta tha. */}
             {signal.aiConfirm?.detail && (
               <div className="mt-1.5 space-y-0.5" data-testid="live-ai-decision">
-                {(['jev', 'laya'] as const).map((key) => {
+                {(['jev'] as const).map((key) => {
                   const d = signal.aiConfirm?.detail?.[key];
                   if (!d) return null;
-                  const line = aiDecisionText(key === 'laya' ? 'Laya' : 'Jev', d);
+                  const line = aiDecisionText('Jev', d);
                   const tone = d.v === 'AGREE' ? 'text-cyan-300/90' : d.v === 'DISAGREE' ? 'text-red-300' : 'text-slate-400';
                   return <div key={key} className={`text-[10px] font-mono ${tone}`}>{d.v === 'AGREE' ? '✓' : d.v === 'DISAGREE' ? '✗' : '○'} {line}</div>;
                 })}

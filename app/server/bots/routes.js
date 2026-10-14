@@ -8,9 +8,9 @@
 //   GET  /api/bots/stream        SSE: status + decision deltas
 //   POST /api/bots/stop/:bot     kill switch ON  (UI button)
 //   POST /api/bots/start/:bot    kill switch OFF
-//   POST /api/bots/arm/:bot      set decider arm (rules|gated|jev)
+//   POST /api/bots/arm/:bot      set decider arm (rules|gated|jev|auto)
 //   GET  /api/bots/smoke         Phase 0 smoke results (cached 10m)
-//   POST /api/bots/backtest      run 3-arm harness on demand (bounded)
+//   POST /api/bots/backtest      run multi-arm harness on demand (bounded)
 //   POST /api/bots/tick          manual cycle trigger (paper)
 // v20.8.1: SSE per-connection event CURSOR (the old stream pushed
 // events exactly once at connect — the decision stream froze at page
@@ -18,57 +18,25 @@
 // unref'd interval, connection cap, /tick single-flight, /backtest
 // bars cap + pWin persistence, /smoke in-flight dedupe, 2s status
 // cache, absolute stateDir default (botRunner.js).
+// v21.14.0 (Laya removal): arms sirf rules|gated|jev|auto — laya/
+// consensus arms + autolink endpoints permanently removed.
 // ============================================================
 import { BotRunner, botsEnabled, STRATEGIES, runArmsBacktest } from './botRunner.js';
 import { loadBotState, saveBotState, setKillSwitch, killSwitchActive as _killSwitchActive } from './botState.js';
 import { smokeAll } from './smoke.js';
 import { buildProviders, providerHealth } from './aiProviders.js';
-import { createLayaAutoLink, buildLayaProviderOnly } from './layaAutoLink.js';
-import { boardAiConfirmRefresh } from '../ai/boardAiConfirm.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_STATE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data/bots');
 const SSE_MAX_CLIENTS = 8;          // bounded subscribers (sseCap convention)
 const SSE_BACKPRESSURE_BYTES = 1 << 20;
-// v21.2.0 (dual-provider plan Step-5): allowed arms — UI dropdown isi se
-// render hota hai; provider availability 409 ke through enforce hoti hai.
-const ARMS_ALLOWED = ['rules', 'gated', 'jev', 'laya', 'consensus', 'auto'];
+// v21.2.0: allowed arms — UI dropdown isi se render hota hai; provider
+// availability 409 ke through enforce hoti hai. v21.14: laya/consensus
+// removed (single-provider world — consensus ke liye do chahiye the).
+const ARMS_ALLOWED = ['rules', 'gated', 'jev', 'auto'];
 
 let _runner = null;
-// v21.9.0: Laya auto-link service (module singleton) — running
-// laya-serve ko detect karke provider HOT-SWAP karta hai.
-let _autolink = null;
-
-/** v21.9.0: Laya provider rebuild + runner hot-swap + board-confirm
- *  memo flush. Jev UNTOUCHED (partial patch — tests ka override safe).
- *  Returns the post-swap provider health (laya side). */
-export function refreshLayaProvider() {
-  if (!_runner) return null;
-  try {
-    const laya = buildLayaProviderOnly(_runner.env, { stateDir: _runner.stateDir });
-    _runner.attachAiProviders({ laya });
-    if (laya) boardAiConfirmRefresh();
-    return providerHealth({ laya }).laya;
-  } catch {
-    return providerHealth({ laya: null }).laya;
-  }
-}
-
-/** v21.9.0: autolink service ensure/get — pehli Bot Lab route registration
- *  par banta hai (env + stateDir runner se), background timer + boot cycle
- *  start karta hai. onLinked hook = hot-swap + board refresh. */
-export function ensureLayaAutoLink(runner) {
-  if (_autolink) return _autolink;
-  _autolink = createLayaAutoLink({
-    env: runner.env,
-    stateDir: runner.stateDir,
-    onLinked: () => { try { refreshLayaProvider(); } catch { /* never fatal */ } },
-  });
-  _autolink.start();
-  return _autolink;
-}
-export function peekLayaAutoLink() { return _autolink; }
 
 /** v21.1.0 (Phase-3): PEEK — runner banao NAHI, sirf existing return.
  *  healthMonitor ka /api/health snapshot isse use karta hai: getBotRunner()
@@ -84,8 +52,7 @@ export function getBotRunner(opts = {}) {
   if (!_runner) {
     const env = opts.env || process.env;
     const stateDir = opts.stateDir || env.BOT_STATE_DIR || DEFAULT_STATE_DIR;
-    // v21.2.0 (dual-provider plan Step-2): provider REGISTRY — jev
-    // (TYPESAFE_API_KEY) + laya (LAYA_ENABLED=1 + LAYA_API_KEY). Purana
+    // v21.14: provider REGISTRY — sirf jev (TYPESAFE_API_KEY). Purana
     // opts.jev override (tests) ai.jev ko replace karta hai.
     const providers = buildProviders(env, { stateDir });
     if (opts.jev !== undefined) providers.jev = opts.jev;
@@ -103,9 +70,6 @@ export function getBotRunner(opts = {}) {
 
 export function registerBotRoutes(app, opts = {}) {
   const runner = getBotRunner(opts);
-  // v21.9.0: Laya auto-link background service — running laya-serve
-  // detect → validated key → provider hot-swap (Bot Lab + Signal Board).
-  ensureLayaAutoLink(runner);
 
   // v20.8.1 FIX (H1 — the lab was a static mock): the scheduler. Ticks
   // every 60s (idempotent per bar via late_decision + attempt state),
@@ -114,11 +78,7 @@ export function registerBotRoutes(app, opts = {}) {
 
   const statusNow = () => {
     if (_statusCache.data && Date.now() - _statusCache.at < 2000) return _statusCache.data;
-    // v21.9.0: SSE status frames me autolink phase bhi — UI "Laya not
-    // configured" ke SAATH reason (down / key_mismatch / linked) dikhata hai.
-    const base = runner.status();
-    const auto = _autolink?.status?.();
-    _statusCache = { at: Date.now(), data: auto ? { ...base, layaAutoLink: auto } : base };
+    _statusCache = { at: Date.now(), data: runner.status() };
     return _statusCache.data;
   };
 
@@ -216,33 +176,15 @@ export function registerBotRoutes(app, opts = {}) {
     const arm = String(req.body?.arm || '');
     if (!STRATEGIES[bot]) return res.status(404).json({ error: 'unknown bot' });
     if (!ARMS_ALLOWED.includes(arm)) return res.status(400).json({ error: `arm must be ${ARMS_ALLOWED.join('|')}` });
-    // v21.2.0 (dual-provider plan Step-5): provider availability ENFORCED.
-    // Requested arm ka provider configured nahi to 409 provider_unavailable
-    // — UI clear message dikhaata hai; silently accept karke phir arm_fallback
-    // events se bharna (silent behaviour change) kabhi nahi.
-    const ai = runner.ai || { jev: null, laya: null };
+    // v21.2.0: provider availability ENFORCED. Requested arm ka provider
+    // configured nahi to 409 provider_unavailable — UI clear message
+    // dikhaata hai; silently accept karke phir arm_fallback events se
+    // bharna (silent behaviour change) kabhi nahi.
+    const ai = runner.ai || { jev: null };
     if (arm === 'jev' && !ai.jev) {
       return res.status(409).json({ error: 'provider_unavailable', provider: 'jev', hint: 'TYPESAFE_API_KEY .env me set karo' });
     }
-    if (arm === 'laya' && !ai.laya) {
-      // v21.9.0 SELF-HEAL: 409 ke saATH ek background auto-link cycle bhi
-      // fire — agar laya-serve abhi zinda hai to next arm attempt se pehle
-      // provider attach ho jayega (user ko RECONNECT dabane ki zaroorat nahi).
-      try { _autolink?.relink?.().catch(() => { /* never fatal */ }); } catch { /* never fatal */ }
-      const auto = _autolink?.status?.();
-      const why = auto?.phase === 'down'
-        ? ' — auto-link: laya-serve /health unreachable'
-        : auto?.phase === 'key_mismatch'
-          ? ' — auto-link: server zinda, key mismatch (LAYA_API_KEY = laya-serve wali key)'
-          : auto?.phase === 'off'
-            ? ' — auto-link off (LAYA_AUTOLINK=0)'
-            : '';
-      return res.status(409).json({ error: 'provider_unavailable', provider: 'laya', hint: `LAYA_ENABLED=1 + LAYA_API_KEY — local laya-serve chalu hai?${why}` });
-    }
-    if (arm === 'consensus' && !(ai.jev && ai.laya)) {
-      return res.status(409).json({ error: 'provider_unavailable', provider: ai.jev ? 'laya' : 'jev', hint: 'consensus ke liye dono providers chahiye' });
-    }
-    if (arm === 'auto' && !(ai.jev || ai.laya)) {
+    if (arm === 'auto' && !ai.jev) {
       return res.status(409).json({ error: 'provider_unavailable', provider: 'ai', hint: 'auto ke liye kam se kam ek provider chahiye' });
     }
     const st = loadBotState(runner.stateDir, bot) || {};
@@ -250,31 +192,10 @@ export function registerBotRoutes(app, opts = {}) {
     res.json({ bot, arm });
   });
 
-  // v21.2.0 (dual-provider plan Step-5): per-provider AI health —
-  // reachable/breaker/p50/p95/rejects/model/urlHost. Auth ke andar.
+  // v21.2.0: per-provider AI health — reachable/breaker/p50/p95/
+  // rejects/model/urlHost. Auth ke andar.
   app.get('/api/bots/ai/health', (_req, res) => {
     res.json(providerHealth(runner.ai || {}));
-  });
-
-  // ---------------- v21.9.0: LAYA AUTO-LINK endpoints ----------------
-  // UI "RECONNECT LAYA" button + status chip isi pe chalte hain.
-  app.get('/api/bots/ai/laya-status', (_req, res) => {
-    res.json({
-      autolink: _autolink?.status?.() || null,
-      laya: providerHealth(runner.ai || {}).laya,
-    });
-  });
-
-  app.post('/api/bots/ai/laya-relink', async (_req, res) => {
-    try {
-      const st = await (_autolink?.relink?.() || Promise.resolve(null));
-      // relink ke baad hot-swap bhi try karo (linked hua ho to provider
-      // turant attach — background hook ke dual-path, race-safe).
-      const swapped = st?.phase === 'linked' ? refreshLayaProvider() : null;
-      res.json({ ok: st?.phase === 'linked' || st?.phase === 'env-linked', autolink: st, laya: swapped || providerHealth(runner.ai || {}).laya });
-    } catch (e) {
-      res.status(500).json({ error: String(e?.message || e) });
-    }
   });
 
   // v20.8.1 FIX (M): single-flight — concurrent POSTs piled up
@@ -332,13 +253,12 @@ export function registerBotRoutes(app, opts = {}) {
     }
     try {
       const strategy = STRATEGIES[botId].factory();
-      // v21.2.0 (dual-provider): runArmsBacktest — jev ho to jev arm bhi,
-      // laya ho to laya arm bhi, dono ho to consensus bhi (rules/gated
+      // v21.14: runArmsBacktest — jev ho to jev arm bhi (rules/gated
       // hamesha). Purana runThreeArmBacktest (jev-only) wrapper me hai.
-      const ai = runner.ai || { jev: null, laya: null };
+      const ai = runner.ai || { jev: null };
       const arms = await runArmsBacktest({
         strategy, bars, symbol: req.body?.symbol || botId,
-        providers: ai, primary: runner.aiCfg?.primary || 'laya',
+        providers: ai, primary: runner.aiCfg?.primary || 'jev',
       });
       const summary = {};
       for (const [arm, r] of Object.entries(arms)) summary[arm] = { metrics: r.metrics, pass: r.pass, meta: { ambiguousShare: r.meta.ambiguousShare, decisions: r.meta.decisions } };

@@ -8,10 +8,10 @@
 //       reported honestly; Binance fallback checked too)
 // Decision matrix (plan §4.4) is printed by smokeAll verdict().
 // NO CREDS => SKIPPED (honest), never a fake pass.
+// v21.14: layaPing leg removed (Laya provider retired).
 // ============================================================
 import { smokeDhan5m } from './core/dhanFetch.js';
 import { jevPing } from './jevEngine.js';
-import { layaPing } from './aiProviders.js';
 import { fetchCoinDcxCandles, fetchBinanceKlines } from '../ai/data.js';
 
 /** 4.3 crypto candle depth check. */
@@ -43,17 +43,14 @@ export async function smokeCryptoCandles({ base = 'BTC' } = {}) {
   };
 }
 
-/** Run all smokes + the plan §4.4 decision matrix. v21.2.0: layaPing bhi. */
+/** Run all smokes + the plan §4.4 decision matrix. */
 export async function smokeAll({ dhanRange } = {}) {
-  const [dhan, jev, laya, crypto] = await Promise.all([
+  const [dhan, jev, crypto] = await Promise.all([
     smokeDhan5m(dhanRange || {}).catch(e => ({ name: 'dhan_5m', status: 'FAIL', reason: String(e?.message || e) })),
     jevPing().catch(e => ({ name: 'jev_ping', status: 'FAIL', reason: String(e?.message || e) })),
-    // v21.2.0 (dual-provider): Laya ping — LAYA_ENABLED=1 + key na ho to
-    // SKIPPED (honest), kabhi fake pass nahi.
-    layaPing().catch(e => ({ name: 'laya_ping', status: 'FAIL', reason: String(e?.message || e) })),
     smokeCryptoCandles().catch(e => ({ name: 'crypto_candles', status: 'FAIL', reason: String(e?.message || e) })),
   ]);
-  const results = [dhan, jev, laya, crypto];
+  const results = [dhan, jev, crypto];
   const verdict = {
     indiaDesk: dhan.status === 'PASS'
       ? (dhan.bars >= 1200 ? 'India desk full backtest (Phase 3)' : 'Limited days — candleStore se roz accumulate karo, daily fallback')
@@ -61,11 +58,6 @@ export async function smokeAll({ dhanRange } = {}) {
     jevArm: jev.status === 'PASS'
       ? 'Jev arm ON (paper) — threshold sweep Phase 4'
       : 'Jev unavailable — rules vs gated chalao; key/endpoint check',
-    // v21.2.0 (dual-provider): laya verdict line — R0 gate se pehle hi
-    // pata chal jata hai ki local laya-serve reachable hai ya nahi.
-    layaArm: laya.status === 'PASS'
-      ? 'Laya arm ON (paper, $0) — node scripts/laya-ping.mjs se latency check'
-      : (laya.status === 'SKIPPED' ? 'Laya not configured — LAYA_ENABLED=1 + LAYA_API_KEY (laya-serve local chahiye)' : 'Laya unreachable — laya-serve up? node scripts/laya-ping.mjs'),
     cryptoDesk: crypto.status === 'PASS'
       ? 'Crypto desk full backtest'
       : 'Crypto candles thin — accumulate via candleStore daily',

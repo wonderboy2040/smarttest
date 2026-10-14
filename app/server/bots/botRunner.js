@@ -69,7 +69,7 @@ export class BotRunner {
     candleProvider = null,     // async (symbol, desk, botId) -> bars|null
     markPriceProvider = null,  // (symbol, desk) -> price|null (sync or async)
     jev = null,                // createJev(...) instance (BACK-COMPAT — ai.jev pe map hota hai)
-    ai = null,                 // v21.2.0: { jev, laya } provider registry (buildProviders se)
+    ai = null,                 // v21.14: { jev } provider registry (buildProviders se)
     execPort = null,           // PaperPort-like (open/setProtection/close)
     telegram = { enabled: false },
   } = {}) {
@@ -98,14 +98,13 @@ export class BotRunner {
     this.markPriceProvider = markPriceProvider;
     // v21.2.0 (dual-provider plan Step-4): provider registry. Purana `jev`
     // param back-compat ke liye ai.jev pe map hota hai — existing callers
-    // (tests, scripts) aise hi chalte rahenge.
+    // (tests, scripts) aise hi chalte rahenge. v21.14: laya removed.
     this.ai = {
       jev: (ai && ai.jev) || jev || null,
-      laya: (ai && ai.laya) || null,
     };
     this.jev = this.ai.jev; // back-compat alias
-    // v21.2.0: AI_PRIMARY / AI_SHADOW / AI_CONSENSUS_ON_DOWN (safe defaults:
-    // primary=laya, shadow=off, onDown=wait).
+    // v21.14: AI_PRIMARY / AI_SHADOW / AI_CONSENSUS_ON_DOWN (safe defaults:
+    // primary=jev, shadow=off, onDown=wait).
     this.aiCfg = aiModeConfig(env);
     this.execPort = execPort;
     this.telegram = telegram;
@@ -135,35 +134,29 @@ export class BotRunner {
     return st.arm || this.env.BOTS_ARM || 'gated';
   }
 
-  /** v21.9.0 (laya auto-link): LIVE provider hot-swap — server restart
-   *  ke bina. Partial patch: sirf diye gaye fields replace hote hain
-   *  (tests ka opts.jev override kabhi overwrite nahi hota). Naya Laya
-   *  attach hone par har enabled bot ke event-stream me ek
-   *  provider_attached event chhodta hai — user ko decision stream me
-   *  HI dikhta hai ki arm_fallback band ho gaya (silent recovery nahi). */
+  /** v21.14: LIVE provider hot-swap (server restart ke bina) — jev-only.
+   *  Partial patch: sirf diye gaye fields replace hote hain (tests ka
+   *  opts.jev override kabhi overwrite nahi hota). Provider attach hone
+   *  par har enabled bot ke event-stream me ek provider_attached event
+   *  chhodta hai — user ko decision stream me HI dikhta hai (silent
+   *  recovery nahi). */
   attachAiProviders(patch = {}) {
-    const prevLaya = !!this.ai.laya;
     const prevJev = !!this.ai.jev;
     if ('jev' in patch) {
       this.ai.jev = patch.jev || null;
       this.jev = this.ai.jev; // back-compat alias
     }
-    if ('laya' in patch) this.ai.laya = patch.laya || null;
-    const layaNow = !!this.ai.laya;
-    if ((!prevLaya && layaNow) || (!prevJev && !!this.ai.jev)) {
-      const provider = !prevLaya && layaNow ? 'laya' : 'jev';
+    if (!prevJev && !!this.ai.jev) {
       for (const botId of botsEnabled(this.env)) {
         try {
           appendEvent(this.stateDir, botId, {
-            kind: 'provider_attached', provider,
-            note: provider === 'laya'
-              ? 'Laya auto-link: provider ab available — arm_fallback band, AI arms live'
-              : 'AI provider attached — arms live',
+            kind: 'provider_attached', provider: 'jev',
+            note: 'AI provider attached — arms live',
           });
         } catch { /* best-effort */ }
       }
     }
-    return { jev: !!this.ai.jev, laya: layaNow };
+    return { jev: !!this.ai.jev };
   }
 
   /** One bot's full cycle on the latest closed bars. */
@@ -208,36 +201,29 @@ export class BotRunner {
       // v20.8.0 graceful degradation: arm=jev without a Jev instance
       // (no TYPESAFE_API_KEY) falls back to gated — loudly recorded in
       // the event log, never a silent behavior change.
-      // v21.2.0 (dual-provider plan Step-4): availability-resolve ab HAR
-      // AI arm ke liye — laya / consensus / auto. Hamesha event file me
-      // record hota hai, silent kabhi nahi.
+      // v21.14 (Laya removal): availability-resolve ab HAR AI arm ke liye.
+      // Legacy persisted arms ('laya'/'consensus') ab honest mappings pe
+      // fall back hote hain — event file me hamesha record hota hai,
+      // silent kabhi nahi.
       if (arm === 'jev' && !this.ai.jev) {
         appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'jev', to: 'gated', reason: 'no_jev_instance' });
         arm = 'gated';
-      } else if (arm === 'laya' && !this.ai.laya) {
-        appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'laya', to: 'gated', reason: 'no_laya_instance' });
-        arm = 'gated';
+      } else if (arm === 'laya') {
+        // v21.14: laya provider removed — legacy state. AI intent preserve
+        // karne ke liye jev pe map karo (jev configured hai to), warna gated.
+        const to = this.ai.jev ? 'jev' : 'gated';
+        appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'laya', to, reason: this.ai.jev ? 'laya_provider_removed_v21_14' : 'laya_provider_removed_no_jev' });
+        arm = to;
       } else if (arm === 'consensus') {
-        if (!this.ai.jev && !this.ai.laya) {
-          appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'consensus', to: 'gated', reason: 'no_ai_providers' });
-          arm = 'gated';
-        } else if (!this.ai.jev || !this.ai.laya) {
-          const missing = this.ai.jev ? 'laya' : 'jev';
-          // arm stays 'consensus' — aiDecider HAR decision pe AI_CONSENSUS_ON_DOWN
-          // policy apply karta hai (wait = safe default; single = bacha hua
-          // provider decide kare) — per-decision degradation events me dikhti
-          // hai (consensus_provider_down / consensus_degraded_single).
-          appendEvent(this.stateDir, botId, { kind: 'arm_note', arm: 'consensus', note: `${missing} provider absent — onDown=${this.aiCfg.onDown} (per-decision policy, reason stamped)` });
-        }
+        // v21.14: consensus needs two providers — single-provider world me
+        // jev hi decide karega (trivial consensus), warna gated.
+        const to = this.ai.jev ? 'jev' : 'gated';
+        appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'consensus', to, reason: this.ai.jev ? 'consensus_retired_single_provider' : 'no_ai_providers' });
+        arm = to;
       } else if (arm === 'auto') {
-        if (!this.ai.jev && !this.ai.laya) {
+        if (!this.ai.jev) {
           appendEvent(this.stateDir, botId, { kind: 'arm_fallback', from: 'auto', to: 'gated', reason: 'no_ai_providers' });
           arm = 'gated';
-        } else if (!this.ai[this.aiCfg.primary]) {
-          // primary absent: arm stays 'auto' — aiDecider primary ke
-          // provider_unavailable note pe secondary pe failover karta hai.
-          const sec = this.aiCfg.primary === 'jev' ? 'laya' : 'jev';
-          appendEvent(this.stateDir, botId, { kind: 'arm_note', arm: 'auto', note: `primary ${this.aiCfg.primary} absent — decisions failover to ${sec}` });
         }
       }
       let decider;
@@ -1055,11 +1041,10 @@ export class BotRunner {
       mode: this.cfg.mode,
       globalPause: globalPauseActive(this.stateDir),
       scheduler: this._schedTimer ? 'running' : 'stopped',
-      // v21.2.0 (dual-provider): per-provider stats. Purana `jev` field
-      // compat ke liye untouched (UI/purane consumers).
+      // v21.14: per-provider stats. Purana `jev` field compat ke liye
+      // untouched (UI/purane consumers).
       ai: {
         jev: this.ai.jev?.stats?.() || null,
-        laya: this.ai.laya?.stats?.() || null,
       },
       aiMode: { ...this.aiCfg },
       jev: this.jev?.stats?.() || null,
@@ -1090,19 +1075,19 @@ export class BotRunner {
 export async function runThreeArmBacktest({ strategy, bars, symbol = '?', jev = null, cfg = {}, instrumentType = null, lotSize = null }) {
   return runArmsBacktest({
     strategy, bars, symbol, cfg, instrumentType, lotSize,
-    providers: { jev: jev || null, laya: null },
+    providers: { jev: jev || null },
     arms: ['rules', 'gated', ...(jev ? ['jev'] : [])],
   });
 }
 
 /**
  * v21.2.0 (dual-provider plan Step-7): N-arm backtest harness.
- * Default arms: rules, gated + har configured AI provider + consensus
- * jab dono present hon. `--arm auto` CLI se explicitly maanga ja sakta hai.
+ * v21.14: default arms rules, gated + jev (jab configured ho) —
+ * `--arm auto` CLI se explicitly maanga ja sakta hai.
  */
-export async function runArmsBacktest({ strategy, bars, symbol = '?', providers = null, jev = null, arms = null, cfg = {}, instrumentType = null, lotSize = null, primary = 'laya', shadow = 'off', onDown = 'wait' }) {
+export async function runArmsBacktest({ strategy, bars, symbol = '?', providers = null, jev = null, arms = null, cfg = {}, instrumentType = null, lotSize = null, primary = 'jev', shadow = 'off', onDown = 'wait' }) {
   const costFn = (a) => estimateRoundTripCost(a) || { total: 0 };
-  const provs = providers || { jev: jev || null, laya: null };
+  const provs = providers || { jev: jev || null };
   // v20.8.4 FIX (M — fee-model honesty): allow the CALLER to override
   // instrumentType/lotSize. The ensemble adapter's descriptor hardcodes
   // 'crypto' while its candidates carry the market-correct type — an
@@ -1113,8 +1098,6 @@ export async function runArmsBacktest({ strategy, bars, symbol = '?', providers 
   const armList = arms || [
     'rules', 'gated',
     ...(provs.jev ? ['jev'] : []),
-    ...(provs.laya ? ['laya'] : []),
-    ...(provs.jev && provs.laya ? ['consensus'] : []),
   ];
   const out = {};
   for (const arm of armList) {

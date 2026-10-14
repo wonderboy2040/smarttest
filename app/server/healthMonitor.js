@@ -188,17 +188,17 @@ export async function healthSnapshot() {
     }
   } catch { /* bot lab not armed */ }
 
-  // ---- AI PROVIDERS (v21.2.0 dual-provider plan Step-8) ----
-  // feeds.ai.{jev,laya}: reachable/breaker/p95 — OpsHealthStrip AI chip isi
+  // ---- AI PROVIDERS ----
+  // feeds.ai.jev: reachable/breaker/p95 — OpsHealthStrip AI chip isi
   // se render hota hai. PEEK-ONLY (runner nahi banata — upar wale BOTS
-  // section jaisa hi discipline).
+  // section jaisa hi discipline). v21.14: laya removed.
   try {
     const mod = await import('./bots/routes.js');
     const runner = typeof mod.peekBotRunner === 'function' ? mod.peekBotRunner() : null;
     if (runner && runner.ai) {
       const { providerHealth } = await import('./bots/aiProviders.js');
       const ph = providerHealth(runner.ai);
-      out.ai = { jev: ph.jev, laya: ph.laya };
+      out.ai = { jev: ph.jev };
     }
   } catch { /* AI providers not armed */ }
 
@@ -327,20 +327,16 @@ async function _healthAlertTick() {
     _throttledAlert('disk_ro', `🩺 HEALTH: data-dir write FAIL (${bad}) — journal/ledger/bot-state persist nahi ho rahe! Render disk full ya read-only mount check karo.`);
   }
 
-  // (6) AI provider down for a SELECTED arm (v21.2.0 dual-provider)
-  // Sirf wahi providers alert hote hain jinka kisi bot ka current arm use
-  // karta hai (jev/laya arm, consensus, auto). Not-configured provider
-  // (null instance) breaker-open ho hi nahi sakta — config fallback event
-  // pehle hi arm_fallback me record ho chuka hai.
+  // (6) AI provider down for a SELECTED arm
+  // Sirf wahi providers alert hote hain jinka koi bot ka current arm use
+  // karta hai (jev/auto). Not-configured provider (null instance)
+  // breaker-open ho hi nahi sakta — config fallback event pehle hi
+  // arm_fallback me record ho chuka hai. v21.14: laya removed.
   if (snap.ai) {
     const armsInUse = new Set((snap.bots?.bots || []).map((b) => String(b?.arm || '')).filter(Boolean));
-    const jevUsed = armsInUse.has('jev') || armsInUse.has('consensus') || armsInUse.has('auto');
-    const layaUsed = armsInUse.has('laya') || armsInUse.has('consensus') || armsInUse.has('auto');
+    const jevUsed = armsInUse.has('jev') || armsInUse.has('auto');
     if (jevUsed && snap.ai.jev?.breakerOpen === true) {
-      _throttledAlert('ai_jev_down', `🩺 HEALTH: Bot Lab AI provider JEVDOWN (breaker open) — jev/consensus/auto arm wale bots WAIT ya failover mode me hain. TYPESAFE_API_KEY / endpoint check karo.`);
-    }
-    if (layaUsed && snap.ai.laya?.breakerOpen === true) {
-      _throttledAlert('ai_laya_down', `🩺 HEALTH: Bot Lab AI provider LAYA DOWN (breaker open) — laya/consensus/auto arm wale bots WAIT ya failover me hain. Local laya-serve crash? (laptop band = Laya down — expected)`);
+      _throttledAlert('ai_jev_down', `🩺 HEALTH: Bot Lab AI provider JEV DOWN (breaker open) — jev/auto arm wale bots WAIT mode me hain. TYPESAFE_API_KEY / endpoint check karo.`);
     }
   }
 }

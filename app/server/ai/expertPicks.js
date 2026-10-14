@@ -988,10 +988,10 @@ async function _runScan(mkt, opts = {}) {
   } catch { /* win-prob is best-effort on picks — never kills the scan */ }
 
   // -----------------------------------------------------------------
-  // v21.3.0 (Issue-7 + Issue-5): LAYA + JEV AI CONFIRMATION — the SAME
-  // dual-provider layer the Signal Board runs, applied to the top picks
-  // (score ≥75). Both providers AGREE → +2 score (CONFIRMED chip); koi
-  // bhi provider ULTA side chune → −8 + STRONG→ACTION (CONFLICT chip).
+  // v21.3.0 (Issue-7 + Issue-5) lineage: JEV AI CONFIRMATION — the SAME
+  // layer the Signal Board runs, applied to the top picks (score ≥75).
+  // (v21.14: Laya removed — jev-only.) AGREE → +2 score (CONFIRMED
+  // chip); ULTA side → −8 + STRONG→ACTION (CONFLICT chip).
   // Unconfigured → honest no-op. Cost-controlled: bucketed-LTP payload
   // cache + 5-min memo + soft deadline.
   // -----------------------------------------------------------------

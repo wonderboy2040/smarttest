@@ -462,31 +462,26 @@ export interface AISignal {
    *  AI_ENABLE_MTF_CONFLUENCE=true). agreement < 0.67 → the server
    *  already banned STRONG; the badge makes the conflict visible. */
   mtf?: MTFConfluence | null;
-  /** v21.3.0 (Issue-5) LAYA + JEV AI CONFIRMATION — the dual-provider
-   *  (Jev cloud + Laya local) verdict on this signal: both AGREE →
-   *  CONFIRMED (+3 aiScore); koi provider ulta side → CONFLICT (−8 +
-   *  STRONG→ACTION). NEUTRAL = abstain/wait. Present only when at least
-   *  one provider is configured (AI_BOARD_CONFIRM).
-   *  v21.11.0: `detail` me har provider ka RAW decision milta hai —
-   *  picked side (LONG/SHORT), probabilities (pLong/pShort/pWait),
-   *  confidence, aur honest reason (wait / below-thr / slow / breaker /
-   *  down). Pehle sirf ✓/✗/○ travel karta tha — Laya ka directional
-   *  read kabhi UI tak nahi pahunchta tha (user ka "Laya ○ ka matlab
-   *  kya hai LONG/SHORT pe" complaint). */
+  /** v21.3.0 (Issue-5) lineage — JEV AI CONFIRMATION: the provider
+   *  verdict on this signal: AGREE → CONFIRMED (+3 aiScore); provider
+   *  ulta side → CONFLICT (−8 + STRONG→ACTION). NEUTRAL = abstain/wait.
+   *  Present only when the provider is configured (AI_BOARD_CONFIRM).
+   *  v21.11.0: `detail` me provider ka RAW decision milta hai — picked
+   *  side (LONG/SHORT), probabilities (pLong/pShort/pWait), confidence,
+   *  aur honest reason (wait / below-thr / slow / breaker / down).
+   *  v21.14.0: Laya removed — jev-only. */
   aiConfirm?: {
     jev: 'AGREE' | 'DISAGREE' | 'NEUTRAL' | null;
-    laya: 'AGREE' | 'DISAGREE' | 'NEUTRAL' | null;
     verdict: 'CONFIRMED' | 'CONFLICT' | 'NEUTRAL';
     at?: number;
-    /** v21.5.0 (laya fast): SWRV serve — verdict 2×TTL ke andar ka purana
-     *  stamp hai (instant serve + background refresh). Confirm layer sirf
-     *  score ± karta hai isliye 5-min-stale acceptable; UI isko internal
+    /** v21.5.0: SWRV serve — verdict 2×TTL ke andar ka purana stamp hai
+     *  (instant serve + background refresh). Confirm layer sirf score ±
+     *  karta hai isliye 5-min-stale acceptable; UI isko internal
      *  telemetry maan sakta hai (abhi koi visual badge nahi). */
     stale?: boolean;
     /** v21.11.0: per-provider decision detail (direction transparency). */
     detail?: {
       jev?: AiProviderDecision | null;
-      laya?: AiProviderDecision | null;
     } | null;
   } | null;
   /** v10.15 GAP 2 EVENT GUARD: the next scheduled event for this

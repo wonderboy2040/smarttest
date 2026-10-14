@@ -4,6 +4,27 @@ Ye file zip extract karte hi sabse pehle padho. **Koi .exe nahi chahiye — sirf
 
 ---
 
+## 🎯 v21.14.0 — LAYA LOCAL AI MODEL PERMANENTLY REMOVED (zero-impact removal)
+
+**Laya (local laya-serve AI) ab codebase se poora hata diya gaya hai — site par ZERO asar.**
+
+- **Kuch bhi karna nahi hai** — extract → `Start-SmartAI-Watchdog.bat` double-click, pehle jaisa.
+- **Trading Signals bilkul unaffected** — signals ka generation AI-confirm layer se pehle hota hai;
+  AI layer sirf score ± karta hai (kabhi side/SL/size nahi badalta). Provider na ho to layer
+  silent-off rehta hai — board normal chalta hai.
+- **Bot Lab**: arms ab `RULES / GATED / JEV / AUTO` (laya/consensus arms removed). Purane bot
+  state me arm=laya/consensus pada ho to tick pe honest `arm_fallback` event ke saath jev/gated
+  pe map ho jata hai — bots kabhi nahi rukte.
+- **AI confirm ab sirf Jev (cloud)** — `TYPESAFE_API_KEY` .env me daalo to board signals par
+  `🤖 AI ✓ (Jev ...)` chip direction + conviction ke saath dikhega.
+- **Purane `LAYA_*` .env lines ignore hote hain** (safe to delete — kuch break nahi hota).
+- Watchdog 10048 bind-war / `no_laya_instance` / `arm_fallback` laya wale messages ka poora
+  surface hi khatam — watchdog ab SIRF site child manage karta hai.
+- Neeche wale purane sections (v21.5/v21.4/v21.2 Laya setup) ab **historical archive** hain —
+  unka koi step follow karne ki zaroorat nahi.
+
+---
+
 ## 🎯 v21.6.0 — ULTRAFAST REALTIME MARKET FEEDS (India + CoinDCX + Binance + USA)
 
 **Sab markets ab seedha site-load pe superfast live connect hote hain — bina kisi naye setup ke.**

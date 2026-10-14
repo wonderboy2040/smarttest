@@ -411,8 +411,8 @@ export function regimeReweightView(regime, market) {
 // calls are skipped for 5 minutes (no per-symbol timeout tax).
 export function metaEnsembleEnabled() {
   // v21.12.0 (user ask: "META ensemble ON karna ml-service deploy ke
-  // baad haa kardo"): DEFAULT ON. ml-service ab 8100 pe hai (v21.11.0
-  // port-collision fix — Laya ka 8000 kabhi probe nahi hota) + har
+  // baad haa kardo"): DEFAULT ON. ml-service 8100 pe hai (v21.11.0
+  // port-collision fix — 8000 kabhi probe nahi hota) + har
   // failure mode graceful hai (down/timeout/malformed → weighted
   // fallback + 5-min circuit breaker), isliye default-ON zero-risk hai.
   // ml-service band ho to bhi site normal chalta hai — meta sirf tab
@@ -423,13 +423,13 @@ export function metaEnsembleEnabled() {
   return true;
 }
 
-// v21.11.0 PORT-COLLISION FIX: default 8000 → 8100. Port 8000 LAYA ka
-// home hai (laya-serve sidecar + start-laya.cmd doni isi pe bind hote
-// hain). Purana default ML-service ko bhi 8000 pe point karta tha —
-// META flag ON karne par app har 5 min LAYA ko garbage /meta-ensemble
-// POST karti (Laya 404 → breaker → repeat). ml-service ab 8100 pe
-// hai (main.py + Dockerfile synced). ML_SERVICE_URL env se override
-// possible hi tha, par default hi galat port pe point karta tha.
+// v21.11.0 PORT-COLLISION FIX: default 8000 → 8100 (historical: 8000
+// Laya local AI ka home port tha — v21.14 me Laya remove ho chuka).
+// Purana default ML-service ko bhi 8000 pe point karta tha — META flag
+// ON karne par app us port pe garbage /meta-ensemble POST karti (404 →
+// breaker → repeat). ml-service ab 8100 pe hai (main.py + Dockerfile
+// synced). ML_SERVICE_URL env se override possible hi tha, par default
+// hi galat port pe point karta tha.
 const META_SERVICE_URL = () => String(process.env.ML_SERVICE_URL || 'http://127.0.0.1:8100').replace(/\/+$/, '');
 // v21.12.0: exported — committee info banner + /health isko surface
 // karte hain (ops ko dikhna chahiye meta kis endpoint pe try kar raha hai).

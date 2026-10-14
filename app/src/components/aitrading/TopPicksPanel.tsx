@@ -119,16 +119,16 @@ export const TopPicksPanel = memo(function TopPicksPanel({ picks, market, deskLa
                     {p.grade === 'STRONG'
                       ? <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 text-[9px] font-black border border-emerald-500/30">★ STRONG</span>
                       : <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 text-[9px] font-black border border-cyan-500/30">⚡ ACTION</span>}
-                    {/* v21.3.0 (Issue-2/5): Jev/Laya dual-AI confirmation — TOP-5
+                    {/* v21.3.0 (Issue-2/5): AI confirmation — TOP-5
                         headline picks ab AI-verified dikhte hain (conflict picks
                         server-side hi exclude ho jaate hain). */}
                     {p.aiConfirm?.verdict === 'CONFIRMED' && (
                       <span className="px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300 text-[9px] font-black border border-cyan-500/40"
-                        title={`Jev (cloud) + Laya (local) dono ne ye side APPROVE kiya — server ne +3 score diya${aiDirSummary(p.aiConfirm)}`}>🤖 AI ✓</span>
+                        title={`Jev (cloud) ne ye side APPROVE kiya — server ne +3 score diya${aiDirSummary(p.aiConfirm)}`}>🤖 AI ✓</span>
                     )}
                     {p.aiConfirm?.verdict === 'CONFLICT' && (
                       <span className="px-1.5 py-0.5 rounded bg-red-500/15 text-red-300 text-[9px] font-black border border-red-500/40"
-                        title={`Jev/Laya me se koi ulta side chuna — score −8 (CONFLICT)${aiDirSummary(p.aiConfirm)}`}>🤖 AI ✗</span>
+                        title={`Provider (Jev) ulta side chuna — score −8 (CONFLICT)${aiDirSummary(p.aiConfirm)}`}>🤖 AI ✗</span>
                     )}
                     {/* v21.3.0 (Issue-2): funding-rate chip — perp picks ka real
                         carry cost (positive = longs pay, negative = shorts pay). */}

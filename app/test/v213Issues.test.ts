@@ -253,7 +253,7 @@ describe('v21.3.0 Issue-5 — boardAiConfirm (Jev + Laya on the Signal Board)', 
   const neutralP = async () => ({ action: 'wait', note: 'below_threshold(0.20)', probs: {}, confidence: 40 });
 
   it('both providers AGREE → CONFIRMED + aiScore +3', async () => {
-    __setProvidersForTests({ jev: agreeP, laya: agreeP });
+    __setProvidersForTests({ jev: agreeP });
     const s = strongBoardSignal();
     const meta = await confirmBoardSignals([s], 'FUTURES');
     expect(meta.stamped).toBe(1);
@@ -265,18 +265,18 @@ describe('v21.3.0 Issue-5 — boardAiConfirm (Jev + Laya on the Signal Board)', 
   });
 
   it('any provider DISAGREES (opposite side) → CONFLICT + −8 + STRONG→ACTION demote', async () => {
-    __setProvidersForTests({ jev: agreeP, laya: disagreeP });
+    __setProvidersForTests({ jev: disagreeP });
     const s = strongBoardSignal();
     await confirmBoardSignals([s], 'FUTURES');
     expect(s.aiConfirm.verdict).toBe('CONFLICT');
-    expect(s.aiConfirm.laya).toBe('DISAGREE');
+    expect(s.aiConfirm.jev).toBe('DISAGREE');
     expect(s.superIntel.aiScore).toBe(76); // 84 − 8
     expect(s.grade).toBe('ACTION');
     expect(s.aiConflict).toBe(true);
   });
 
   it('one AGREE + one abstain → NEUTRAL, score untouched', async () => {
-    __setProvidersForTests({ jev: agreeP, laya: neutralP });
+    __setProvidersForTests({ jev: neutralP });
     const s = strongBoardSignal();
     await confirmBoardSignals([s], 'FUTURES');
     expect(s.aiConfirm.verdict).toBe('NEUTRAL');
@@ -285,7 +285,7 @@ describe('v21.3.0 Issue-5 — boardAiConfirm (Jev + Laya on the Signal Board)', 
   });
 
   it('no providers configured → honest no-op (sandbox / no keys)', async () => {
-    __setProvidersForTests({ jev: null, laya: null });
+    __setProvidersForTests({ jev: null });
     const s = strongBoardSignal();
     const meta = await confirmBoardSignals([s], 'FUTURES');
     expect(meta).toBeNull();
@@ -304,7 +304,7 @@ describe('v21.3.0 Issue-5 — boardAiConfirm (Jev + Laya on the Signal Board)', 
   it('the memo dedupes repeat calls (one provider round per symbol per 5 min)', async () => {
     let calls = 0;
     const counting = async (snap) => { calls++; return { action: snap.proposed }; };
-    __setProvidersForTests({ jev: counting, laya: null });
+    __setProvidersForTests({ jev: counting });
     const s = strongBoardSignal();
     await confirmBoardSignals([s], 'FUTURES');
     await confirmBoardSignals([{ ...s, aiConfirm: undefined }], 'FUTURES');
@@ -314,8 +314,8 @@ describe('v21.3.0 Issue-5 — boardAiConfirm (Jev + Laya on the Signal Board)', 
 
 describe('v21.3.0 Issue-5 — TOP-5 excludes AI-CONFLICT signals', () => {
   it('computeTopFive filters CONFLICT picks and the KYUN reason carries the confirm stamp', () => {
-    const good = strongBoardSignal({ symbol: 'ETH', superIntel: { aiScore: 82 }, aiConfirm: { jev: 'AGREE', laya: 'AGREE', verdict: 'CONFIRMED' } });
-    const bad = strongBoardSignal({ symbol: 'SOL', superIntel: { aiScore: 86 }, aiConfirm: { jev: 'AGREE', laya: 'DISAGREE', verdict: 'CONFLICT' } });
+    const good = strongBoardSignal({ symbol: 'ETH', superIntel: { aiScore: 82 }, aiConfirm: { jev: 'AGREE', verdict: 'CONFIRMED' } });
+    const bad = strongBoardSignal({ symbol: 'SOL', superIntel: { aiScore: 86 }, aiConfirm: { jev: 'DISAGREE', verdict: 'CONFLICT' } });
     const picks = computeTopFive([good, bad], { btcChange: 1.2, btcTrend: 'UP' }, 'FUTURES', 5);
     expect(picks.map((p) => p.symbol)).toContain('ETH');
     expect(picks.map((p) => p.symbol)).not.toContain('SOL');
@@ -367,7 +367,7 @@ describe('v21.3.0 Issue-4 — futuresExecutePrecheck (dry-run gauntlet + ticket)
   it('an AI-CONFLICT signal surfaces the warning (visible before any click)', async () => {
     const out = await futuresExecutePrecheck({
       symbol: 'BTC', side: 'LONG',
-      getFreshSignal: async () => strongBoardSignal({ aiConfirm: { jev: 'AGREE', laya: 'DISAGREE', verdict: 'CONFLICT' } }),
+      getFreshSignal: async () => strongBoardSignal({ aiConfirm: { jev: 'DISAGREE', verdict: 'CONFLICT' } }),
     });
     expect(out.warnings.join(' ')).toContain('AI CONFLICT');
   });

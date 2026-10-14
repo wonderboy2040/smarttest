@@ -22,7 +22,7 @@ export interface BotAccountStats {
   maxDrawdownPct: number | null;
 }
 
-// v21.2.0 (dual-provider): per-provider stats block — status.ai.{jev,laya}.
+// v21.14 (Laya removal): per-provider stats block — status.ai.jev.
 // `jev` legacy field bhi same shape ka hai (server compat bhejta hai).
 export interface AiProviderStats {
   calls: number; cacheHits: number; errors: number; rejects?: number;
@@ -32,8 +32,8 @@ export interface AiProviderStats {
 }
 
 export interface BotCard {
-  // v21.2.0: laya | consensus | auto naye arms (dual-provider plan §3.1)
-  bot: string; arm: 'rules' | 'gated' | 'jev' | 'laya' | 'consensus' | 'auto' | string;
+  // v21.14: arms rules | gated | jev | auto (laya/consensus removed)
+  bot: string; arm: 'rules' | 'gated' | 'jev' | 'auto' | string;
   mode: 'PAPER' | 'LIVE' | string;
   killSwitch: boolean;
   heartbeat: { at: number; bars: number; note: string } | null;
@@ -44,15 +44,8 @@ export interface BotCard {
 export interface BotsStatus {
   mode: string; globalPause: boolean;
   scheduler?: string;
-  ai: { jev: AiProviderStats | null; laya: AiProviderStats | null } | null;
+  ai: { jev: AiProviderStats | null } | null;
   aiMode?: { primary: string; shadow: string; onDown: string };
-  // v21.9.0 (laya auto-link): SSE status frames me autolink phase —
-  // UI isse "Laya down / key mismatch / linked" reason dikhata hai.
-  layaAutoLink?: {
-    phase: 'linked' | 'env-linked' | 'down' | 'key_mismatch' | 'off' | 'probing' | string;
-    baseUrl: string; keyMasked: string; source: string;
-    attempts: number; lastError: string; warmupTimeout: boolean;
-  } | null;
   jev: AiProviderStats | null;
   bots: BotCard[];
   at: string;
@@ -93,8 +86,8 @@ const num = (v: unknown): number | null => {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 };
-// v21.2.0 (dual-provider): ek provider stats block ko num-safe coerce —
-// server shape drift per-desk ErrorBoundary se zyada door rahe.
+// v21.14: ek provider stats block ko num-safe coerce — server shape
+// drift per-desk ErrorBoundary se zyada door rahe.
 function coerceProvider(p: AiProviderStats | null | undefined): AiProviderStats | null {
   if (!p || typeof p !== 'object') return p ?? null;
   // v21.2.0: !!'false' === TRUE tha — string booleans (drifted frames) ko
@@ -123,7 +116,7 @@ export function coerceStatus(s: BotsStatus | null): BotsStatus | null {
   return {
     ...s,
     jev,
-    ai: aiRaw ? { jev: coerceProvider(aiRaw.jev), laya: coerceProvider(aiRaw.laya) } : aiRaw,
+    ai: aiRaw ? { jev: coerceProvider(aiRaw.jev) } : aiRaw,
     bots: Array.isArray(s.bots) ? s.bots.map((b) => {
       if (!b || typeof b !== 'object') return b;
       const a = b.account && typeof b.account === 'object' ? b.account : null;
@@ -303,9 +296,9 @@ export function useBots({ limit = 120 } = {}) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ arm }),
       });
-      // v21.2.0 (dual-provider): 409 provider_unavailable ka server body
-      // (error + provider + hint) surface karo — sirf "HTTP 409" nahi,
-      // warna user ko nahi pata Laya/laya-serve ka issue hai ya arm ka.
+      // 409 provider_unavailable ka server body (error + provider + hint)
+      // surface karo — sirf "HTTP 409" nahi, warna user ko nahi pata
+      // provider ka issue hai ya arm ka.
       const j = await r.json().catch(() => null);
       if (!r.ok) {
         const hint = j?.hint ? ` — ${j.hint}` : '';
@@ -328,19 +321,5 @@ export function useBots({ limit = 120 } = {}) {
     }
   }, []);
 
-  // v21.9.0 (laya auto-link): manual RECONNECT — server ek fresh detect
-  // cycle chalata hai (health probe + key ladder + hot-swap). Response
-  // { ok, autolink, laya } shape me aata hai.
-  const relinkLaya = useCallback(async (): Promise<{ ok?: boolean; error?: string; autolink?: unknown; laya?: unknown } | null> => {
-    try {
-      const r = await apiFetch('/api/bots/ai/laya-relink', { method: 'POST' });
-      const j = await r.json().catch(() => null);
-      if (!r.ok) return { ok: false, error: j?.error || `HTTP ${r.status}`, autolink: j?.autolink };
-      return j;
-    } catch (e) {
-      return { ok: false, error: String((e as Error)?.message || e) };
-    }
-  }, []);
-
-  return { status, events, connected, error, stopBot, setArm, runSmoke, relinkLaya };
+  return { status, events, connected, error, stopBot, setArm, runSmoke };
 }

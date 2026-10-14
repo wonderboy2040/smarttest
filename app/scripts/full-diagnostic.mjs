@@ -16,8 +16,8 @@
 //   C. Live Runtime          — server ping, /api/health, engines, signals
 //                              (4 markets × sanity), expert picks, bot AI,
 //                              exec, smoke endpoints
-//   D. LAYA Local Model      — provider config, live ping (real call, latency),
-//                              cache stats, board par LAYA ka measured EFFECT
+//   D. AI Confirm Layer      — board AI-confirmation status + measured
+//                              EFFECT (v21.14: Laya removed — jev-only)
 //
 // Output: console + data/diagnostic-report-<timestamp>.txt
 // Exit:   0 = sab OK (warnings allowed) | 1 = failures mile
@@ -157,18 +157,12 @@ function sectionA(ENV) {
     mark('warn', 'app/.env missing', 'server env-less chalega (providers off) — live keys ke saath .env banao');
   } else {
     const need = {
-      TYPESAFE_API_KEY: 'Jev cloud provider (board AI-confirm)',
-      LAYA_ENABLED: 'LAYA local model on/off (1 = on)',
-      LAYA_API_KEY: 'LAYA local provider key',
-      LAYA_BASE_URL: 'laya-serve endpoint',
-      LAYA_MODEL: 'LAYA model name (optional)',
-      LAYA_AUTOSTART: 'watchdog LAYA sidecar autostart (1 = on)',
+      TYPESAFE_API_KEY: 'Jev cloud provider (board AI-confirm; v21.14: Laya removed — ye ek matra provider hai)',
     };
     for (const [k, why] of Object.entries(need)) {
       const v = ENV[k];
       if (v === undefined) info(`.env ${k}`, `not set — ${why}`);
       else if (k.endsWith('_KEY')) mark(v ? 'pass' : 'warn', `.env ${k}`, v ? `configured ${mask(v)}` : 'empty — set karo');
-      else if (k === 'LAYA_ENABLED' || k === 'LAYA_AUTOSTART') mark(String(v) === '1' ? 'pass' : 'warn', `.env ${k}=${v}`, String(v) === '1' ? 'enabled' : '0 = LAYA band');
       else info(`.env ${k}=${v}`, why);
     }
     const groww = Object.keys(ENV).filter(k => k.startsWith('GROWW_') && ENV[k]);
@@ -209,8 +203,6 @@ function sectionA(ENV) {
   const stack = [
     ['Start-SmartAI-Watchdog.bat', 'Windows watchdog launcher'],
     ['server/supervisor.js', 'supervisor (ping/kill/restart)'],
-    ['server/layaSidecar.js', 'LAYA sidecar manager'],
-    ['start-laya.cmd', 'manual LAYA start'],
   ];
   for (const [f, why] of stack) {
     if (existsSync(join(ROOT, f))) mark('pass', f, why);
@@ -273,7 +265,7 @@ function sectionB() {
 // =====================================================================
 // SECTION C — LIVE RUNTIME
 // =====================================================================
-const AI_EFFECT = { stamps: 0, layaAgree: 0, layaDisagree: 0, layaNeutral: 0, confirmed: 0, conflict: 0, neutral: 0, stale: 0 };
+const AI_EFFECT = { stamps: 0, jevAgree: 0, jevDisagree: 0, jevNeutral: 0, confirmed: 0, conflict: 0, neutral: 0, stale: 0 };
 
 async function pingServer(ms = 4000) {
   try { const r = await fetch(`${OPT.base}/api/ping`, { signal: AbortSignal.timeout(ms) }); return r.ok; } catch { return false; }
@@ -378,12 +370,12 @@ async function sectionC(ENV) {
         if (a) {
           stamped++;
           if (!['CONFIRMED', 'CONFLICT', 'NEUTRAL'].includes(a.verdict)) issues.push(`${t}: aiConfirm.verdict="${a.verdict}"`);
-          for (const prov of ['jev', 'laya']) {
+          for (const prov of ['jev']) {
             if (a[prov] != null && !['AGREE', 'DISAGREE', 'NEUTRAL'].includes(a[prov])) issues.push(`${t}: aiConfirm.${prov}="${a[prov]}"`);
           }
-          if (a.laya === 'AGREE') AI_EFFECT.layaAgree++;
-          else if (a.laya === 'DISAGREE') AI_EFFECT.layaDisagree++;
-          else if (a.laya === 'NEUTRAL') AI_EFFECT.layaNeutral++;
+          if (a.jev === 'AGREE') AI_EFFECT.jevAgree++;
+          else if (a.jev === 'DISAGREE') AI_EFFECT.jevDisagree++;
+          else if (a.jev === 'NEUTRAL') AI_EFFECT.jevNeutral++;
           if (a.stale) AI_EFFECT.stale++;
           if (a.verdict === 'CONFIRMED') AI_EFFECT.confirmed++;
           else if (a.verdict === 'CONFLICT') AI_EFFECT.conflict++;
@@ -407,11 +399,11 @@ async function sectionC(ENV) {
     else mark('warn', 'expert picks', `HTTP ${status}`);
   } catch (e) { mark('warn', 'expert picks', String(e?.message || e)); }
 
-  // C6 Bot Lab AI providers (jev/laya registry health)
+  // C6 Bot Lab AI provider (jev registry health)
   try {
     const { status, json: h } = await jget('/api/bots/ai/health', 15000);
     if (status !== 200 || !h) throw new Error(`HTTP ${status}`);
-    for (const prov of ['jev', 'laya']) {
+    for (const prov of ['jev']) {
       const v = h[prov];
       if (!v?.configured) { info(`Bot-Lab provider ${prov}`, 'not configured'); continue; }
       if (v.breakerOpen) mark('warn', `Bot-Lab ${prov}`, `breaker OPEN (p95 ${v.p95 ?? '?'}ms, errors ${v.errors}) — provider thoda rest karega`);
@@ -438,87 +430,46 @@ async function sectionC(ENV) {
 }
 
 // =====================================================================
-// SECTION D — LAYA LOCAL MODEL DEEP CHECK (+ board effect measurement)
+// SECTION D — AI CONFIRM LAYER (JEV) + board effect measurement
+// v21.14: Laya permanently removed — ye section ab sirf jev confirm
+// layer ka live status + boards par measured effect dikhati hai.
 // =====================================================================
 async function sectionD(ENV) {
-  section('D. LAYA LOCAL MODEL — TRADING SIGNALS PAR EFFECT');
-  const enabled = String(ENV.LAYA_ENABLED ?? process.env.LAYA_ENABLED ?? '') === '1';
-  const key = ENV.LAYA_API_KEY ?? process.env.LAYA_API_KEY ?? '';
-  const base = ENV.LAYA_BASE_URL ?? process.env.LAYA_BASE_URL ?? 'http://127.0.0.1:8000';
-  const model = ENV.LAYA_MODEL ?? process.env.LAYA_MODEL ?? '';
+  section('D. AI CONFIRM LAYER (JEV) — TRADING SIGNALS PAR EFFECT');
+  const key = ENV.TYPESAFE_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '';
   const confirmMode = String(ENV.AI_BOARD_CONFIRM ?? 'auto').toLowerCase();
 
   // D1 config
-  if (!enabled) mark('warn', 'LAYA_ENABLED != 1', 'LAYA board confirm layer me participate nahi kar raha — .env me LAYA_ENABLED=1 karo');
-  else if (!key) mark('fail', 'LAYA_ENABLED=1 but LAYA_API_KEY empty', '.env me laya-serve ki key daalo');
-  else mark('pass', 'LAYA provider configured', `endpoint ${base}${model ? ` · model ${model}` : ''}`);
+  if (!key) mark('warn', 'TYPESAFE_API_KEY not set', 'Jev (cloud) provider configured nahi — board AI-confirm layer inactive rahega (signals normal chalenge)');
+  else mark('pass', 'Jev provider configured', 'TYPESAFE_API_KEY set — board confirm layer armed');
 
-  // D2 live reachability + real ping (jaise jevPing karta hai)
-  if (enabled && key) {
-    const t0 = Date.now();
-    try {
-      const body = {
-        state: 'Test: NIFTY broke above the 15-minute opening range with volume 1.4x average. ATR range 0.9. Trend up.',
-        questions: { action: { type: 'choice', instructions: 'Should the breakout long be taken?', criteria: { enter_long: 'Take the long breakout', wait: 'Stand aside' } } },
-      };
-      if (model) body.model = model;
-      const r = await fetch(`${base.replace(/\/+$/, '')}/v1/systemone`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(9000),
-      });
-      const j = await r.json().catch(() => null);
-      const ms = Date.now() - t0;
-      const act = j?.answers?.action;
-      if (r.ok && act) mark('pass', `LAYA live ping OK (${ms}ms)`, `real decide call — action "${act.action ?? JSON.stringify(act).slice(0, 40)}" · prob ${act.probabilities ? 'present' : 'n/a'}`);
-      else if (r.ok) mark('warn', `LAYA ping HTTP ${r.status} (${ms}ms)`, 'response me answers.action nahi mila — laya-serve version check karo');
-      else mark('fail', `LAYA ping HTTP ${r.status} (${ms}ms)`, String(j?.error || r.statusText || 'endpoint ne mana kiya'));
-    } catch (e) {
-      mark('fail', 'LAYA live ping', `${base} reachable nahi — laya-serve band hai? (${String(e?.cause?.code || e?.message || e).slice(0, 80)})`);
-      note('fix: app\\start-laya.cmd chalao YA Start-SmartAI-Watchdog.bat (LAYA_AUTOSTART=1) — fir dobara diagnostic chalao');
-    }
-  }
-
-  // D3 laya cache stats
-  try {
-    const cf = join(DATA, 'laya_cache.jsonl');
-    if (!existsSync(cf)) info('laya_cache.jsonl', 'abhi nahi bani — pehle board confirm hone do (5 min)');
-    else {
-      const raw = readFileSync(cf, 'utf8').trim();
-      const n = raw ? raw.split('\n').length : 0;
-      let age = null;
-      if (raw) { try { const last = JSON.parse(raw.split('\n').pop()); age = Number(last?.at || last?.ts || 0) || null; } catch { /* line format */ } }
-      const ageTxt = age ? `${Math.round((Date.now() - age) / 60000)}m purani` : 'format unknown';
-      mark(n > 0 ? 'pass' : 'warn', `laya_cache.jsonl: ${n} entries`, `replay-free decisions ka cache · last ${ageTxt}`);
-    }
-  } catch (e) { mark('warn', 'laya cache read', String(e?.message || e)); }
-
-  // D4 board AI-confirm layer status (live)
+  // D2 board AI-confirm layer status (live)
   try {
     const { json: h } = await jget('/api/health', 20000);
     const bc = h?.ai?.boardConfirm;
     if (bc?.active) mark('pass', `board AI-confirm layer ACTIVE`, `mode ${bc.mode} · providers [${(bc.providers || []).join(',')}] · top-${bc.n} @ score≥${bc.minScore}`);
-    else if (bc) mark('warn', 'board AI-confirm layer INACTIVE', `mode ${bc.mode} · providers [${(bc.providers || []).join(',') || 'none'}] — LAYA/Jev config check karo`);
+    else if (bc) mark('warn', 'board AI-confirm layer INACTIVE', `mode ${bc.mode} · providers [${(bc.providers || []).join(',') || 'none'}] — TYPESAFE_API_KEY config check karo`);
   } catch { /* health already reported */ }
 
-  // D5 measured effect on current boards
+  // D3 measured effect on current boards
   if (AI_EFFECT.stamps > 0) {
-    mark('pass', `LAYA effect on boards: ${AI_EFFECT.stamps} signals AI-stamped`,
-      `Laya AGREE ${AI_EFFECT.layaAgree} · DISAGREE ${AI_EFFECT.layaDisagree} · NEUTRAL ${AI_EFFECT.layaNeutral}`);
+    mark('pass', `AI effect on boards: ${AI_EFFECT.stamps} signals AI-stamped`,
+      `Jev AGREE ${AI_EFFECT.jevAgree} · DISAGREE ${AI_EFFECT.jevDisagree} · NEUTRAL ${AI_EFFECT.jevNeutral}`);
     info('verdict spread', `CONFIRMED ${AI_EFFECT.confirmed} · CONFLICT ${AI_EFFECT.conflict} · NEUTRAL ${AI_EFFECT.neutral}${AI_EFFECT.stale ? ` · stale-serve ${AI_EFFECT.stale} (SWRV)` : ''}`);
-    note('isaka matlab: LAYA har CONFIRMED signal ka aiScore +3 karta hai (rank upar), har CONFLICT me −8 + STRONG→ACTION demote (rank girata hai + TOP-5 se bahar). Side/SL/size kabhi nahi badalta.');
-  } else {
+    note('isaka matlab: Jev har CONFIRMED signal ka aiScore +3 karta hai (rank upar), har CONFLICT me −8 + STRONG→ACTION demote (rank girata hai + TOP-5 se bahar). Side/SL/size kabhi nahi badalta.');
+  } else if (key) {
     mark('warn', 'abhi koi signal AI-stamped nahi', 'board confirm sirf top STRONG/ACTION score 75+ signals pe chalta hai — market ghusegi tab stamps dikhenge (5 min ruk ke rescan)');
+  } else {
+    info('AI-stamped signals', 'none (provider configured nahi)');
   }
 
-  // D6 guidance
+  // D4 guidance
   note('');
-  note('SITE PE LAYA EFFECT KAISE DEKHE (manual):');
-  note('  1. Signal card pe chip: "🤖 AI ✓ (Jev ✓ · Laya ✓)" = dono ne confirm (+3 score) | "🤖 AI ✗" = kisi ne ulta (−8) | "🤖 AI ○" = abstain');
-  note('  2. Chip pe hover karke tooltip me poori detail — kaunsa provider kya bola');
-  note('  3. OpsHealthStrip (top bar) ka AI chip — LAYA latency/p95/breaker live');
-  note('  4. Browser me kholo: http://localhost:8080/api/bots/ai/health — laya { calls, cacheHits, errors, breakerOpen }');
+  note('SITE PE AI EFFECT KAISE DEKHE (manual):');
+  note('  1. Signal card pe chip: "🤖 AI ✓ (Jev ✓)" = provider ne confirm (+3 score) | "🤖 AI ✗" = ulta side (−8) | "🤖 AI ○" = abstain');
+  note('  2. Chip pe hover karke tooltip me poori detail — provider kya bola');
+  note('  3. OpsHealthStrip (top bar) ka AI chip — Jev latency/p95/breaker live');
+  note('  4. Browser me kholo: http://localhost:8080/api/bots/ai/health — jev { calls, cacheHits, errors, breakerOpen }');
   note('  5. A/B proof chahiye: .env me AI_BOARD_CONFIRM=off karke server restart → board ranks compare karo (AI band vs on)');
   note(`  6. Board confirm mode abhi: AI_BOARD_CONFIRM=${confirmMode} (off = layer band)`);
 }

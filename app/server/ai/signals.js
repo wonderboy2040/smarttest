@@ -31,7 +31,8 @@ import { usdInrFallback } from './lib/usdinr.js';
 // dead import since v21.13 (the deep-path MACROSS revival calls the
 // registered seat fn, not this helper directly).
 import { MODELS, runQuantModels, aiCouncilVoteFromVerdict, v2ModelsEnabled, mtfConfluenceEnabled, tapeVote, meshModelsEnabled, structurePro } from './models.js';
-// v21.3.0 (Issue-5): Laya + Jev dual-AI confirmation on board signals
+// v21.3.0 (Issue-5) lineage: Jev AI confirmation on board signals
+// (v21.14: Laya removed — jev-only confirm layer)
 import { confirmBoardSignals as _confirmBoardSignals, boardAiConfirmActive as _boardAiConfirmActive } from './boardAiConfirm.js';
 
 // v21.3.0 (Issue-3: "Signal Board wrong directions — sab SL hit"):
@@ -1206,9 +1207,9 @@ export function computeTopFive(signals, regime, market = 'INDIA', limit = 5) {
     s && (s.grade === 'STRONG' || s.grade === 'ACTION')
     && (s.side === 'LONG' || s.side === 'SHORT')
     && s.plan && Number.isFinite(s.plan.entry)
-    // v21.3.0 (Issue-5): Jev/Laya CONFLICT signals kabhi TOP-5 nahi ban
-    // sakte — dono AI providers me se koi ulta side chunta ho toh headline
-    // slot usse waste nahi hoga (board card pe CONFICT chip dikhta hai).
+    // v21.3.0 (Issue-5): AI CONFLICT signals kabhi TOP-5 nahi ban
+    // sakte — provider ulta side chunta ho toh headline slot usse
+    // waste nahi hoga (board card pe CONFLICT chip dikhta hai).
     && s.aiConfirm?.verdict !== 'CONFLICT'
     // v18.6.1 Fix 2 — quorum hard gate: thin/under-voted signals (the
     // 4/9 CL case) never compete for the headline top-5 slots. Unknown
@@ -1238,7 +1239,7 @@ export function computeTopFive(signals, regime, market = 'INDIA', limit = 5) {
       : aligned ? `${regimeLabel} ${regimeChange >= 0 ? '+' : ''}${regimeChange.toFixed(1)}% trend se ALIGNED`
       : `${regimeLabel} ke against (counter-trend)`;
     const rrTxt = Number.isFinite(s.plan?.rewardRisk) ? `R:R 1:${s.plan.rewardRisk.toFixed(1)}` : 'plan ready';
-    const reason = `${totalVoted} models me se ${votesFor} ${s.side} side pe · conf ${Math.round(conf)}% · ${rrTxt} · ${regTxt} · ${s.grade === 'STRONG' ? 'FULL committee STRONG grade' : 'ACTION grade (tradeable)'}${s.aiConfirm?.verdict === 'CONFIRMED' ? ' · AI CONFIRMED (Jev+Laya)' : s.aiConfirm?.verdict === 'CONFLICT' ? ' · AI CONFLICT' : ''}`;
+    const reason = `${totalVoted} models me se ${votesFor} ${s.side} side pe · conf ${Math.round(conf)}% · ${rrTxt} · ${regTxt} · ${s.grade === 'STRONG' ? 'FULL committee STRONG grade' : 'ACTION grade (tradeable)'}${s.aiConfirm?.verdict === 'CONFIRMED' ? ' · AI CONFIRMED (Jev)' : s.aiConfirm?.verdict === 'CONFLICT' ? ' · AI CONFLICT' : ''}`;
     // v18.6.1 Fix 1 — staleness decay: the composite score is multiplied
     // by stalenessFactor (1.0 fresh → 0.15 at 60m+) so an un-re-confirmed
     // signal naturally drops out of the top-N instead of riding its
@@ -2624,14 +2625,14 @@ async function _computeBoard(mkt, deps, opts = {}) {
   }
 
   // -----------------------------------------------------------------
-  // v21.3.0 (Issue-5) LAYA + JEV DUAL-AI CONFIRMATION LAYER — the board's
-  // top STRONG/ACTION 75+ signals go to BOTH AI providers (Jev cloud +
-  // Laya local; the same dual-provider registry Bot Lab uses). Verdicts:
-  // both AGREE → aiScore +3 (CONFIRMED); any provider picks the OPPOSITE
-  // side → aiScore −8 + STRONG→ACTION (CONFLICT). Soft 4.5s deadline —
-  // unresolved verdicts memo-warm and stamp the NEXT cycle (the council
-  // "warming" pattern). AI kabhi side/size/SL nahi badalta — confirm ya
-  // demote only. Unconfigured → honest no-op (sandbox / no keys).
+  // v21.3.0 (Issue-5) lineage — JEV AI CONFIRMATION LAYER: the board's
+  // top STRONG/ACTION 75+ signals go to the AI provider (Jev cloud;
+  // v21.14: Laya removed). Verdicts: AGREE → aiScore +3 (CONFIRMED);
+  // provider picks the OPPOSITE side → aiScore −8 + STRONG→ACTION
+  // (CONFLICT). Soft 4.5s deadline — unresolved verdicts memo-warm and
+  // stamp the NEXT cycle (the council "warming" pattern). AI kabhi
+  // side/size/SL nahi badalta — confirm ya demote only.
+  // Unconfigured → honest no-op (sandbox / no keys).
   // -----------------------------------------------------------------
   if (_boardAiConfirmActive()) {
     try {
@@ -2772,8 +2773,8 @@ async function _computeBoard(mkt, deps, opts = {}) {
       strongCount: signals.filter(s => (s.superIntel?.aiScore ?? 0) >= 80).length,
       eliteCount: signals.filter(s => (s.superIntel?.aiScore ?? 0) >= 85).length,
       scored: signals.filter(s => !!s.superIntel).length,
-      // v21.3.0 (Issue-5): Jev/Laya board-confirmation meta (null jab
-      // koi provider configured nahi — sandbox / no-keys honest no-op).
+      // v21.3.0 (Issue-5): board-confirmation meta (null jab koi provider
+      // configured nahi — sandbox / no-keys honest no-op).
       ...(aiConfirmMeta ? { aiConfirm: aiConfirmMeta } : {}),
     },
     topFive,

@@ -212,13 +212,13 @@ describe('v21.2.0 dual-provider — provider-aware engine', () => {
     expect(resolveProviderEndpoint('https://x.example/v1/systemone/')).toBe('https://x.example/v1/systemone');
   });
 
-  it('8c. providerConfig laya: base default 127.0.0.1:8000, model OMIT default, fast timeout', () => {
+  it('8c. v21.14: providerConfig("laya", ...) is now just jev defaults (Laya branch removed)', () => {
     const c = providerConfig('laya', {});
-    expect(c.url).toBe('http://127.0.0.1:8000/v1/systemone');
-    expect(c.model).toBe('');           // '' = field omit (T2 safe default)
-    expect(c.timeoutMs).toBe(1500);
-    expect(c.retries).toBe(1);
-    expect(providerConfig('laya', { LAYA_BASE_URL: 'http://localhost:9000', LAYA_MODEL: 'english' }).model).toBe('english');
+    expect(c.url).toBe('https://api.typesafe.ai/v1/systemone'); // jev default — LAYA_* vars never read
+    expect(c.timeoutMs).toBe(4000);
+    expect(c.retries).toBe(3);
+    // legacy LAYA_* env vars have NO effect (ignored)
+    expect(providerConfig('laya', { LAYA_BASE_URL: 'http://localhost:9000', LAYA_MODEL: 'english' }).url).toBe('https://api.typesafe.ai/v1/systemone');
   });
 
   it('9. falsy model = field OMIT; truthy model = present', () => {
@@ -258,7 +258,7 @@ describe('v21.2.0 dual-provider — provider-aware engine', () => {
     expect(jev.stats().breakerOpen).toBe(true);
   });
 
-  it('11. cache key is provider-aware: same payload, jev vs laya = 2 wire calls; same provider = 1', async () => {
+  it('11. cache key is provider-aware: same payload, do alag-named instances = 2 wire calls; same instance = 1', async () => {
     let calls = 0;
     const mk = (name) => createJev({
       apiKey: 'k', name,
@@ -266,24 +266,24 @@ describe('v21.2.0 dual-provider — provider-aware engine', () => {
       fetchImpl: async () => { calls++; return mkResp('enter_long', { enter_long: 0.55, wait: 0.45 }); },
     });
     const jev = mk('jev');
-    const laya = mk('laya');
+    const alt = mk('alt');
     await jev(snap(), prompt);
-    await laya(snap(), prompt); // SAME payload — alag provider, wire chahiye
+    await alt(snap(), prompt); // SAME payload — alag named instance, wire chahiye
     expect(calls).toBe(2);
     await jev(snap(), prompt);  // cache hit
-    await laya(snap(), prompt); // cache hit
+    await alt(snap(), prompt); // cache hit
     expect(calls).toBe(2);
     expect(jev.stats().cacheHits).toBe(1);
-    expect(laya.stats().cacheHits).toBe(1);
+    expect(alt.stats().cacheHits).toBe(1);
     expect(jev.stats().name).toBe('jev');
-    expect(laya.stats().name).toBe('laya');
+    expect(alt.stats().name).toBe('alt');
   });
 
-  it('12. Laya-shaped contract fixture: answers.action.{choice,confidence,probabilities} + usage parse hota hai', async () => {
-    // Laya (systemone-compatible) response — usage field names same, choice
+  it('12. custom-endpoint instance fixture: answers.action.{choice,confidence,probabilities} + usage parse hota hai', async () => {
+    // systemone-compatible response — usage field names same, choice
     // field same. Provider name se koi fark nahi padta — createJev engine
-    // contract-faithful hai.
-    const layaResp = {
+    // contract-faithful hai (v21.14: laya tha, ab generic custom endpoint).
+    const altResp = {
       ok: true, status: 200,
       json: async () => ({
         answers: {
@@ -292,17 +292,17 @@ describe('v21.2.0 dual-provider — provider-aware engine', () => {
         usage: { input_tokens: 300, output_tokens: 20 },
       }),
     };
-    const laya = createJev({
-      apiKey: 'lk', name: 'laya', model: '', url: 'http://127.0.0.1:8000/v1/systemone',
-      threshold: 0.30, cachePath: path.join(tmpDir, 'laya.jsonl'),
-      fetchImpl: async () => layaResp,
+    const alt = createJev({
+      apiKey: 'lk', name: 'alt', model: '', url: 'http://127.0.0.1:9000/v1/systemone',
+      threshold: 0.30, cachePath: path.join(tmpDir, 'alt.jsonl'),
+      fetchImpl: async () => altResp,
     });
-    const v = await laya(snap(), prompt);
+    const v = await alt(snap(), prompt);
     expect(v.action).toBe('enter_long');
     expect(v.probs.enter_long).toBeCloseTo(0.62);
     expect(v.confidence).toBeCloseTo(0.71);
-    const s = laya.stats();
-    expect(s.name).toBe('laya');
+    const s = alt.stats();
+    expect(s.name).toBe('alt');
     expect(s.usage.inputTokens).toBe(300);
     expect(s.hasKey).toBe(true);
   });

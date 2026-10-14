@@ -285,7 +285,7 @@ describe('v21.13 [F8] — ml-service META_MODEL_IDS 16-seat roster', () => {
 
 // ---------------- [F9] misc fixes ----------------
 describe('v21.13 [F9] — misc: port, dynamic committee label, watch cap', () => {
-  it('expertMode defaults ML_SERVICE_URL to 8100 (ml-service — 8000 is Laya\'s port)', () => {
+  it('expertMode defaults ML_SERVICE_URL to 8100 (ml-service port; 8000 historically Laya)', () => {
     const src = readFileSync(join(root, 'server/ai/expertMode.js'), 'utf8');
     expect(src).toMatch(/127\.0\.0\.1:8100/);
     expect(src).not.toMatch(/127\.0\.0\.1:8000/);

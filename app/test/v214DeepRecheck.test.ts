@@ -187,7 +187,7 @@ describe('v21.4.1 [B6] — boardAiConfirm CONFIRMED bump clamp under chop cap', 
   const agreeP = async (snap) => ({ action: snap.proposed, note: null, probs: {}, confidence: 70 });
 
   it('a chop-capped pick (78) can confirm but NEVER crosses 80 (the STRONG badge bar)', async () => {
-    __setProvidersForTests({ jev: agreeP, laya: agreeP });
+    __setProvidersForTests({ jev: agreeP });
     const capped = strongBoardSignal({ symbol: 'DOGE', superIntel: undefined, score: 78, __chopCapped: true });
     await confirmBoardSignals([capped], 'FUTURES');
     expect(capped.aiConfirm.verdict).toBe('CONFIRMED');
@@ -203,7 +203,7 @@ describe('v21.4.1 [B6] — boardAiConfirm CONFIRMED bump clamp under chop cap', 
 
   it('CONFLICT demote also clears executable', async () => {
     const disagreeP = async () => ({ action: 'wait', note: 'disagreed_side', probs: {}, confidence: 60 });
-    __setProvidersForTests({ jev: agreeP, laya: disagreeP });
+    __setProvidersForTests({ jev: disagreeP });
     const s = strongBoardSignal({ symbol: 'SOL', executable: true });
     await confirmBoardSignals([s], 'FUTURES');
     expect(s.grade).toBe('ACTION');

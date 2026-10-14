@@ -1,10 +1,10 @@
 // ============================================================
-// server/bots/jevEngine.js — Jev Bot Lab v20.8.0
+// server/bots/jevEngine.js — Jev Bot Lab v21.14.0
 // ------------------------------------------------------------
 // Jev (TypeSafe System One) client — plan §8, contract-faithful:
 //
 //   POST <provider-url>            (default https://api.typesafe.ai/v1/systemone;
-//                                    Laya: LAYA_BASE_URL -> .../v1/systemone)
+//                                    JEV_BASE_URL override bhi chalega)
 //   { [model], state, questions: { action: {type:'choice',...}, ... } }
 //   -> { answers: { action: { choice, confidence, probabilities } }, usage }
 //
@@ -28,20 +28,15 @@
 //     is marked down for `breakerCooldownMs` — no timeout storms
 //   • stats: calls, cacheHits, errors, latency p50/p95, usage
 //
-// v21.5.0 (LAYA FAST UPGRADE) — do naye client-side speed knobs:
-//   • `concurrency` (LAYA_CONCURRENCY, laya default 2): local model
-//     server (CPU, ek inference worker) par parallel bursts queue hoti
-//     hain — har queued request ka AbortSignal.timeout SEND-time se chalta
-//     tha, isliye board-confirm bursts (top-6 × providers) healthy server
-//     pe bhi mass-timeout → breaker trip (10 min Laya down) kar dete the.
-//     Ab provider instance ke andar FIFO semaphore hai — top-scored signal
-//     pehle server pakadta hai, aur har request ko queue ke BAAD apna pura
-//     timeout budget milta hai. Jev (cloud) default unlimited.
-//   • `retryOnTimeout` (LAYA_RETRY_ON_TIMEOUT, laya default OFF): timeout
-//     pe retry local server ke liye queue-amplification hai (wo abhi bhi
-//     pehli request process kar raha hai; retry line lambi karta hai).
-//     Timeout ab honest `timeout` note deta hai — auto-arm failover usi
-//     pe trigger hota hai (deciders _FAILOVER_NOTES).
+// v21.5.0 speed knobs (ab generic engine features, v21.14 me Laya
+// removal ke baad bhi available):
+//   • `concurrency` (JEV_CONCURRENCY, default 0 = unlimited): provider
+//     instance ke andar FIFO semaphore — bursts me top-scored signal
+//     pehle server pakadta hai, har request ko queue ke BAAD apna pura
+//     timeout budget milta hai.
+//   • `retryOnTimeout` (JEV_RETRY_ON_TIMEOUT, default ON): timeout pe
+//     retry queue line lambi kar sakta hai — slow providers ke liye OFF
+//     karo. Timeout honest `timeout` note deta hai.
 // ============================================================
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -73,10 +68,10 @@ function _armJevExitHook() {
 
 export const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
 
-/** v21.2.0 (dual-provider): base-URL -> full systemone endpoint resolver.
- * `LAYA_BASE_URL=http://127.0.0.1:8000` ya `JEV_BASE_URL=https://api.typesafe.ai`
- * dono chalega; jo base pehle se `/v1/systemone` pe khatam hota hai use
- * as-is accept karte hain (full-endpoint override bhi valid hai). */
+/** base-URL -> full systemone endpoint resolver.
+ * `JEV_BASE_URL=https://api.typesafe.ai` chalega; jo base pehle se
+ * `/v1/systemone` pe khatam hota hai use as-is accept karte hain
+ * (full-endpoint override bhi valid hai). */
 export function resolveProviderEndpoint(base) {
   const b = String(base || '').replace(/\/+$/, '');
   return b.endsWith('/v1/systemone') ? b : `${b}/v1/systemone`;
@@ -96,27 +91,9 @@ export const JEV_DEFAULTS = {
   maxCacheEntries: 20000,
 };
 
-/** v21.2.0 (dual-provider plan Step-1.7): per-provider env config.
+/** per-provider env config (v21.14: sirf jev — Laya provider removed).
  * `jevConfig` wrapper purani API ke liye rakha gaya hai (back-compat). */
-export function providerConfig(name = 'jev', env = process.env) {
-  if (name === 'laya') {
-    return {
-      ...JEV_DEFAULTS,
-      name: 'laya',
-      url: resolveProviderEndpoint(env.LAYA_BASE_URL || 'http://127.0.0.1:8000'),
-      // '' = field OMIT (T1/T2 compat) — env se 'english' etc. set kar sakte ho
-      model: env.LAYA_MODEL ?? '',
-      threshold: numOr(env.LAYA_THRESHOLD, JEV_DEFAULTS.threshold),
-      fallback: 'wait',                    // Laya kabhi rule-fallback nahi
-      apiKey: env.LAYA_API_KEY || '',
-      timeoutMs: numOr(env.LAYA_TIMEOUT_MS, 1500),   // local — jaldi fail
-      retries: numOr(env.LAYA_RETRIES, 1),
-      // v21.5.0 (laya fast): local bursts ko FIFO-mitigate karo + timeout
-      // retry off (queue amplification) — dono env se badle ja sakte hain.
-      concurrency: numOr(env.LAYA_CONCURRENCY, 2),
-      retryOnTimeout: String(env.LAYA_RETRY_ON_TIMEOUT ?? '') === '1',
-    };
-  }
+export function providerConfig(_name = 'jev', env = process.env) {
   return {
     ...JEV_DEFAULTS,
     name: 'jev',
@@ -127,7 +104,7 @@ export function providerConfig(name = 'jev', env = process.env) {
     apiKey: env.TYPESAFE_API_KEY || '',
     timeoutMs: numOr(env.JEV_TIMEOUT_MS, JEV_DEFAULTS.timeoutMs),
     retries: numOr(env.JEV_RETRIES, JEV_DEFAULTS.retries),
-    // v21.5.0: jev (cloud) unlimited + timeout-retry ON (purana behaviour)
+    // concurrency 0 = unlimited; timeout-retry ON (default)
     concurrency: numOr(env.JEV_CONCURRENCY, 0),
     retryOnTimeout: String(env.JEV_RETRY_ON_TIMEOUT ?? '1') !== '0',
   };
@@ -155,7 +132,7 @@ function _isTimeoutErr(e) {
 const keyOf = (p) => crypto.createHash('sha256').update(JSON.stringify(p)).digest('hex').slice(0, 32);
 
 /** Build the exact payload the provider expects from a snapshot + prompt.
- * v21.2.0 (dual-provider): falsy `model` -> field OMIT (Laya T2 compat —
+ * falsy `model` -> field OMIT (payload-shape compat —
  * `model:"jev-latest"` bhejne pe 422 aa sakta hai jab tak T1 verify na ho). */
 export function buildPayload({ model, snap, prompt }) {
   const out = {
@@ -176,7 +153,7 @@ export function buildPayload({ model, snap, prompt }) {
  */
 export function createJev(opts = {}) {
   const cfg = { name: 'jev', ...JEV_DEFAULTS, ...opts };
-  const name = String(cfg.name || 'jev');          // 'jev' | 'laya'
+  const name = String(cfg.name || 'jev');
   const url = cfg.url || JEV_URL;                  // v21.2.0: provider endpoint override
   const apiKey = cfg.apiKey || '';
   const doFetch = cfg.fetchImpl || ((...a) => fetch(...a));
@@ -204,7 +181,7 @@ export function createJev(opts = {}) {
     latencies: [], usage: { inputTokens: 0, outputTokens: 0 },
     breaker: { fails: 0, openedAt: null, trips: 0 },
   };
-  // v21.5.0 (laya fast): FIFO concurrency gate — sirf WIRE calls pe lagta
+  // v21.5.0: FIFO concurrency gate — sirf WIRE calls pe lagta
   // hai (cache-hits turant bypass). Telemetry stats.queueWaits me dikhta hai.
   let _queueWaits = 0;
   const _acquire = (() => {
@@ -330,7 +307,7 @@ export function createJev(opts = {}) {
   async function decide(snap, prompt) {
     const payload = buildPayload({ model: cfg.model, snap, prompt });
     // v21.2.0 (dual-provider): cache key ab provider-aware hai — same
-    // payload Jev vs Laya (ya model '' vs 'english') ke liye alag key.
+    // payload provider/name (ya model '' vs 'english') ke liye alag key.
     const key = keyOf({ provider: name, model: cfg.model || '', payload });
     const t0 = Date.now();
 
@@ -425,8 +402,8 @@ export function createJev(opts = {}) {
     if (a.choice !== 'wait') {
       // gate on probabilities[chosen], NOT confidence (plan §1)
       if (p < cfg.threshold) {
-        // v21.11 (Laya decision transparency): `picked` = the model's RAW
-        // choice — board confirm layer isse UI tak pahunchata hai ("Laya
+        // v21.11 (decision transparency): `picked` = the model's RAW
+        // choice — board confirm layer isse UI tak pahunchata hai ("Jev
         // ○ SHORT-lean 29%" — kabhi ka '○' sirf abstain nahi tha, side
         // pata hi nahi chalti thi). action 'wait' hi rehta hai — trading
         // contract (no-flip) untouched.
@@ -453,7 +430,7 @@ export function createJev(opts = {}) {
   decide.stats = () => ({
     ...stats,
     latencies: undefined,
-    name,                                     // v21.2.0: 'jev' | 'laya'
+    name,                                     // provider name ('jev')
     url: hostOf(url),                         // host only — full URL/keys kabhi expose nahi
     p50: pct(0.5), p95: pct(0.95),
     cacheSize: cache.size,
@@ -486,7 +463,7 @@ export function createJev(opts = {}) {
 
 /**
  * JEV PING (plan §4.2 smoke): one real call, full response printed.
- * v21.2.0: url/model/name override — layaPing isi ko wrap karta hai.
+ * url/model/name override.
  */
 export async function jevPing({ apiKey, url, model, name = 'jev_ping', fetchImpl } = {}) {
   const key = apiKey || process.env.TYPESAFE_API_KEY || '';
