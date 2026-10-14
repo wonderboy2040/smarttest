@@ -12,7 +12,7 @@
 //   │                 STRONG·avg conf·mood)
 //   ├ 🏆 TOP 5 PICKS  full-universe composite ranking (44 stocks
 //   │                 + NIFTY/BANKNIFTY → ranked 5 best trades)
-//   ├ 01 SIGNAL BOARD 10-model consensus cards (Dhan paper/live)
+//   ├ 01 SIGNAL BOARD multi-model consensus cards (16 voting + 4 shadow)
 //   ├ 01b MORNING BRIEF · 02 OPTIONS DESK (NSE indices)
 //   ├ 02b SWING DESK  multi-day India setups
 //   ├ 03 EXECUTION    India positions · Dhan · risk gates
@@ -368,7 +368,7 @@ export default memo(function IndiaIntradayTab() {
               <span className="quantum-badge">v6.13</span>
             </div>
             <p className="text-[10px] text-slate-500 mt-0.5">
-              NSE 86-name core universe (500+ full mode) + NIFTY/BANKNIFTY → 10-model consensus · TOP-5 composite rank · options desk · Dhan gauntlet
+              NSE 86-name core universe (500+ full mode) + NIFTY/BANKNIFTY → {models.length || 16}-model consensus · TOP-5 composite rank · options desk · Dhan gauntlet
               {canLiveIndia && <span className="text-red-400 font-black"> · INDIA LIVE ARMED (Dhan)</span>}
               <span className="text-orange-400/80 font-bold"> · crypto alag tab me (₿ CoinDCX)</span>
             </p>
@@ -485,7 +485,7 @@ export default memo(function IndiaIntradayTab() {
       {/* ============ 01 · SUPERINTELLIGENCE SIGNAL BOARD ============ */}
       <div id="in-signals">
         <div className="flex items-end justify-between flex-wrap gap-2">
-          <SectionLabel num="01" title="Superintelligence Signal Board" sub="NSE equities + indices (TV live scanner) → 10-model consensus + 7-factor expert engine → AI SCORE (80+ = STRONG, 85+ = ELITE) + full trade blueprint" />
+          <SectionLabel num="01" title="Superintelligence Signal Board" sub={`NSE equities + indices (TV live scanner) → ${models.length || 16}-model consensus + 7-factor expert engine → AI SCORE (80+ = STRONG, 85+ = ELITE) + full trade blueprint`} />
           {/* v18.6.4 DESK PARITY: CoinDCX desk ka FreshnessBadge ab India
               board par bhi — aging/stale board visual dono desks pe same. */}
           <div className="flex items-center gap-2"><BoardSummary board={board} /><FreshnessBadge board={board} /></div>
@@ -654,7 +654,7 @@ export default memo(function IndiaIntradayTab() {
       {/* ============ 04 · BACKTEST LAB (India · PRO) ============ */}
       {!simple && (
         <div id="in-backtest">
-          <SectionLabel num="04" title="Backtest Lab" sub="the SAME 10-model ensemble replayed on India history — win rate · avg R · equity curve · learned gates" />
+          <SectionLabel num="04" title="Backtest Lab" sub={`the SAME ${models.length || 16}-model ensemble replayed on India history — win rate · avg R · equity curve · learned gates`} />
           <div className="mt-2.5">
             <BacktestPanel market="INDIA" runBacktest={runBacktest} runStrategyLab={runStrategyLab} />
           </div>
@@ -787,13 +787,13 @@ export default memo(function IndiaIntradayTab() {
                       liveSrc={liveFor(deep.pinned.symbol)?.src ?? null} />
                     <div className="mt-3 flex items-center justify-center gap-2 text-[10px] font-black text-cyan-300">
                       <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      LIVE RE-VERIFICATION chal raha hai — fresh 10-model ensemble {deep.pinned.symbol} par abhi compute ho raha hai…
+                      LIVE RE-VERIFICATION chal raha hai — fresh {models.length || 16}-model ensemble {deep.pinned.symbol} par abhi compute ho raha hai…
                     </div>
                   </>
                 ) : (
                   <>
                     <div className="text-4xl mb-3 animate-float">🧠</div>
-                    <div className="text-xs text-slate-400">Running a fresh 10-model ensemble on {deep.signal?.symbol ?? 'the symbol'}…</div>
+                    <div className="text-xs text-slate-400">Running a fresh {models.length || 16}-model ensemble on {deep.signal?.symbol ?? 'the symbol'}…</div>
                   </>
                 )}
               </div>

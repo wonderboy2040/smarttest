@@ -377,7 +377,7 @@ export const DeepPinnedCompare = memo(function DeepPinnedCompare({ pinned, pinne
         {st.icon} {v.note}
       </div>
       <div className="text-[9px] text-slate-600 mt-1 leading-relaxed">
-        Board card scan-time ka snapshot hai; LIVE re-run abhi ka fresh 10-model ensemble (har 15s auto-refresh). Numbers hilna normal hai — isliye dono columns saath me dikhte hain.
+        Board card scan-time ka snapshot hai; LIVE re-run abhi ka fresh full-committee ensemble (har 15s auto-refresh). Numbers hilna normal hai — isliye dono columns saath me dikhte hain.
       </div>
     </div>
   );

@@ -39,6 +39,20 @@ process.env.AI_ENABLE_MESH_MODELS ??= 'false';
 process.env.AI_ENABLE_MTF_CONFLUENCE ??= 'false';
 
 // ============================================================
+// v21.12 TEST-STABILITY PIN (master switch): AI_ACCURACY_SUITE ab
+// DEFAULT ON hai aur uske ON hone par upar wale teeno legacy pins
+// IGNORED ho jaate hain — isliye legacy suites ke liye MASTER ko
+// bhi explicit 'false' pin karna zaroori hai (warna 202 files
+// phir se 20-seat registry dekh lenge). AI_ENABLE_META_ENSEMBLE
+// bhi v21.12 se DEFAULT ON hai — aggregateVotesWithMeta callers
+// (v2094 etc.) 'flag OFF by default in test env' assumption pe
+// likhe hain. Naye defaults `test/v2112MasterSwitch.test.ts` +
+// updated v2111 suite me subprocess-se test hote hain.
+// ============================================================
+process.env.AI_ACCURACY_SUITE ??= 'false';
+process.env.AI_ENABLE_META_ENSEMBLE ??= 'false';
+
+// ============================================================
 // v21.11 TEST-LEAK CLEANUP (permanent) — 34 suites app/ root me
 // `.test-data-*` dirs chhod jaati thi (user ke box pe 15 dirs / 260KB
 // junk jam gaya tha). vitest 4 me globalTeardown option nahi hai, isliye
@@ -46,9 +60,11 @@ process.env.AI_ENABLE_MTF_CONFLUENCE ??= 'false';
 // chalta hai (file ke apne afterAll pehle, ye cleanup sabse aakhri me).
 // fileParallelism:false hai — koi concurrent file apna dir use nahi kar
 // raha hota cleanup ke waqt.
+// v21.12 FIX: `path` duplicate-import + `afterAll` bina-import (v21.11
+// leak-cleanup block ke saath aaya, typecheck us waqt re-run nahi hua).
 // ============================================================
 import { readdirSync, rmSync } from 'node:fs';
-import path from 'node:path';
+import { afterAll } from 'vitest';
 
 afterAll(() => {
   try {

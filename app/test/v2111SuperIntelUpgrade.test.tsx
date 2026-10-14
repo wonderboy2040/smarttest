@@ -160,6 +160,9 @@ const SANITIZE = (env: NodeJS.ProcessEnv) => {
   delete e.AI_ENABLE_V2_MODELS;
   delete e.AI_ENABLE_MESH_MODELS;
   delete e.AI_ENABLE_MTF_CONFLUENCE;
+  // v21.12: master switch — delete karna zaroori hai warna setup.ts ka
+  // legacy pin ('false') naye default-ON semantics ko override karega.
+  delete e.AI_ACCURACY_SUITE;
   return e;
 };
 
@@ -195,8 +198,22 @@ describe('v21.11 B — Superintelligence accuracy suite default ON', () => {
     }
   });
 
-  it('explicit false → legacy 13-seat board (env override wins)', () => {
+  it('v21.12 MASTER: stale legacy false + master UNSET → ab bhi 20-seat (stale-.env disease fix)', () => {
+    // USER BUG: "sirf 13 models hi bata raha hai" — v21.11.0 tak explicit
+    // legacy `false` override jeet-ta tha; purane .env wale boxes isi se
+    // 13-seat pe pin the. v21.12 me master (default ON) legacy ko ignore
+    // karta hai.
     const r = spawnModels({ ...SANITIZE(process.env), AI_ENABLE_V2_MODELS: 'false', AI_ENABLE_MESH_MODELS: 'false', AI_ENABLE_MTF_CONFLUENCE: 'false' });
+    expect(r.v2).toBe(true);
+    expect(r.mtf).toBe(true);
+    expect(r.n).toBe(20);
+    expect(r.tapeId).toBe('tape-mtf');
+    expect(r.ids).toContain('sentiment');
+    expect(r.ids).toContain('cryptoonchain');
+  });
+
+  it('v21.12 ROLLBACK: AI_ACCURACY_SUITE=false + per-flag false → legacy 13-seat board', () => {
+    const r = spawnModels({ ...SANITIZE(process.env), AI_ACCURACY_SUITE: 'false', AI_ENABLE_V2_MODELS: 'false', AI_ENABLE_MESH_MODELS: 'false', AI_ENABLE_MTF_CONFLUENCE: 'false' });
     expect(r.v2).toBe(false);
     expect(r.mtf).toBe(false);
     expect(r.n).toBe(13);
@@ -205,12 +222,21 @@ describe('v21.11 B — Superintelligence accuracy suite default ON', () => {
     expect(r.ids).not.toContain('sentiment');
   });
 
+  it('v21.12 ROLLBACK: AI_ACCURACY_SUITE=false + per-flag unset → v21.11-era legacy defaults (13)', () => {
+    const r = spawnModels({ ...SANITIZE(process.env), AI_ACCURACY_SUITE: 'false' });
+    expect(r.v2).toBe(false);
+    expect(r.n).toBe(13);
+    expect(r.tapeId).toBe('tape');
+  });
+
   it('mesh default ON (unset) + mesh shadow gating stays weight-0 (consensus untouched)', async () => {
     const mesh = await import('../server/ai/meshModels.js');
     const ledger = await import('../server/ai/ledger.js');
     const orig = process.env.AI_ENABLE_MESH_MODELS;
+    const origSuite = process.env.AI_ACCURACY_SUITE;
     try {
       process.env.AI_ENABLE_MESH_MODELS = ''; // unset-equivalent → new default ON
+      delete process.env.AI_ACCURACY_SUITE; // v21.12: master bhi unset → default ON
       (ledger as unknown as { __setLedgerForTests: (x: unknown) => void }).__setLedgerForTests(null);
       (mesh as unknown as { __resetMeshModelsForTests: () => void }).__resetMeshModelsForTests();
       expect(mesh.meshModelsEnabled()).toBe(true);
@@ -221,6 +247,8 @@ describe('v21.11 B — Superintelligence accuracy suite default ON', () => {
     } finally {
       if (orig === undefined) delete process.env.AI_ENABLE_MESH_MODELS;
       else process.env.AI_ENABLE_MESH_MODELS = orig;
+      if (origSuite === undefined) delete process.env.AI_ACCURACY_SUITE;
+      else process.env.AI_ACCURACY_SUITE = origSuite;
       (mesh as unknown as { __resetMeshModelsForTests: () => void }).__resetMeshModelsForTests();
     }
   });

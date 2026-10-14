@@ -12,7 +12,7 @@
 //   ├ 00 AUTO-AGENT    superintelligence auto entry/exit (3 trades/day)
 //   ├ 📱 WALLET        spot + futures + equity — "wallet me kitna hai"
 //   ├ 🏆 TOP 5 PICKS   composite ranking of the active desk's universe
-//   ├ 01 SIGNAL BOARD  10-model consensus cards · trade tickets
+//   ├ 01 SIGNAL BOARD  multi-model consensus cards (16 voting + 4 shadow) · trade tickets
 //   ├ 01b MORNING BRIEF · 01r RECHECK · 02e MY TRADES · 02f REVERSAL
 //   ├ 03 EXECUTION     futures positions · leverage · risk gates
 //   └ 04 MESH OPS · 05 ALERTS · 06 MODELS · 07 LEDGER · 07b TRUST
@@ -536,8 +536,8 @@ export default memo(function CoinDcxTab() {
               <span className="px-1.5 py-0.5 rounded text-[9px] font-mono bg-violet-500/20 text-violet-300">USDT · 24/7</span>
             </button>
             {/* v21.8.0 USER SPEC: crypto GOLD + SILVER special desk — CoinDCX
-                B-XAU_USDT / B-XAG_USDT commodity perps, same 10-model
-                superintelligence committee, USDT domain. */}
+                B-XAU_USDT / B-XAG_USDT commodity perps, same full
+                superintelligence committee (${models.length}-model), USDT domain. */}
             <button onClick={() => switchDesk('METALS')} role="tab" aria-pressed={desk === 'METALS'}
               className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-black transition-colors flex items-center gap-2 ${desk === 'METALS' ? 'bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 shadow-lg shadow-amber-500/25' : 'text-slate-400 hover:text-slate-200'}`}>
               🥇 GOLD & SILVER
@@ -802,7 +802,7 @@ export default memo(function CoinDcxTab() {
 
       {/* ============ 04 · BACKTEST LAB — SPOT-CRYPTO PANELS REMOVED v21.0.5 ============
           BacktestPanel (market=CRYPTO) + ModelPerformancePanel (desk=CRYPTO)
-          replayed the 10-model ensemble on crypto SPOT history — the spot
+          replayed the full committee ensemble on crypto SPOT history — the spot
           desk is gone, so both panels went with it (futures backtests are
           not wired in these panels). The MESH STATUS panel below is shared
           infra (10 data agents feeding BOTH desks' T3 seats) and stays.
@@ -899,13 +899,13 @@ export default memo(function CoinDcxTab() {
                       maxLeverage={state?.config?.cryptoLeverage ?? 1} />
                     <div className="mt-3 flex items-center justify-center gap-2 text-[10px] font-black text-cyan-300">
                       <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                      LIVE RE-VERIFICATION chal raha hai — fresh 10-model ensemble {deep.pinned.symbol} par abhi compute ho raha hai…
+                      LIVE RE-VERIFICATION chal raha hai — fresh {models.length || 16}-model ensemble {deep.pinned.symbol} par abhi compute ho raha hai…
                     </div>
                   </>
                 ) : (
                   <>
                     <div className="text-4xl mb-3 animate-float">🧠</div>
-                    <div className="text-xs text-slate-400">Running a fresh 10-model ensemble on {deep.signal?.symbol ?? 'the symbol'}…</div>
+                    <div className="text-xs text-slate-400">Running a fresh {models.length || 16}-model ensemble on {deep.signal?.symbol ?? 'the symbol'}…</div>
                   </>
                 )}
               </div>

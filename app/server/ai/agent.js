@@ -40,6 +40,9 @@ import {
 import { pairCorrelation } from './correlation.js';
 // v10.2: near-miss diagnostics + V2 model flag exposure (Step 1)
 import { v2ModelsEnabled } from './models.js';
+// v21.12.0: committee snapshot — AgentPanel chip isi se dynamic
+// voting/shadow counts dikhata hai (hardcoded 16/13 strings ka end).
+import { committeeInfo } from './committee.js';
 // v10.6 Pro Upgrade #2 (Kelly-lite): calibration buckets → realized edge
 import { trustReport, __testables as __trustTestables } from './trust.js';
 // v10.6 Pro Upgrade #6 (slippage-aware execution)
@@ -2415,6 +2418,9 @@ export async function agentStatus(deps) {
     // v10.2 Step 1: near-miss diagnostics + V2 model flag
     lastNearMisses: _state.lastNearMisses || [],
     v2ModelsEnabled: typeof v2ModelsEnabled === 'function' ? v2ModelsEnabled() : false,
+    // v21.12.0: full committee composition — UI ab hardcoded 16/13 ke
+    // bajaye ASLI seat counts dikhata hai.
+    committee: (() => { try { return committeeInfo(); } catch { return null; } })(),
     // v10.8 NEAR-MISS AUTO-TRADE state — the panel's transparency for
     // "near-miss kyun / kab / kitna".
     nearMiss: {

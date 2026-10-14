@@ -1,5 +1,37 @@
 # Changelog
 
+## v21.12.0 — MASTER ACCURACY SWITCH + META DEFAULT ON + CODE-UPGRADE GUARD (2026-10-14)
+
+**User report: "META ensemble ON karna ml-service deploy ke baad haa kardo aur Accuracy upgrade — 13 → 16-model committee (tape-MTF w1.6 + 3 naye seats) + 4 mesh shadow seats + 3× learning window sirf 13 models hi bata raha hai 16 models nhi site ek baar recheck karo aur issue fix karo"**
+
+### FIX 1 — AI_ACCURACY_SUITE MASTER SWITCH (stale-.env 13-seat pin disease)
+- **ROOT CAUSE (13 vs 16)**: v21.11.0 me teeno seat-flags (V2/MTF/MESH) ka code-default ON kiya tha, par "explicit env value hamesha jeet-ta hai" semantics ki wajah se ek purani/stale `.env` (jin boxes ne kabhi `AI_ENABLE_V2_MODELS=false` likha tha) apne box ko hamesha 13-seat plain board pe pin kar deti thi — shipped intent (16 voting + 4 shadow) kabhi reach hi nahi hota tha.
+- **NAYA `server/ai/accuracySuite.js`**: master switch `AI_ACCURACY_SUITE` — **DEFAULT ON**. Master ON hone par teeno LEGACY per-flag env values (V2/MESH/MTF) **IGNORED** (chahe `false` pade ho) → 16 voting + 4 mesh shadow GUARANTEED out-of-the-box. Rollback ab EK documented path hai: `AI_ACCURACY_SUITE=false` + per-flag values (legacy A/B semantics v9.x jaise).
+- `v2ModelsEnabled()` / `mtfConfluenceEnabled()` / `meshModelsEnabled()` ab master-gated hain; setup.ts me legacy suites ke liye master bhi pinned (saare legacy files byte-identical).
+
+### FIX 2 — META ENSEMBLE DEFAULT ON (user ask — ml-service deploy ke baad)
+- `AI_ENABLE_META_ENSEMBLE` ab **DEFAULT ON** (explicit `false` A/B rollback hi jeet-ta hai). Safe by design: ml-service down → 400ms timeout → 5-min circuit breaker → weighted fallback; meta sirf tab bolta hai jab service zinda ho AUR weighted committee se agree kare. Port 8100 (v21.11 fix) — Laya ka 8000 kabhi probe nahi hota.
+- `.env.example`: `AI_ENABLE_META_ENSEMBLE=true` + `ML_SERVICE_URL=http://127.0.0.1:8100` ab uncommented default + ml-service chalane ka command documented.
+
+### FIX 3 — SUPERVISOR CODE-UPGRADE GUARD (asli "server purana chal raha hai" fix)
+- **ROOT CAUSE #2 (structural)**: watchdog sirf dist-stale check karta tha (frontend rebuild) — SERVER code ka running-process vs disk check NAHI tha. Naya zip extract karne par purana Node process RAM me chalta rehta tha → "UI naya, API purana" → board `models` array 13 hi bhejta rehta tha. Yehi user ke box pe hua.
+- `supervisor.js` v21.12: `/api/ping` probe ab body ka `v` (SERVER_VERSION of RUNNING child) padhta hai aur disk ke `package.json` version se compare karta hai. Mismatch → **2 consecutive same-disk-version probes** (mid-extract race guard) → journal `code-upgrade` + banner log + force-kill → restart naya code load karta hai. Loop-guards: ek hi target ke liye ek restart + max 3 upgrade-restarts per boot + partial-deploy honest hint. fs-read fail / `v` missing → guard no-op (legacy compatible).
+
+### FIX 4 — COMMITTEE VISIBILITY (ab har jagah ASLI numbers)
+- **NAYA `server/ai/committee.js`**: ek source-of-truth snapshot — `{total, voting, shadow, tapeSeat, tapeWeight, learningWindow, accuracySuite, v2Models, mtfConfluence, meshModels, meta{enabled, serviceUrl}}`.
+- Boot banner: `[superintel] 🧬 committee: 16 voting + 4 mesh shadow · tape-MTF w1.6 · window 1200 · META ARMED (127.0.0.1:8100) · accuracy-suite ON` — watchdog logs me hamesha dikhta hai.
+- `/health` me `committee` field (ops dashboards); agent + indiaAgent accuracy payloads me `committee` (AgentPanel chip ab server ke ASLI counts se render hota hai — hardcoded 16/13 strings deleted).
+- UI ke saare stale hardcoded `10-model` strings GONE: CoinDcxTab (board header, metals desk, deep re-verify ×2, backtest note) + IndiaIntradayTab (universe line, board SectionLabel, backtest lab, deep re-verify ×2) + BacktestPanel + deepAnalysisExtras — sab ab `${models.length}`-dynamic ya honest "full-committee" wording.
+
+### FIX 5 — REPO CLEANUP (user commit se wapas aaya junk, dobara removed)
+- User ke GitHub sync (7476ce0) se 7 dead root `scripts/v20xx-*.mjs` smoke/probe scripts + `telegram-bot/cloud.mjs` wapas repo me aa gaye the (v21.11.0 me delete kiye the) — dobara `git rm` (zero live importers, sirf historical CHANGES.md mentions).
+- dist/ me 3 generations of assets jam gaye the (v21.9 orphan + v21.11 + user ke 2 duplicate-chunk builds) — fresh build se single clean generation.
+
+### TESTS
+- NAYA `test/v2112MasterSwitch.test.ts` (+15): master switch semantics ×4, META default-ON subprocess ×2, committee info subprocess (suite-ON 20/16/4 + legacy 13/13/0) ×2 + banner content, supervisor code-upgrade guard ×7 (happy, 1-probe window, 2-probe kill+journal, same-target loop-guard+hint, new-target re-arm, fs-fail no-op, probe body `v` parsing), source contracts ×8 (.env.example, index.js banner+/health, supervisor guard wiring, agent payloads, AgentPanel dynamic chip, tabs 10-model-free, models/mesh master-gating, setup.ts pins).
+- Updated: `v2111SuperIntelUpgrade` (explicit-false case ab master-unset stale-ignore + 2 rollback cases + mesh test master-clean), `metaEnsemble` (defaults ON + explicit-OFF pin), `setup.ts` (+AI_ACCURACY_SUITE/+AI_ENABLE_META_ENSEMBLE legacy pins), `launcherAutoBuild` + `layaSidecar` version pins 21.12.0.
+- **LIVE E2E** (`scripts/e2e_v2112_boot_check.mjs` — naya reusable deploy-verification tool, `node scripts/e2e_v2112_boot_check.mjs` se apne box pe bhi chala sakte ho): bare-env boot (koi AI_* flag nahi — user ke stale-.env simulation) → boot banner "16 voting + 4 mesh shadow" ✓ · `/health` committee 20/16/4 tape-mtf w1.6 window 1200 ✓ · META ARMED @ 127.0.0.1:8100 ✓ · `/api/ping v` == package.json ✓. Poora suite: typecheck PASS · lint 0 errors · vitest **204 files / 3821 PASS** (+25) · build+stamp 21.12.0 · check:routes PASS · CRLF intact.
+
 ## v21.11.0 — LAYA DECISION TRANSPARENCY + SUPERINTELLIGENCE ACCURACY SUITE + REPO CLEANUP (2026-10-14)
 
 **User report: "CoinDCX tab ke 70-80+ signals pe 🤖 AI ○ (Laya ○) dikhta hai — samaj nahi aa raha Laya LONG/SHORT me kya bol raha hai" + "13 models ki Signal Accuracy bahut low hai — deep analysis karke Superintelligence se upgrade karo" + "full site recheck + unwanted temp/broken/junk files permanently cleanup karo"**

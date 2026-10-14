@@ -60,6 +60,8 @@
 // ============================================================
 import { meshQuery } from '../mcp/mesh.js';
 import { __ledgerRaw } from './ledger.js';
+// v21.12.0 master accuracy switch (see accuracySuite.js header)
+import { accuracySuiteEnabled, legacyFlagEnabled } from './accuracySuite.js';
 
 const clamp = (v, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, v));
 const r1 = (v) => (Number.isFinite(v) ? Math.round(v * 10) / 10 : null);
@@ -80,15 +82,18 @@ export const MESH_MODEL_SEATS = [
 ];
 
 /** Rollout flag — same A/B discipline as AI_ENABLE_V2_MODELS.
- *  v21.11.0 (Superintelligence accuracy upgrade): DEFAULT ON. Seats SHADOW
- *  mode me hote hain (applyMeshModelGating → weight 0) — consensus math
- *  par zero effect, sirf ledger evidence collect hota hai jab tak
- *  meshModelAccountability settled outcomes se seat promote kare. Ye the
- *  designed zero-risk upgrade path hai. Explicit `false` wins. */
+ *  v21.11.0: DEFAULT ON. Seats SHADOW mode me hote hain
+ *  (applyMeshModelGating → weight 0) — consensus math par zero effect,
+ *  sirf ledger evidence collect hota hai jab tak meshModelAccountability
+ *  settled outcomes se seat promote kare. Ye the designed zero-risk
+ *  upgrade path hai.
+ *  v21.12.0 (master switch): AI_ACCURACY_SUITE (default ON) ke ON hone
+ *  par mesh seats UNCONDITIONALLY ON — stale AI_ENABLE_MESH_MODELS=false
+ *  ab ignored (v21.11.0 tak explicit false jeet-ta tha, isi se user ke
+ *  box pe 13-seat pin ho gaya tha). Legacy A/B: AI_ACCURACY_SUITE=false. */
 export function meshModelsEnabled() {
-  const raw = String(process.env.AI_ENABLE_MESH_MODELS ?? '').trim().toLowerCase();
-  if (raw) return ['true', '1', 'on', 'yes'].includes(raw);
-  return true;
+  if (accuracySuiteEnabled()) return true;
+  return legacyFlagEnabled('AI_ENABLE_MESH_MODELS');
 }
 
 // ---------------- Phase 3: tiered, budget-aware warm ----------------

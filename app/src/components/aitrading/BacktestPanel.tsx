@@ -1,7 +1,7 @@
 // ============================================================
 // src/components/aitrading/BacktestPanel.tsx — v6.5
 // ------------------------------------------------------------
-// Walk-forward replay of the SAME 10-model ensemble on historical
+// Walk-forward replay of the SAME full-committee ensemble on historical
 // candles. Shows the honest question users actually ask: "would
 // these signals have made money?" — win rate, avg R, profit
 // factor, max drawdown, equity curve, per-symbol table.
@@ -218,7 +218,7 @@ export const BacktestPanel = memo(function BacktestPanel({ market, runBacktest, 
       {err && <div className="text-[11px] text-red-400 font-bold">⚠️ {err}</div>}
       {!result && !running && !err && (
         <div className="text-[11px] text-slate-500">
-          Run karo — SAME live ensemble (indicators → 10-model votes → consensus → risk-capped plan) historical candles par replay hota hai.
+          Run karo — SAME live ensemble (indicators → full-committee votes → consensus → risk-capped plan) historical candles par replay hota hai.
           {market === 'INDIA' ? ' India: 2 saal daily candles, max 5-day hold.' : ' Crypto: 300 × 1h candles, max 48h hold.'}
         </div>
       )}

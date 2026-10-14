@@ -55,8 +55,8 @@ afterEach(() => {
 });
 
 describe('v10.5 meta-ensemble — flag + defaults', () => {
-  it('AI_ENABLE_META_ENSEMBLE defaults OFF', () => {
-    expect(metaEnsembleEnabled()).toBe(false);
+  it('AI_ENABLE_META_ENSEMBLE defaults ON (v21.12 — ml-service deploy ke baad user ask)', () => {
+    expect(metaEnsembleEnabled()).toBe(true);
   });
 
   it('accepts truthy spellings', () => {
@@ -69,6 +69,7 @@ describe('v10.5 meta-ensemble — flag + defaults', () => {
   });
 
   it('flag OFF → weighted verdict, source "weighted", zero service calls', async () => {
+    process.env.AI_ENABLE_META_ENSEMBLE = 'false'; // v21.12: default ON — explicit OFF pin
     vi.stubGlobal('fetch', vi.fn(async (...args) => {
       fetchCalls.push(String(args[0]));
       throw new Error('should not be called');

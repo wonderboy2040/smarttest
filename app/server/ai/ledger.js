@@ -46,6 +46,10 @@ const MAX_ENTRIES = (() => {
   return Number.isFinite(n) && n >= 100 ? Math.min(5000, n) : 1200;
 })();
 
+// v21.12.0: committee info banner/panel isko surface karta hai (ops ko
+// dikhna chahiye learning window kitna bada hai).
+export function ledgerWindowEntries() { return MAX_ENTRIES; }
+
 const r2 = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
 const sha256 = (s) => crypto.createHash('sha256').update(String(s), 'utf8').digest('hex');
 

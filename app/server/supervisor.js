@@ -190,6 +190,13 @@ export function createSupervisor(opts = {}) {
     upAnnounced: false,
     probeTimer: null,
     tickTimer: null,
+    // v21.12.0 CODE-UPGRADE GUARD state — "naya zip extract kiya par
+    // purana server process RAM me chalta raha" disease ka structural
+    // fix (user ka 13-models report isi se aaya: UI naya, server purana).
+    codeMismatchStreak: 0,      // consecutive probes jisme running v != disk v
+    codeMismatchDiskV: null,    // mismatch window ka DISK version (stability ke liye same hona chahiye)
+    lastUpgradeTarget: null,    // jis disk-version ke liye humne restart kar diya (loop-guard)
+    upgradeRestarts: 0,         // is supervisor boot me kitne upgrade-restarts (cap 3)
   };
 
   const now = () => deps.nowFn();
@@ -453,21 +460,37 @@ export function createSupervisor(opts = {}) {
   }
 
   // ---------------- liveness probe ----------------
+  // v21.12.0: probe ab /api/ping ka BODY bhi padhta hai (v = SERVER_VERSION
+  // of the RUNNING child) — onProbeResult isko disk ke package.json se
+  // compare karta hai (code-upgrade guard, neeche). Body parse fail / mock
+  // httpGetFn jo data emit nahi karta → v undefined → guard no-op (safe).
   function probeOnce() {
     return new Promise((resolve) => {
       let settled = false;
-      const finish = (ok, why) => { if (!settled) { settled = true; resolve({ ok, why }); } };
+      const finish = (ok, why, v) => { if (!settled) { settled = true; resolve({ ok, why, v }); } };
       let req;
       try {
         req = deps.httpGetFn({
           host: '127.0.0.1', port: knobs.port, path: '/api/ping',
           timeout: knobs.timeoutMs, agent: false,
         }, (res) => {
-          try { res.resume(); } catch { /* noop */ }
-          const onDone = () => finish(
-            res.statusCode >= 200 && res.statusCode < 500,
-            `status-${res.statusCode}`,
-          );
+          let body = '';
+          let v;
+          try {
+            res.on('data', (d) => { if (body.length < 4096) body += String(d || ''); });
+            res.resume();
+          } catch { /* body best-effort */ }
+          const onDone = () => {
+            try {
+              const j = body ? JSON.parse(body) : null;
+              if (j && typeof j.v === 'string') v = j.v;
+            } catch { /* non-JSON body — v stays undefined */ }
+            finish(
+              res.statusCode >= 200 && res.statusCode < 500,
+              `status-${res.statusCode}`,
+              v,
+            );
+          };
           res.on('end', onDone);
           res.on('error', () => finish(false, 'res-error'));
         });
@@ -481,10 +504,68 @@ export function createSupervisor(opts = {}) {
     });
   }
 
+  // v21.12.0 CODE-UPGRADE GUARD — running child ka SERVER_VERSION (/api/ping
+  // `v`) vs disk ka package.json version. Mismatch = naya code extract hua
+  // hai par purana process abhi RAM me chal raha hai (exact wahi bug jisme
+  // user ke box pe naya UI + PURANA 13-model server tha). Design guards:
+  //   • 2 CONSECUTIVE same-disk-version mismatches — zip extract ke
+  //     mid-way race (aadhi files nayi) me restart nahi hoga.
+  //   • Ek hi disk-version ke liye SIRF EK upgrade-restart — partial
+  //     deploy (server files purani, package.json nayi) me loop nahi.
+  //   • Max 3 upgrade-restarts per supervisor boot.
+  //   • fs read fail / v missing / version strings empty → guard no-op.
+  function _diskPkgVersion() {
+    try {
+      const pkg = JSON.parse(deps.fsMod.readFileSync(path.join(deps.appRoot, 'package.json'), 'utf8'));
+      return String(pkg.version || '').trim() || null;
+    } catch { return null; }
+  }
+
+  function _checkCodeUpgrade(result) {
+    if (!result || !result.ok || !result.v) { state.codeMismatchStreak = 0; state.codeMismatchDiskV = null; return; }
+    const diskV = _diskPkgVersion();
+    if (!diskV || diskV === result.v) { state.codeMismatchStreak = 0; state.codeMismatchDiskV = null; return; }
+    // disk window stability — mid-extraction race protection
+    if (state.codeMismatchDiskV !== diskV) {
+      state.codeMismatchDiskV = diskV;
+      state.codeMismatchStreak = 1;
+      log(`[watchdog] CODE UPGRADE dikha (running v${result.v} · disk v${diskV}) — confirm ho raha hai...`);
+      return;
+    }
+    state.codeMismatchStreak++;
+    if (state.codeMismatchStreak < 2) return;
+    if (state.lastUpgradeTarget === diskV) {
+      // isi target ke liye restart kar chuke hain — ab bhi mismatch = partial
+      // deploy. DOOSRA restart loop nahi (user ko hint de do).
+      if (state.codeMismatchStreak === 2) {
+        log(`[watchdog] CODE UPGRADE restart ke baad bhi v${result.v} != v${diskV} — deploy partial lagta hai (server files purani?). Khud restart karo: watchdog band karke Start-SmartAI-Watchdog.bat dobara chalao.`);
+      }
+      return;
+    }
+    if (state.upgradeRestarts >= 3) {
+      log('[watchdog] CODE UPGRADE detected par upgrade-restart cap (3) cross ho gaya — manual restart karo.');
+      return;
+    }
+    journal({
+      ev: 'watchdog-restart', reason: 'code-upgrade',
+      detail: `running v${result.v} != disk v${diskV} — naya code load karne ke liye restart`,
+      childPid: state.child.pid, uptimeSec: Math.round((now() - state.childStartedAt) / 1000),
+    });
+    log(`[watchdog] CODE UPGRADE DETECTED — running v${result.v}, disk v${diskV} — naya code load ho raha hai (server restart, auto)...`);
+    state.lastUpgradeTarget = diskV;
+    state.upgradeRestarts++;
+    state.codeMismatchStreak = 0;
+    state.pendingReason = 'code-upgrade';
+    forceKill(state.child);
+  }
+
   function onProbeResult(result) {
     const t = now();
     if (!state.child) { state.failsStreak = 0; return; } // restart gap — nothing to judge
     if (result.ok) {
+      // v21.12.0: code-upgrade guard pehle — UP-announce/failed-streak
+      // bookkeeping baad me (guard forceKill kar sakta hai).
+      try { _checkCodeUpgrade(result); } catch { /* guard never fatal */ }
       if (!state.upAnnounced && state.child && state.child.pid) {
         state.upAnnounced = true;
         log(`[watchdog] server UP (pid ${state.child.pid}) — /api/ping OK, aage har ${Math.round(knobs.probeMs / 1000)}s probe`);

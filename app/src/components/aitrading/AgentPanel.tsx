@@ -773,10 +773,26 @@ export const AgentPanel = memo(function AgentPanel({ notify }: { notify: (ok: bo
               </span>
             )}
             {acc.v2ModelsEnabled != null && (
-              <span className={`px-2 py-0.5 rounded-md text-[9px] font-mono border ${acc.v2ModelsEnabled ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-black/30 border-slate-600/40 text-slate-500'}`}
-                title={acc.v2ModelsEnabled ? 'V2 models (Sentiment, InstFlow, Fundamentals) enabled — 16 voting seats + mesh shadow' : 'V2 models disabled — set AI_ENABLE_V2_MODELS=true (v21.11 se default ON hai)'}>
-                V2 models {acc.v2ModelsEnabled ? 'ON (16-model committee)' : 'OFF (13-model committee)'}
-              </span>
+              (() => {
+                // v21.12.0: numbers ab server ke committee payload se —
+                // hardcoded 16/13 strings ka end (user ka "sirf 13 models
+                // dikha raha hai" confusion). Payload na ho to honest
+                // fallback (v2ModelsEnabled se derive).
+                const c = acc.committee;
+                const voting = c?.voting ?? (acc.v2ModelsEnabled ? 16 : 13);
+                const shadow = c?.shadow ?? (acc.v2ModelsEnabled ? 4 : 0);
+                const tapeTxt = c?.tapeSeat === 'tape-mtf' ? `tape-MTF w${c.tapeWeight}` : c?.tapeSeat ? `tape w${c.tapeWeight}` : '';
+                const metaTxt = c ? ` · META ${c.meta?.enabled ? 'ARMED' : 'OFF'}${c.meta?.enabled ? ` (${(c.meta.serviceUrl || '').replace(/^https?:\/\//, '')})` : ''}` : '';
+                const winTxt = c ? ` · learning window ${c.learningWindow}` : '';
+                return (
+                  <span className={`px-2 py-0.5 rounded-md text-[9px] font-mono border ${acc.v2ModelsEnabled ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-black/30 border-slate-600/40 text-slate-500'}`}
+                    title={acc.v2ModelsEnabled
+                      ? `Full Superintelligence committee LIVE — ${voting} voting seats + ${shadow} mesh shadow (w0, evidence-collecting)${tapeTxt ? ` · ${tapeTxt}` : ''}${winTxt}${metaTxt}`
+                      : 'V2 models disabled — AI_ACCURACY_SUITE=false (legacy A/B mode) ke bina ye kabhi off nahi hona chahiye; agar hai to .env check karo'}>
+                    🧬 committee {voting} voting{shadow ? ` + ${shadow} shadow` : ''}{tapeTxt ? ` · ${tapeTxt}` : ''}
+                  </span>
+                );
+              })()
             )}
           </div>
           {acc.lastNearMisses && acc.lastNearMisses.length > 0 && (

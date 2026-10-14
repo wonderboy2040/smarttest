@@ -80,6 +80,10 @@ function vote(dir, conf, reasons, na = false) {
 import { sentimentVote } from './sentiment.js';
 import { instFlowVote } from './instFlow.js';
 import { fundamentalsVote } from './fundamentals.js';
+// v21.12.0 MASTER ACCURACY SWITCH — stale-.env 13-seat pin disease ka
+// permanent ilaaj (see accuracySuite.js header). Legacy per-flag env
+// values ab sirf AI_ACCURACY_SUITE=false (legacy A/B mode) par respected.
+import { accuracySuiteEnabled, legacyFlagEnabled } from './accuracySuite.js';
 // v11.6 MESH-BACKED SEATS — the MCP mesh finally votes (Phase 1A).
 import {
   instFlowProVote, techConsensusVote, fundaProPlusVote, cryptoOnChainProVote,
@@ -87,17 +91,13 @@ import {
 } from './meshModels.js';
 
 export function v2ModelsEnabled() {
-  // v21.11.0 (Superintelligence accuracy upgrade): DEFAULT ON — pehle
-  // ye flag default-OFF tha (Phase-4 A/B gate), isliye purane .env wale
-  // boxes hamesha plain 13-seat board pe atke rahe jabki .env.example
-  // shuru se `true` ship karta tha. Ab shipped intent hi code default
-  // hai: 3 naye diversification seats (SentimentPulse / InstFlow /
-  // FundaCheck) live — deliberately LOW weights, adaptive.js settled
-  // outcomes se multiplier kamata hai. Explicit `false` ab bhi jeetega
-  // (env override always wins).
-  const raw = String(process.env.AI_ENABLE_V2_MODELS ?? '').trim().toLowerCase();
-  if (raw) return ['true', '1', 'on', 'yes'].includes(raw);
-  return true;
+  // v21.12.0 (master switch): AI_ACCURACY_SUITE (default ON) ke ON hone
+  // par ye seat-group UNCONDITIONALLY ON hai — purane .env ki explicit
+  // `false` line (jo v21.11.0 tak override jeet-ti thi) ab IGNORED.
+  // User ka "sirf 13 models dikh rahe hain" report exactly isi stale-
+  // override se aaya tha. Legacy A/B: AI_ACCURACY_SUITE=false + per-flag.
+  if (accuracySuiteEnabled()) return true;
+  return legacyFlagEnabled('AI_ENABLE_V2_MODELS');
 }
 
 export const V2_MODEL_IDS = ['sentiment', 'instflow', 'fundamentals'];
@@ -774,10 +774,11 @@ export function mtfConfluenceEnabled() {
   // seat parked hone par crypto/futures committee 29% win-rate disease).
   // Crypto/futures desks gracefully degrade to the plain 15m read (same
   // seat, honest label) — India gets the full 5m/15m/1h confluence.
-  // Explicit `false` env override always wins.
-  const raw = String(process.env.AI_ENABLE_MTF_CONFLUENCE ?? '').trim().toLowerCase();
-  if (raw) return ['true', '1', 'on', 'yes'].includes(raw);
-  return true;
+  // v21.12.0 (master switch): AI_ACCURACY_SUITE (default ON) ke ON hone
+  // par MTF tape UNCONDITIONALLY ON — stale AI_ENABLE_MTF_CONFLUENCE=false
+  // ab ignored. Legacy A/B: AI_ACCURACY_SUITE=false + per-flag.
+  if (accuracySuiteEnabled()) return true;
+  return legacyFlagEnabled('AI_ENABLE_MTF_CONFLUENCE');
 }
 
 function intradayTapeMTF(ctx) {

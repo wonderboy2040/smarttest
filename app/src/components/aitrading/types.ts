@@ -1500,6 +1500,23 @@ export interface AgentView {
     }>;
     /** v10.2 Step 1: V2 models flag (Sentiment, InstFlow, Fundamentals) */
     v2ModelsEnabled?: boolean;
+    /** v21.12.0 — full committee composition (server /health + agent
+     *  accuracy payload se). UI hardcoded 16/13 ke bajaye isse render
+     *  karta hai: voting/shadow seat counts, tape seat, learning window,
+     *  META armed state. */
+    committee?: {
+      total: number;
+      voting: number;
+      shadow: number;
+      tapeSeat: string | null;
+      tapeWeight: number | null;
+      learningWindow: number;
+      accuracySuite: boolean;
+      v2Models: boolean;
+      mtfConfluence: boolean;
+      meshModels: boolean;
+      meta: { enabled: boolean; serviceUrl: string };
+    } | null;
     /** v10.8 — near-miss auto-trade state */
     nearMiss?: {
       enabled: boolean;

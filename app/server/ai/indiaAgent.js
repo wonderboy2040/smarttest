@@ -45,6 +45,9 @@ import { executeIndiaSignal, closeIndiaPosition, istHM, IST_SQUAREOFF, IST_ENTRY
 import { readDepth } from './orderFlowDepth.js';
 // v10.2 parity: V2 model flag exposure in the status view
 import { v2ModelsEnabled } from './models.js';
+// v21.12.0: committee snapshot — AgentPanel chip isi se dynamic
+// voting/shadow counts dikhata hai (hardcoded 16/13 strings ka end).
+import { committeeInfo } from './committee.js';
 // v10.15 GAP 1: Live Conviction Tracker (crypto-agent parity) — the
 // ensemble re-votes open India positions; FLIPPED exits at
 // thesis-invalidation, WEAKENING ratchets the SL toward breakeven.
@@ -1208,6 +1211,9 @@ export async function indiaAgentStatus(deps) {
       winRateDowngraded: _state.winRateDowngraded || null,
       lastNearMisses: _state.lastNearMisses || [],
       v2ModelsEnabled: typeof v2ModelsEnabled === 'function' ? v2ModelsEnabled() : false,
+      // v21.12.0: full committee composition — UI ab hardcoded 16/13 ke
+      // bajaye ASLI seat counts dikhata hai.
+      committee: (() => { try { return committeeInfo(); } catch { return null; } })(),
     },
   };
 }

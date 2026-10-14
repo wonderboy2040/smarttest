@@ -34,6 +34,9 @@ import { allCards } from './mcp/agents/registry.js';
 import { registerAITradingRoutes } from './ai/routes.js';
 // v18.1: enriched /health — cached ml-service probe + agent liveness.
 import { mlServiceHealth } from './ai/mlHealth.js';
+// v21.12.0: committee visibility — boot banner + /health snapshot
+// (user ask: "kitne models chal rahe hain" site/logs dono me dikhe).
+import { committeeInfo, committeeBanner } from './ai/committee.js';
 import { agentLiveness } from './ai/agent.js';
 import { indiaAgentLiveness } from './ai/indiaAgent.js';
 import { registerIntradayRoutes } from './intraday/routes.js';
@@ -2860,11 +2863,17 @@ app.get('/health', (_req, res) => {
   // report is answerable from this ONE payload.
   let selfheal = null;
   try { selfheal = selfHealthSnapshot(); } catch { selfheal = null; }
+  // v21.12.0: committee snapshot — voting/shadow seat counts, tape seat,
+  // learning window, META armed. "Kitne models chal rahe hain" ka ek hi
+  // source of truth (boot banner + AgentPanel isi data se render hote hain).
+  let committee = null;
+  try { committee = committeeInfo(); } catch { committee = null; }
   res.json({
     ok: true,
     // v20.8.3: server-side code version (package.json) — UI + ops dono
     // isse built-frontend version se compare karte hain.
     version: SERVER_VERSION,
+    committee,
     uptime: process.uptime(),
     // FIX (audit L-3): `killed` is only true after an explicit .kill(); after a
     // crash-exit it stays false, so health wrongly reported a dead bot as alive.
@@ -3357,6 +3366,10 @@ _httpServer = app.listen(PORT, () => {
   // v20.8.3: SERVER_VERSION se boot line (v20.4.2 hardcoded string 19 releases
   // stale thi) — /api/ping `v`, /health `version` aur ye line ab ek hi source se.
   console.log(`[smartai] v${SERVER_VERSION} THREE-DESK TERMINAL — India Intraday + CoinDCX + JEV Bot Lab · lean frontend · zero-polling shell`);
+  // v21.12.0: committee composition boot banner — user ke "sirf 13 models
+  // dikh rahe hain" waale confusion ka end. Watchdog logs me ab hamesha
+  // dikhega ki board par EXACTLY kaun-kaun kitne seats baithte hain.
+  try { console.log(committeeBanner()); } catch { /* banner never fatal */ }
 
   // v21.3.0 (Issue-1): a previous successful boot clears the refusal marker.
   try { const m = path.join(__dirname, 'data', 'BOOT-REFUSED.txt'); if (fs.existsSync(m)) fs.rmSync(m); } catch { /* noop */ }
