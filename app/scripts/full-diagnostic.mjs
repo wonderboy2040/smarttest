@@ -180,7 +180,7 @@ function sectionA(ENV) {
   const nm = join(ROOT, 'node_modules');
   if (!existsSync(nm)) mark('fail', 'node_modules missing', 'app/ ke andar `npm install` chalao');
   else {
-    const deps = ['express', 'vite', 'vitest', 'react', 'echarts'].filter(d => existsSync(join(nm, d)));
+    const deps = ['express', 'vite', 'vitest', 'react', 'lucide-react'].filter(d => existsSync(join(nm, d)));
     mark(deps.length === 5 ? 'pass' : 'warn', `node_modules (${deps.length}/5 critical deps)`, deps.join(', ') || 'koi critical dep nahi mila');
   }
 
